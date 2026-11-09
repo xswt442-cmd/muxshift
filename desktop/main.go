@@ -24,6 +24,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -55,48 +56,140 @@ func (a *appState) reopenPlayer(it *item) {
 		return
 	}
 	it.openErr = nil
+	var kept *handover
 	if previous != nil {
+		kept = &handover{previous: previous}
 		it.previous = previous
 	}
+	// The handover that was still waiting for an older replacement owns the
+	// player it kept drawn; it is not drawn any more, so the new task releases
+	// it. Transferring the pointer here is what keeps a burst of reloads from
+	// releasing the same player twice.
+	older := it.handover
+	it.handover = kept
 	it.player = player
 	it.generation++
+	generation := it.generation
 	a.apply()
-	wakeNetworkPlayer(it.uri, player, a.generationIs(it, it.generation))
+	wakeNetworkPlayer(it.uri, player, a.generationIs(it, generation))
 	a.closePendingWhenReady()
-	go a.closePreviousWhenReady(it)
+	if kept != nil {
+		go a.handOver(it, generation, kept, older)
+	} else if older != nil {
+		a.releasePlayer(older.take())
+	}
 }
 
-// closePreviousWhenReady closes the player a reopen left drawn, as soon as the
-// replacement has a picture.
-func (a *appState) closePreviousWhenReady(it *item) {
-	for i := 0; i < 40; i++ {
-		ready := false
+// handover owns the player a reopen kept drawn until the replacement has a
+// picture. Exactly one goroutine releases each player: the task that started
+// the handover, or the task a later reopen hands the player over to.
+type handover struct {
+	mu       sync.Mutex
+	previous *ui.VideoPlayer
+	released bool
+}
+
+// take returns the player this handover still owns, or nil when it was
+// released already.
+func (h *handover) take() *ui.VideoPlayer {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.released {
+		return nil
+	}
+	h.released = true
+	player := h.previous
+	h.previous = nil
+	return player
+}
+
+// releasePlayer closes a player that no frame draws any more.
+func (a *appState) releasePlayer(player *ui.VideoPlayer) {
+	if player == nil {
+		return
+	}
+	a.waitFrames(3)
+	mygoRunOnMain(func() { player.Close() })
+}
+
+// handoverWait is how long a replacement may take to show a picture before the
+// handover gives up and keeps the player it was replacing.
+var handoverWait = 10 * time.Second
+
+// handOver waits for the replacement player of a reopen to show a picture, then
+// releases the player the reopen kept drawn.
+//
+// Two outcomes matter. When the replacement starts, the old player is closed
+// and the item ends up with one player again. When it never starts, the old
+// player stays drawn and the replacement is closed instead: a handover that
+// fails must not leave the source with a player that never shows anything, and
+// the failure is reported in the source line instead of disappearing in a log.
+//
+// Every step checks the item's generation. A newer reload, or a close, bumps it,
+// and this task then only releases the player it still owns: the view draws a
+// newer player, so the pointer it was waiting on is not drawn any more.
+func (a *appState) handOver(it *item, generation int, kept *handover, older *handover) {
+	if older != nil {
+		a.releasePlayer(older.take())
+	}
+	deadline := time.Now().Add(handoverWait)
+	for {
+		var current, ready bool
+		var playerErr error
 		mygoRunOnMain(func() {
-			ready = it.player != nil && it.player.Ready() && !it.player.Buffering()
+			current = it.generation == generation
+			if it.player != nil {
+				ready = it.player.Ready() && !it.player.Buffering()
+				playerErr = it.player.Err()
+			}
 		})
+		if !current {
+			a.releasePlayer(kept.take())
+			return
+		}
+		if playerErr != nil {
+			break
+		}
 		if ready {
+			mygoRunOnMain(func() {
+				if it.generation == generation && it.handover == kept {
+					it.previous = nil
+					it.handover = nil
+				}
+			})
+			a.releasePlayer(kept.take())
+			log.Printf("handover: replaced the player of %s after %s", shortURI(it.uri), "a picture")
+			return
+		}
+		if !time.Now().Before(deadline) {
 			break
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
-	var previous *ui.VideoPlayer
+	// The replacement never started: keep what was drawn and drop the new one.
+	var replacement *ui.VideoPlayer
+	keptPrevious := false
 	mygoRunOnMain(func() {
-		previous = it.previous
+		if it.generation != generation {
+			return
+		}
+		replacement = it.player
+		it.player = kept.previous
+		kept.previous = nil
+		kept.released = true
 		it.previous = nil
+		it.handover = nil
+		it.generation++
+		it.shown = true
+		it.openErr = fmt.Errorf("reopen did not start within %s; kept the previous player", handoverWait)
+		keptPrevious = true
 	})
-	if previous == nil {
+	if !keptPrevious {
+		a.releasePlayer(kept.take())
 		return
 	}
-	a.waitFrames(3)
-	if a.livePlayers() > 0 || it.player != nil {
-		mygoRunOnMain(func() { previous.Close() })
-		return
-	}
-	mygoRunOnMain(func() { previous.Pause() })
-	a.pendingMu.Lock()
-	a.pending = append(a.pending, previous)
-	a.pendingMu.Unlock()
-	a.closePendingWhenReady()
+	log.Printf("handover: %s did not start within %s; kept the previous player and closed the new one", shortURI(it.uri), handoverWait)
+	a.releasePlayer(replacement)
 }
 
 // openPlayer opens a local file or a network address.
@@ -124,60 +217,46 @@ func isNetworkAddress(uri string) bool {
 //
 // The seek is a compensation for the missing first frame, not a synchronisation
 // step: it moves the playhead by a millisecond and is not something a precise
-// timeline should build on. live reports whether this task still owns the
-// player it was started for; once the player is replaced or closed the task
-// stops, so it never touches a released player.
+// timeline should build on. It runs once, while the player is being opened; if
+// that one seek does not bring a picture the player stays not ready and the
+// window says so, instead of a background task moving the playhead again and
+// again. live reports whether this task still owns the player it was started
+// for; once the player is replaced or closed the task stops, so it never
+// touches a released player.
 func wakeNetworkPlayer(uri string, player *ui.VideoPlayer, live func() bool) {
 	if !isNetworkAddress(uri) {
 		return
 	}
 	go func() {
-		switch wakeMode {
-		case "none":
-			return
-		case "once":
-			time.Sleep(1500 * time.Millisecond)
-			if !live() {
-				return
-			}
-			mygoRunOnMain(func() {
-				if !live() || player.Ready() || player.Err() != nil {
-					return
-				}
-				player.Seek(player.Position() + time.Millisecond)
-			})
+		if wakeMode == "none" {
 			return
 		}
-		// One seek did not always bring the frame in the same second, so try a
-		// few times, half a second apart, and stop as soon as it arrives.
-		for i := 0; i < 8; i++ {
-			time.Sleep(500 * time.Millisecond)
-			if !live() {
+		time.Sleep(1500 * time.Millisecond)
+		if !live() {
+			return
+		}
+		var before, after time.Duration
+		mygoRunOnMain(func() {
+			if !live() || player.Ready() || player.Err() != nil {
 				return
 			}
-			done := make(chan bool, 1)
-			mygoRunOnMain(func() {
-				if !live() {
-					done <- true
-					return
-				}
-				if player.Ready() || player.Err() != nil {
-					done <- true
-					return
-				}
-				player.Seek(player.Position() + time.Millisecond)
-				done <- false
-			})
-			if <-done {
-				return
-			}
+			before = player.Position()
+			player.Seek(before + time.Millisecond)
+			// The position the player reports afterwards is the real result;
+			// the millisecond asked for is not assumed to have taken effect.
+			after = player.Position()
+		})
+		if before != 0 || after != 0 {
+			log.Printf("wake: %s seeked from %s to %s (asked for +1ms)", shortURI(uri), before, after)
 		}
 	}()
 }
 
-// wakeMode selects how a network player is nudged into showing its first
-// frame: once, retrying, or not at all.
-var wakeMode = "retry"
+// wakeMode selects whether a network player is nudged into showing its first
+// frame. The nudge is a one-shot compensation at open time; there is no
+// repeating mode because a task that keeps seeking would move the playhead
+// behind the timeline's back. -wake=none records what happens without it.
+var wakeMode = "once"
 
 // status is one player's state as a line, so the window reports what actually
 // happened: an opening error, buffering, or the position it reached.
@@ -403,7 +482,8 @@ func main() {
 	trace := flag.Bool("trace", false, "log every player's state twice a second")
 	scenario := flag.String("scenario", "", "run a scripted check: "+scenarioNames())
 	dir := flag.String("dir", "", "directory the scenario writes its PNGs into")
-	flag.StringVar(&wakeMode, "wake", wakeMode, "how to nudge a network player into its first frame: once, retry, none")
+	flag.StringVar(&wakeMode, "wake", wakeMode, "nudge a network player once for its first frame, or none to record what happens without it")
+	flag.DurationVar(&handoverWait, "handover", handoverWait, "how long a reopened player may take to show a picture before the previous one is kept")
 	flag.DurationVar(&syncAt, "at", 10*time.Second, "syncmap: the shared event time to measure")
 	flag.DurationVar(&syncOffset, "offset", 0, "syncmap: the offset applied to the measured source")
 	flag.Parse()

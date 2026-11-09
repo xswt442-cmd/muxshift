@@ -23,6 +23,8 @@ var scenarios = map[string]scenario{
 	"single":        runSingle,
 	"reopen":        runReopen,
 	"reopen-strict": runReopenStrict,
+	"handover-fail": runHandoverFail,
+	"reload-rapid":  runReloadRapid,
 	"pair":          runPair,
 	"switch":        runSwitch,
 	"rapid":         runRapid,
@@ -527,6 +529,63 @@ func runReopenStrict(window *mygo.Window, a *appState, dir string) {
 		step(window, a, dir, "reopen-strict", "", "reopened", func(a *appState) { a.reopenPlayer(a.first()) })
 		wait(6 * time.Second)
 		step(window, a, dir, "reopen-strict", "2-reopened.png", "reopened after 6s", nil)
+		mygoRunOnMain(func() {
+			a.release()
+			mygo.App.Quit()
+		})
+	}()
+}
+
+// runHandoverFail reopens a working source onto an address that never answers,
+// so the replacement never gets a picture. The handover has to keep the player
+// that still works, close the replacement, and say why in the source line; then
+// reopening the real address has to work again.
+func runHandoverFail(window *mygo.Window, a *appState, dir string) {
+	go func() {
+		wait := time.Sleep
+		wait(3 * time.Second)
+		step(window, a, dir, "handover-fail", "1-before.png", "playing before the failed reopen", nil)
+		step(window, a, dir, "handover-fail", "", "reopened onto an address that never answers", func(a *appState) {
+			it := a.first()
+			it.uri = "http://10.255.255.1/hls/index.m3u8"
+			a.reopenPlayer(it)
+		})
+		wait(handoverWait + 2*time.Second)
+		step(window, a, dir, "handover-fail", "2-kept-previous.png", "after the handover gave up", nil)
+		step(window, a, dir, "handover-fail", "", "reopened onto the working address again", func(a *appState) {
+			it := a.first()
+			it.uri = a.session.Sources()[0].URI
+			a.reopenPlayer(it)
+		})
+		wait(6 * time.Second)
+		step(window, a, dir, "handover-fail", "3-recovered.png", "after reopening the working address", nil)
+		mygoRunOnMain(func() {
+			a.release()
+			mygo.App.Quit()
+		})
+	}()
+}
+
+// runReloadRapid presses Reload several times faster than the handover can
+// finish. Every task has to stay with the player it started for, so the last
+// reload owns the source at the end, no player is closed twice, and the picture
+// still arrives.
+func runReloadRapid(window *mygo.Window, a *appState, dir string) {
+	go func() {
+		wait := time.Sleep
+		wait(3 * time.Second)
+		step(window, a, dir, "reload-rapid", "1-before.png", "playing before the burst", nil)
+		for i := 0; i < 5; i++ {
+			step(window, a, dir, "reload-rapid", "", "reload "+itoa(i+1)+" of 5", func(a *appState) {
+				a.reopenPlayer(a.first())
+			})
+			wait(150 * time.Millisecond)
+		}
+		wait(8 * time.Second)
+		step(window, a, dir, "reload-rapid", "2-after-burst.png", "after the burst", func(a *appState) {
+			logf("reload-rapid", "live players=%s previous=%s handover=%s",
+				itoa(a.livePlayers()), boolString(a.first().previous != nil), boolString(a.first().handover != nil))
+		})
 		mygoRunOnMain(func() {
 			a.release()
 			mygo.App.Quit()

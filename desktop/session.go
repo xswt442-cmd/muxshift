@@ -35,6 +35,11 @@ type item struct {
 	// alive and drawn until the current one has a picture. See reopenPlayer.
 	previous *ui.VideoPlayer
 
+	// handover owns previous while a task waits for the replacement's picture.
+	// It moves to the newer task on a reload, so a burst of reloads releases
+	// each player exactly once. See handOver.
+	handover *handover
+
 	// shown is whether the window draws this player right now. It changes
 	// before the player is closed, never after.
 	shown bool
@@ -395,11 +400,21 @@ func (a *appState) at(index int) (*item, error) {
 // is paused and kept until another player is ready, and the pending close runs
 // then.
 func (a *appState) close(it *item) {
-	if it.previous != nil {
-		previous := it.previous
-		mygoRunOnMain(func() { it.previous = nil })
-		a.waitFrames(3)
-		mygoRunOnMain(func() { previous.Close() })
+	var kept *handover
+	var previous *ui.VideoPlayer
+	mygoRunOnMain(func() {
+		kept = it.handover
+		previous = it.previous
+		it.handover = nil
+		it.previous = nil
+	})
+	switch {
+	case kept != nil:
+		// The handover that was waiting owns the player it kept drawn; a close
+		// here takes that player over instead of closing it twice later.
+		a.releasePlayer(kept.take())
+	case previous != nil:
+		a.releasePlayer(previous)
 	}
 	if it.player == nil {
 		return

@@ -2,7 +2,7 @@
 
 MuxShift is an open-source project for composing multiple audio/video sources and controlling their timelines.
 
-The repository currently contains a project scaffold with a Go Core session configuration model. No working player, media capture, synchronization, or audio separation is implemented.
+The repository currently contains a project scaffold with a Go Core session configuration model and event timeline. No working player, media capture, synchronization, or audio separation is implemented.
 
 [简体中文](README.md)
 

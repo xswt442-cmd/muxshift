@@ -24,6 +24,11 @@ var (
 	ErrSyncConflict = errors.New("track already belongs to a sync group")
 	// ErrNotMember reports a reference track missing from the group's tracks.
 	ErrNotMember = errors.New("reference track is not in the group")
+	// ErrNotAligned reports a track with no known correspondence between its
+	// media time and the shared event timeline. Callers must not guess one.
+	ErrNotAligned = errors.New("track is not aligned to the event timeline")
+	// ErrTimeRange reports a time outside the range time.Duration can hold.
+	ErrTimeRange = errors.New("time is out of range")
 	// ErrInvalid reports an argument outside its allowed range.
 	ErrInvalid = errors.New("invalid argument")
 )

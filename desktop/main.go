@@ -333,7 +333,8 @@ func (a *appState) view(c *ui.Context) {
 					a.syncNote = "sync: group command reported: " + strings.Join(problems, "; ")
 					log.Printf("group command: %s", strings.Join(problems, "; "))
 				} else {
-					a.syncNote = "sync: group command done for " + itoa(len(a.group())) + " source(s)"
+					members, _ := a.group()
+					a.syncNote = "sync: group command done for " + itoa(len(members)) + " source(s)"
 				}
 			}
 			if main := a.first(); main != nil && main.player != nil {

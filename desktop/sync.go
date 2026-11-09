@@ -28,6 +28,10 @@ type syncState struct {
 	timeline *core.Timeline
 	playhead *core.Playhead
 	last     time.Time
+	// group is the Core sync group the pause and play commands act on. It is
+	// set the first time a synchronised command runs and is not derived from
+	// the scene again, so changing what is shown cannot change who pauses.
+	group core.SyncGroupID
 }
 
 // newSyncState starts paused at the origin with no track aligned, which is what
@@ -53,31 +57,88 @@ func (s *syncState) tick(now time.Time) error {
 	return s.playhead.Advance(elapsed)
 }
 
-// group is the sources whose tracks the scene currently selects: the picture it
-// shows and the audio it hears. A synchronised command goes to these, and the
-// other sources keep doing whatever they were doing.
-func (a *appState) group() []*item {
-	scene, err := a.session.Scene(a.scene)
+// group is the sources that pause and play together: the tracks of the one Core
+// sync group this session uses, not whatever the scene happens to select. The
+// scene decides what is shown and heard; a scene that later shows a second,
+// unrelated match must not make one pause stop both.
+func (a *appState) group() ([]*item, error) {
+	members, err := a.syncMembers()
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	selected := make(map[core.TrackID]bool, len(scene.Video)+len(scene.Audio))
-	for _, track := range scene.Video {
-		selected[track] = true
-	}
-	for _, level := range scene.Audio {
-		selected[level.Track] = true
+	inGroup := make(map[core.TrackID]bool, len(members.Tracks))
+	for _, track := range members.Tracks {
+		inGroup[track] = true
 	}
 	out := make([]*item, 0, len(a.items))
 	for _, it := range a.items {
 		if it.player == nil {
 			continue
 		}
-		if selected[it.video] || selected[it.audio] {
+		if inGroup[it.video] || inGroup[it.audio] {
 			out = append(out, it)
 		}
 	}
-	return out
+	return out, nil
+}
+
+// syncMembers returns the session's sync group, creating it from the tracks the
+// scene selects the first time a synchronised command runs. Membership is fixed
+// at that point, which is what keeps a later scene change from silently pulling
+// unrelated sources into the same pause.
+func (a *appState) syncMembers() (core.SyncGroup, error) {
+	if a.sync.group != "" {
+		for _, group := range a.session.SyncGroups() {
+			if group.ID == a.sync.group {
+				return group, nil
+			}
+		}
+		// Core drops a group whose last track left with its source. Build a
+		// new one from what is left rather than acting on a stale id.
+		a.sync.group = ""
+	}
+	scene, err := a.session.Scene(a.scene)
+	if err != nil {
+		return core.SyncGroup{}, err
+	}
+	var reference core.TrackID
+	tracks := make([]core.TrackID, 0, 2*len(a.items))
+	add := func(track core.TrackID) {
+		if track == "" || containsTrack(tracks, track) {
+			return
+		}
+		tracks = append(tracks, track)
+		if reference == "" {
+			reference = track
+		}
+	}
+	for _, it := range a.items {
+		if it.player == nil {
+			continue
+		}
+		heard := false
+		for _, level := range scene.Audio {
+			if level.Track == it.audio {
+				heard = true
+				break
+			}
+		}
+		if !heard && !containsTrack(scene.Video, it.video) {
+			continue
+		}
+		add(it.video)
+		add(it.audio)
+	}
+	if len(tracks) == 0 {
+		return core.SyncGroup{}, fmt.Errorf("no source in the scene to synchronize")
+	}
+	group, err := a.session.AddSyncGroup(reference, tracks...)
+	if err != nil {
+		return core.SyncGroup{}, err
+	}
+	a.sync.group = group.ID
+	log.Printf("sync: created %s with %d tracks", group.ID, len(group.Tracks))
+	return group, nil
 }
 
 // name labels a source in group messages so a failure names the source it came
@@ -96,8 +157,12 @@ func (a *appState) name(it *item) string {
 // looking like a working one.
 func (a *appState) pauseAll() []string {
 	a.sync.playhead.Pause()
+	members, err := a.group()
+	if err != nil {
+		return []string{err.Error()}
+	}
 	problems := make([]string, 0, 1)
-	for _, it := range a.group() {
+	for _, it := range members {
 		if it.player == nil {
 			problems = append(problems, a.name(it)+" has no player")
 			continue
@@ -114,8 +179,12 @@ func (a *appState) pauseAll() []string {
 // members that failed the same way pauseAll does.
 func (a *appState) playAll() []string {
 	a.sync.playhead.Play()
+	members, err := a.group()
+	if err != nil {
+		return []string{err.Error()}
+	}
 	problems := make([]string, 0, 1)
-	for _, it := range a.group() {
+	for _, it := range members {
 		if it.player == nil {
 			problems = append(problems, a.name(it)+" has no player")
 			continue
@@ -136,6 +205,11 @@ func (a *appState) anchor(index int) error {
 	it, err := a.at(index)
 	if err != nil {
 		return err
+	}
+	// Anchoring is the start of manual alignment, so it is also where the one
+	// sync group of this session comes into being.
+	if _, err := a.syncMembers(); err != nil {
+		return fmt.Errorf("sync group: %w", err)
 	}
 	if it.player == nil {
 		return fmt.Errorf("source %d: no player to anchor on", index+1)
@@ -213,6 +287,9 @@ func (a *appState) nudge(index int, delta time.Duration) (string, error) {
 	it, err := a.at(index)
 	if err != nil {
 		return "", err
+	}
+	if _, err := a.syncMembers(); err != nil {
+		return "", fmt.Errorf("sync group: %w", err)
 	}
 	if it.player == nil {
 		return "", fmt.Errorf("source %d: no player", index+1)
@@ -311,9 +388,18 @@ func (a *appState) syncLabel() string {
 		state = "playing"
 	}
 	event := a.sync.playhead.Event()
+	group := "group none"
+	if a.sync.group != "" {
+		for _, candidate := range a.session.SyncGroups() {
+			if candidate.ID == a.sync.group {
+				group = fmt.Sprintf("group %s (%d tracks)", candidate.ID, len(candidate.Tracks))
+				break
+			}
+		}
+	}
 	shifts := a.sync.timeline.Shifts()
 	if len(shifts) == 0 {
-		return fmt.Sprintf("event %s (%s) · sync 0", event.Round(time.Millisecond), state)
+		return fmt.Sprintf("event %s (%s) · %s · sync 0", event.Round(time.Millisecond), state, group)
 	}
 	parts := make([]string, 0, len(shifts))
 	for _, shift := range shifts {
@@ -325,5 +411,5 @@ func (a *appState) syncLabel() string {
 		}
 		parts = append(parts, fmt.Sprintf("%s %s", shift.Track, when))
 	}
-	return fmt.Sprintf("event %s (%s) · %s", event.Round(time.Millisecond), state, strings.Join(parts, " "))
+	return fmt.Sprintf("event %s (%s) · %s · %s", event.Round(time.Millisecond), state, group, strings.Join(parts, " "))
 }

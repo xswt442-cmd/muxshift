@@ -33,6 +33,7 @@ var scenarios = map[string]scenario{
 	"four":          runFour,
 	"audio":         runAudio,
 	"sync":          runSync,
+	"syncgroup":     runSyncGroup,
 	"syncmap":       runSyncMap,
 	"syncfail":      runSyncFail,
 }
@@ -389,6 +390,100 @@ func runSyncFail(window *mygo.Window, a *appState, dir string) {
 			mygo.App.Quit()
 		})
 	}()
+}
+
+// runSyncGroup shows that pause and play act on the session's sync group rather
+// than on whatever the scene selects: a source the scene shows after the group
+// was made keeps playing, and a source removed from the session leaves the group
+// without any command going to a player that no longer exists.
+func runSyncGroup(window *mygo.Window, a *appState, dir string) {
+	go func() {
+		wait := time.Sleep
+		wait(3 * time.Second)
+		// A source that was never drawn does not advance in this MyGo build, so
+		// the second source is shown once before it can be measured.
+		step(window, a, dir, "syncgroup", "", "second source shown once", func(a *appState) {
+			if err := a.showVideo(1); err != nil {
+				a.lastErr = err
+			}
+		})
+		wait(2 * time.Second)
+		step(window, a, dir, "syncgroup", "", "first picture with second sound", func(a *appState) {
+			if err := a.showVideo(0); err != nil {
+				a.lastErr = err
+			}
+			if err := a.hearAudio(1, 1); err != nil {
+				a.lastErr = err
+			}
+		})
+		wait(3 * time.Second)
+		step(window, a, dir, "syncgroup", "", "group created by the first sync command", func(a *appState) {
+			logGroup("syncgroup", "pause", a.pauseAll())
+			if err := a.anchor(0); err != nil {
+				a.lastErr = err
+			}
+			logf("syncgroup", "after creation %s", a.groupState())
+		})
+		wait(500 * time.Millisecond)
+		step(window, a, dir, "syncgroup", "1-group-paused.png", "group paused", nil)
+
+		step(window, a, dir, "syncgroup", "", "group resumed", func(a *appState) {
+			logGroup("syncgroup", "play", a.playAll())
+		})
+		wait(2 * time.Second)
+
+		// The third source joins the picture but not the group: the scene now
+		// shows a source that is not being synchronized.
+		step(window, a, dir, "syncgroup", "", "third source shown, outside the group", func(a *appState) {
+			if err := a.showVideo(2); err != nil {
+				a.lastErr = err
+			}
+			logf("syncgroup", "after scene change %s", a.groupState())
+		})
+		wait(2 * time.Second)
+		step(window, a, dir, "syncgroup", "", "pause the group while the third source plays", func(a *appState) {
+			logGroup("syncgroup", "pause", a.pauseAll())
+		})
+		wait(500 * time.Millisecond)
+		step(window, a, dir, "syncgroup", "2-third-still-playing.png", "group paused, third source outside it", nil)
+		wait(1500 * time.Millisecond)
+		step(window, a, dir, "syncgroup", "", "third source a second and a half later", nil)
+
+		step(window, a, dir, "syncgroup", "", "group resumed, second source removed", func(a *appState) {
+			logGroup("syncgroup", "play", a.playAll())
+			if err := a.remove(1); err != nil {
+				a.lastErr = err
+			}
+			logf("syncgroup", "after removal %s", a.groupState())
+		})
+		wait(time.Second)
+		step(window, a, dir, "syncgroup", "3-after-removal.png", "second source removed from the session", nil)
+
+		step(window, a, dir, "syncgroup", "", "pause the group after its member left", func(a *appState) {
+			logGroup("syncgroup", "pause", a.pauseAll())
+		})
+		wait(500 * time.Millisecond)
+		step(window, a, dir, "syncgroup", "4-paused-after-removal.png", "group paused with the surviving member", nil)
+
+		mygoRunOnMain(func() {
+			a.release()
+			mygo.App.Quit()
+		})
+	}()
+}
+
+// groupState is every sync group of the session as one line, so a run shows who
+// the pause commands reach and how a removal changed that.
+func (a *appState) groupState() string {
+	groups := a.session.SyncGroups()
+	if len(groups) == 0 {
+		return "groups=none"
+	}
+	parts := make([]string, 0, len(groups))
+	for _, group := range groups {
+		parts = append(parts, fmt.Sprintf("%s ref=%s tracks=%s", group.ID, group.Reference, trackList(group.Tracks)))
+	}
+	return "groups=" + strings.Join(parts, ";")
 }
 
 // runSyncMap measures one source at a known target time. It pauses the source,

@@ -2,7 +2,7 @@
 
 [简体中文](ARCHITECTURE.zh-CN.md)
 
-This repository contains a scaffold with three implemented pieces: a Go Core session configuration model, its event timeline, and HLS playlist metadata reading. Decoding after ingestion, buffering, timing-based synchronization, mixing, and playback are not implemented.
+This repository contains a scaffold with four implemented pieces: a Go Core session configuration model, its event timeline, HLS playlist metadata reading, and a desktop experiment that plays one source at a time through MyGo's native video path. Cross-source synchronization, mixing, DVR, and controlled multi-source playback are not implemented.
 
 ## Modules and ownership
 
@@ -10,7 +10,7 @@ This repository contains a scaffold with three implemented pieces: a Go Core ses
 | --- | --- | --- |
 | `core/` | Session configuration model | Shared media-session configuration and control contracts |
 | `core/hls/` | HLS metadata reading | Reads playlists, tracks, and first sample times; no transcoding and no serving |
-| `desktop/` | Documentation placeholder | MyGo desktop adapter, without shared business logic in the UI |
+| `desktop/` | MyGo desktop experiment | Plays one source through MyGo's native video path and owns the player lifecycle; no shared business logic |
 | `web/` | Documentation placeholder | Browser interface and browser media capability adapters |
 | `extension/` | Documentation placeholder | User-authorized integration with an existing browser session |
 | `testplace/` | Ignored local directory | Experiments, temporary notes, and agent working material |
@@ -31,16 +31,24 @@ The intended client-to-core dependency direction is `desktop → core ← web`; 
 
 `core/hls` does exactly two things: read the description of one HLS playlist, and read the audio and video tracks it carries with each track's first sample time. It uses `gohlslib` to parse the playlist and the segments, does not hand-write a parser, and does not download segments it does not need. `Read` accepts a media playlist only, leaving variant choice to the caller; `Probe` accepts a multivariant playlist, where the library picks the default variant.
 
-A track's PTS is meaningful within its own stream: the library normalizes timestamps to that stream's first sample, so comparing across streams needs the `EXT-X-PROGRAM-DATE-TIME` the playlist declares. `Align` anchors on the earliest of those dates and gives each track its offset; when the date is missing it returns `core.ErrNotAligned` instead of guessing an exact match. `Attach` turns a probed stream into Core sources and tracks and rolls back on failure; `Apply` validates first, then stores the offsets on `core.Timeline`.
+A track's PTS is meaningful within its own stream: the library normalizes timestamps to that stream's first sample. The wall clock an `EXT-X-PROGRAM-DATE-TIME` entry declares can give a candidate cross-stream reference, but the same wall clock in two different live sources does not guarantee the same match event: different direction, transcoding, and buffering all change how content relates to time. `Align` therefore produces candidate offsets and does not claim content-level alignment. When the declaration is missing it returns `core.ErrNotAligned` instead of guessing an exact match. `Attach` turns a probed stream into Core sources and tracks and rolls back on failure; `Apply` validates first, then stores the offsets on `core.Timeline`.
 
 Addresses must be http or https and must not carry credentials; a redirect from a public address may not land on a local or private one. Timeouts, cancellation, and non-200 responses come back as distinguishable errors, and credentials are never written to a log.
+
+## Desktop adapter (MyGo)
+
+`desktop/` is a MyGo experiment: it opens a local file or an http(s) address, plays it through the native `ui/video` path, offers play and pause, mute, reload, and close, and reports in its status line what the player itself says. One player per source is the desktop adapter's current strategy, not a Core rule: Core still describes only sources and tracks.
+
+One component creates, shows, hides, and closes players, in that order. Switching sources first stops the window from drawing the old player, lets a frame pass, and only then closes it on the thread that draws; after closing it never calls that instance's play, seek, volume, or picture methods again. Asynchronous work returns to the main thread rather than assuming that clearing a pointer made anything safe.
+
+This MyGo build has two gaps on the network path, which the application compensates for and records. A network source does not deliver its first picture by itself; one forward seek brings it in, so opening a network source retries a seek until the picture appears. Two videos in the same window, or a video that has not delivered a frame yet, make `CapturePage` panic while reading an empty buffer, so captures are wrapped in `recover` and only log the failure. Reopening the same network source after closing it does not resume playback and leaves `Err` nil; the application does not work around that gap.
 
 ## Boundaries
 
 - Support independent sources and multiple synchronization groups; do not hard-code two sources as a Core limit.
-- Sources, tracks, synchronization relationships, and output scenes are separate concepts. `core` fixes their shape, the event timeline, and HLS metadata reading; media handling is not implemented.
+- Sources, tracks, synchronization relationships, and output scenes are separate concepts. `core` fixes their shape, the event timeline, and HLS metadata reading; the desktop application already plays one source, while cross-source synchronization and mixing are not implemented.
 - Browser session access and media capabilities vary by platform. Web cannot assume access to Edge cookies or arbitrary third-party streams.
-- Keep the Go Core separate from the MyGo UI lifecycle. Media engines, audio inference, and transport protocols are undecided; candidates are not installed dependencies.
+- Keep the Go Core separate from the MyGo UI lifecycle. The desktop application uses MyGo's native playback; other media engines, audio inference, and transport protocols are undecided, and candidates are not installed dependencies.
 - `testplace/` stays untracked; formal documentation records stable, verifiable repository facts.
 
-The only available basic check is `go test ./...` from the repository root, which runs the `core` session and timeline tests plus the `core/hls` tests against recorded samples.
+`go test ./...` from the repository root runs the `core` session and timeline tests plus the `core/hls` tests against recorded samples. The desktop application is built and checked on Windows separately with `cd desktop && go build .`; its playback results are recorded in the P5 evidence and are not unit-tested.

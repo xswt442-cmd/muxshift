@@ -4,9 +4,9 @@ Read this file and any nearer module-specific `AGENTS.md` before changing code. 
 
 ## Current repository boundaries
 
-- This repository is an initial scaffold; do not describe media capture, synchronization, playback, audio separation, or a functioning desktop/web application as implemented.
-- `core/` is the shared Go boundary. Future desktop, web, and extension adapters may depend on Core contracts, but Core must not import any client-specific UI or browser runtime.
-- `desktop/` is reserved for MyGo; `web/` and `extension/` are separate clients. Do not introduce Wails or assume a shared browser authentication context.
+- This repository is still mostly a scaffold. Core holds a session model and event timeline, `core/hls` reads HLS metadata, and `desktop/` plays one source through MyGo. Do not describe media capture, cross-source synchronization, mixing, audio separation, or a finished desktop/web application as implemented.
+- `core/` is the shared Go boundary. Desktop, web, and extension adapters may depend on Core contracts, but Core must not import any client-specific UI or browser runtime.
+- `desktop/` is the MyGo desktop client; `web/` and `extension/` are separate clients. Do not introduce Wails or assume a shared browser authentication context.
 - Keep sources, media tracks, synchronization groups, and output scenes conceptually distinct when adding real domain code. Avoid introducing speculative abstractions ahead of a concrete use case.
 - Treat URLs, cookies, request headers, browser messages, and local file paths as untrusted inputs. Never log or commit credentials or session material; do not bypass media access controls.
 

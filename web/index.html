@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MuxShift web client</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header>
+  <h1>MuxShift web client</h1>
+  <p class="note" id="session-line">connecting…</p>
+</header>
+
+<main>
+  <section class="stage-column">
+    <div id="stage" class="stage">
+      <p class="placeholder" id="stage-placeholder">no source is shown yet</p>
+    </div>
+    <div class="controls">
+      <button id="play-all" type="button">Play all</button>
+      <button id="pause-all" type="button">Pause all</button>
+      <label class="inline">volume
+        <input id="volume" type="range" min="0" max="1" step="0.05" value="1">
+      </label>
+      <button id="mute" type="button">Mute heard source</button>
+      <button id="fit" type="button">Fit window</button>
+    </div>
+    <div class="seek-row">
+      <input id="seek" type="range" min="0" max="1" step="0.05" value="0">
+      <span id="time-line" class="note">—</span>
+    </div>
+  </section>
+
+  <aside class="side">
+    <h2>Sources</h2>
+    <p class="note">Picking a picture and a sound updates the Go session through <code>POST /api/scene</code>.</p>
+    <ul id="sources" class="sources"></ul>
+
+    <h2>Scene</h2>
+    <p class="note" id="scene-line">—</p>
+
+    <h2>What this build supports</h2>
+    <ul class="limits">
+      <li>Playback of one HLS or MP4 source per element, through hls.js and Media Source Extensions.</li>
+      <li>Picture from one source and sound from another, at independent volumes.</li>
+      <li>No cross-source timing: the web client does not align two live sources, and it does not buffer or replay history.</li>
+      <li>Seek only inside what the browser has buffered; live HLS starts at the live edge.</li>
+      <li>Browsers refuse to start sound without a click, so every source starts muted.</li>
+    </ul>
+
+    <h2>Environment</h2>
+    <ul id="environment" class="limits"></ul>
+  </aside>
+</main>
+
+<section class="log">
+  <h2>Events</h2>
+  <ol id="log"></ol>
+</section>
+
+<script src="vendor/hls.light.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

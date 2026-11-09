@@ -2,7 +2,7 @@
 
 [简体中文](ARCHITECTURE.zh-CN.md)
 
-This repository contains a scaffold with five implemented pieces: a Go Core session configuration model, its event timeline, HLS playlist metadata reading, a bounded replay buffer for live segments, and a desktop experiment that registers several sources into one Core session and lets a scene decide which picture is shown and which sound is heard through MyGo's native video path. Cross-source synchronization, mixing, and controlled multi-source playback are not implemented; the buffer and the recording it joins are real, but showing that replay inside a running session window is not implemented yet.
+This repository contains a scaffold with these implemented pieces: a Go Core session configuration model, its event timeline, HLS playlist metadata reading, a bounded replay buffer for live segments, and two clients — a desktop experiment that registers several sources into one Core session and lets a scene decide which picture is shown and which sound is heard through MyGo's native video path, and a web client that plays HLS in the browser through hls.js. Cross-source synchronization, mixing, and controlled multi-source playback are not implemented; the buffer and the recording it joins are real, but showing that replay inside a running session window is not implemented yet.
 
 ## Modules and ownership
 
@@ -11,7 +11,7 @@ This repository contains a scaffold with five implemented pieces: a Go Core sess
 | `core/` | Session configuration model | Shared media-session configuration and control contracts |
 | `core/hls/` | HLS metadata reading | Reads playlists, tracks, and first sample times; no transcoding and no serving |
 | `desktop/` | MyGo desktop experiment | Registers several sources into one Core session, shows and hears what its scene selects, and owns the player lifecycle; no shared business logic |
-| `web/` | Documentation placeholder | Browser interface and browser media capability adapters |
+| `web/` | Web client (hls.js and MSE) | Loopback-only session service and static page; browser limits stay visible instead of being assumed equal to the desktop |
 | `extension/` | Documentation placeholder | User-authorized integration with an existing browser session |
 | `testplace/` | Ignored local directory | Experiments, temporary notes, and agent working material |
 
@@ -64,12 +64,20 @@ Putting the recording into a running window is not implemented: the file `Join` 
 
 Cached segments are only checked structurally: a length that is a multiple of 188 bytes, a sync byte at the start of every packet, and a refusal of content that cannot be read or is not a transport stream. That does not prove every frame decodes, so the accurate description is "a bounded HLS segment cache, contiguous range queries over the cached segments, and recording joins"; playing a joined recording has been verified only on Windows with MyGo as the only source.
 
+## Web client
+
+`web/` is one Go package (`package main`) plus three static files. A single process serves the embedded page, exposes one Core session as JSON to that page, and serves the test media under `/media/`. It binds `127.0.0.1` only and prints an address carrying a token at startup; `/api/` and `/media/` both require the token, which may arrive as a query parameter, as the `X-MuxShift-Token` header, or as the cookie the page sets. The cookie is necessary because media elements and hls.js cannot attach a header to every playlist and segment. Responses carry no CORS header, so another origin can neither read the session nor drive this process, and media paths are resolved against `-media-root` and refused outside it.
+
+The page plays HLS through hls.js (the 1.7.4 light build vendored under `web/vendor/`, Apache-2.0) on top of Media Source Extensions, and hands MP4 files straight to a media element. `GET /api/session` reports the sources, their tracks, and the current scene; `POST /api/scene` changes the scene through `SetSceneVideo` and `SetSceneAudio`, so the web client shares the Core meaning with the desktop: the picture comes from one source, the sound may come from another, and each level and mute state stands on its own.
+
+The difference from the desktop is stated rather than assumed: the web client does not align sources, keeps no history, can only seek inside what the browser has buffered, and starts a live playlist at the live edge. Browsers allow sound only after the user interacts, so every source starts muted and the first click unmutes the source the scene says is heard. Playback failures surface as hls.js error types or media element error codes, and are never smoothed over.
+
 ## Boundaries
 
 - Support independent sources and multiple synchronization groups; do not hard-code two sources as a Core limit.
-- Sources, tracks, synchronization relationships, and output scenes are separate concepts. `core` fixes their shape, the event timeline, HLS metadata reading, and a bounded replay buffer; the desktop application already registers several sources in one session, selects picture and sound per scene, adjusts each level, aligns one source against another by hand, and buffers live sources for replay, while automatic cross-source synchronization, mixing, and replay playback itself are not implemented.
-- Browser session access and media capabilities vary by platform. Web cannot assume access to Edge cookies or arbitrary third-party streams.
+- Sources, tracks, synchronization relationships, and output scenes are separate concepts. `core` fixes their shape, the event timeline, HLS metadata reading, and a bounded replay buffer; the desktop application already registers several sources in one session, selects picture and sound per scene, adjusts each level, aligns one source against another by hand, and buffers live sources for replay; the web client plays several sources in a browser and switches picture and sound; automatic cross-source synchronization, mixing, and replay playback itself are not implemented.
+- Browser session access and media capabilities vary by platform. Web cannot assume access to Edge cookies or arbitrary third-party streams; the client states what it cannot do instead of imitating the desktop.
 - Keep the Go Core separate from the MyGo UI lifecycle. The desktop application uses MyGo's native playback; other media engines, audio inference, and transport protocols are undecided, and candidates are not installed dependencies.
 - `testplace/` stays untracked; formal documentation records stable, verifiable repository facts.
 
-`go test ./...` from the repository root runs the `core` session and timeline tests plus the `core/hls` tests against recorded samples and the `core/dvr` buffer tests. The desktop application is built and checked on Windows separately with `cd desktop && go build .`; its playback, multi-source, sound, and replay results are checked by hand on Windows and are not unit-tested.
+`go test ./...` from the repository root runs the `core` session and timeline tests plus the `core/hls` tests against recorded samples and the `core/dvr` buffer tests. The desktop application is built and checked on Windows separately with `cd desktop && go build .`; its playback, multi-source, sound, and replay results are checked by hand on Windows and are not unit-tested. The web client is built with `go build ./web`, and real playback is checked in a browser (Chromium and Edge were verified; browsers that are not installed are recorded as not run).

@@ -326,6 +326,9 @@ func TestJoinStartsAtTheAskedSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("join later: %v", err)
 	}
+	if _, err := os.Stat(whole); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the first recording survived the second one: %v", err)
+	}
 	lateBytes, err := os.ReadFile(late)
 	if err != nil {
 		t.Fatalf("read later recording: %v", err)
@@ -338,6 +341,9 @@ func TestJoinStartsAtTheAskedSegment(t *testing.T) {
 	}
 	if err := buffer.Close(); err != nil {
 		t.Fatalf("close: %v", err)
+	}
+	if _, err := os.Stat(late); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("closing the buffer kept the recording: %v", err)
 	}
 	if _, err := buffer.Join(0); !errors.Is(err, core.ErrClosed) {
 		t.Fatalf("join after close = %v, want ErrClosed", err)

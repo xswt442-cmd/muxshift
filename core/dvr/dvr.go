@@ -151,6 +151,7 @@ type Buffer struct {
 	pending  *Gap
 	closed   bool
 	dirOwned bool
+	join     string
 }
 
 // New creates the buffer's directory and returns it empty. The directory is
@@ -387,6 +388,10 @@ func (b *Buffer) Locate(at time.Duration) (Segment, error) {
 // a range never crosses a gap, so the recording never splices two moments
 // together. A start inside a segment begins at that segment's first frame,
 // because a transport stream segment cannot be cut.
+//
+// The recording belongs to the buffer: a second call replaces the first file,
+// and Close removes it with the segments. That keeps one open recording from
+// growing the directory beyond what Retention and MaxBytes bound.
 func (b *Buffer) Join(from time.Duration) (string, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -420,6 +425,12 @@ func (b *Buffer) Join(from time.Duration) (string, error) {
 	if err := out.Close(); err != nil {
 		return "", fmt.Errorf("%w: close %s: %v", ErrNoSpace, name, err)
 	}
+	if b.join != "" && b.join != path {
+		if err := os.Remove(b.join); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("%w: remove the previous recording: %v", ErrNoSpace, err)
+		}
+	}
+	b.join = path
 	return path, nil
 }
 
@@ -520,6 +531,12 @@ func (b *Buffer) Close() error {
 	}
 	b.closed = true
 	var first error
+	if b.join != "" {
+		if err := os.Remove(b.join); err != nil && !errors.Is(err, os.ErrNotExist) && first == nil {
+			first = err
+		}
+		b.join = ""
+	}
 	for _, segment := range b.segments {
 		if err := os.Remove(segment.Path); err != nil && !errors.Is(err, os.ErrNotExist) && first == nil {
 			first = err

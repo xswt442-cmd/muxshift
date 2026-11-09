@@ -2,7 +2,7 @@
 
 [简体中文](ARCHITECTURE.zh-CN.md)
 
-This repository contains a scaffold with four implemented pieces: a Go Core session configuration model, its event timeline, HLS playlist metadata reading, and a desktop experiment that plays one source at a time through MyGo's native video path. Cross-source synchronization, mixing, DVR, and controlled multi-source playback are not implemented.
+This repository contains a scaffold with four implemented pieces: a Go Core session configuration model, its event timeline, HLS playlist metadata reading, and a desktop experiment that registers several sources into one Core session and lets a scene decide which picture is shown and which sound is heard through MyGo's native video path. Cross-source synchronization, mixing, DVR, and controlled multi-source playback are not implemented.
 
 ## Modules and ownership
 
@@ -10,7 +10,7 @@ This repository contains a scaffold with four implemented pieces: a Go Core sess
 | --- | --- | --- |
 | `core/` | Session configuration model | Shared media-session configuration and control contracts |
 | `core/hls/` | HLS metadata reading | Reads playlists, tracks, and first sample times; no transcoding and no serving |
-| `desktop/` | MyGo desktop experiment | Plays one source through MyGo's native video path and owns the player lifecycle; no shared business logic |
+| `desktop/` | MyGo desktop experiment | Registers several sources into one Core session, shows and hears what its scene selects, and owns the player lifecycle; no shared business logic |
 | `web/` | Documentation placeholder | Browser interface and browser media capability adapters |
 | `extension/` | Documentation placeholder | User-authorized integration with an existing browser session |
 | `testplace/` | Ignored local directory | Experiments, temporary notes, and agent working material |
@@ -37,18 +37,22 @@ Addresses must be http or https and must not carry credentials; a redirect from 
 
 ## Desktop adapter (MyGo)
 
-`desktop/` is a MyGo experiment: it opens a local file or an http(s) address, plays it through the native `ui/video` path, offers play and pause, mute, reload, and close, and reports in its status line what the player itself says. One player per source is the desktop adapter's current strategy, not a Core rule: Core still describes only sources and tracks.
+`desktop/` is a MyGo experiment. It registers every local file or http(s) address given on the command line as a Core source: a network source is probed with `core/hls` first so its real tracks are registered, while a local file is registered as one video track and one audio track because MyGo does not enumerate tracks of a local file. The session holds one scene and one desktop-window output; the scene decides which video track is shown, which audio tracks are heard, and at what volume and mute state. The buttons change the scene, and `apply()` then sets each player's visibility, mute, and volume from it.
 
-One component creates, shows, hides, and closes players, in that order. Switching sources first stops the window from drawing the old player, lets a frame pass, and only then closes it on the thread that draws; after closing it never calls that instance's play, seek, volume, or picture methods again. Asynchronous work returns to the main thread rather than assuming that clearing a pointer made anything safe.
+One player per source is the desktop adapter's current strategy, not a Core rule: Core only describes sources, tracks, and scenes. A video the scene does not select keeps its player alive and is hidden rather than removed from the view.
 
-This MyGo build has two gaps on the network path, which the application compensates for and records. A network source does not deliver its first picture by itself; one forward seek brings it in, so opening a network source retries a seek until the picture appears. Two videos in the same window, or a video that has not delivered a frame yet, make `CapturePage` panic while reading an empty buffer, so captures are wrapped in `recover` and only log the failure. Reopening the same network source after closing it does not resume playback and leaves `Err` nil; the application does not work around that gap.
+One component creates, shows, hides, and closes players. Closing marks the source as hidden and invalidates its player pointer in a single main-thread callback, waits for the window to actually draw three frames, and only then calls `Close()` on the main thread. Asynchronous first-frame work carries a generation number and stops as soon as it no longer matches. Reopening a source hands over instead of closing first: the new player opens while the old one keeps drawing, and the old one is closed once the new one is ready, because this build delivers no first frame when the window briefly has no video element at all.
+
+This MyGo build has several gaps, which the application compensates for and records. A network source does not deliver its first picture by itself; one forward seek brings it in, and the application retries that seek until a picture appears — a first-frame compensation, never a time-alignment mechanism. Two videos in the same window, or a video that has not delivered a frame yet, make `CapturePage` panic while reading an empty buffer, so captures are wrapped in `recover` and only log the failure. A player that was never drawn does not advance, so "A's picture with B's sound" only holds once B has been drawn at least once. Replacing the video element that is being drawn stops the window from repainting, so every player's video element stays in the tree and only its visibility changes.
+
+Sound is not judged by ear: `IAudioMeterInformation` samples the default output device read-only, showing a level while playing, zero while muted, and a higher level when two sources sound at once. Those results are recorded in the P6 evidence. The meter cannot tell which process is sounding, so each sampling window runs only the observed application and aligns its log in time.
 
 ## Boundaries
 
 - Support independent sources and multiple synchronization groups; do not hard-code two sources as a Core limit.
-- Sources, tracks, synchronization relationships, and output scenes are separate concepts. `core` fixes their shape, the event timeline, and HLS metadata reading; the desktop application already plays one source, while cross-source synchronization and mixing are not implemented.
+- Sources, tracks, synchronization relationships, and output scenes are separate concepts. `core` fixes their shape, the event timeline, and HLS metadata reading; the desktop application already registers several sources in one session and selects picture and sound per scene, while cross-source synchronization and mixing are not implemented.
 - Browser session access and media capabilities vary by platform. Web cannot assume access to Edge cookies or arbitrary third-party streams.
 - Keep the Go Core separate from the MyGo UI lifecycle. The desktop application uses MyGo's native playback; other media engines, audio inference, and transport protocols are undecided, and candidates are not installed dependencies.
 - `testplace/` stays untracked; formal documentation records stable, verifiable repository facts.
 
-`go test ./...` from the repository root runs the `core` session and timeline tests plus the `core/hls` tests against recorded samples. The desktop application is built and checked on Windows separately with `cd desktop && go build .`; its playback results are recorded in the P5 evidence and are not unit-tested.
+`go test ./...` from the repository root runs the `core` session and timeline tests plus the `core/hls` tests against recorded samples. The desktop application is built and checked on Windows separately with `cd desktop && go build .`; its playback, multi-source, and sound results are recorded in the P5 and P6 evidence and are not unit-tested.

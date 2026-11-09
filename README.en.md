@@ -2,7 +2,7 @@
 
 MuxShift is an open-source project for composing multiple audio/video sources and controlling their timelines.
 
-The repository currently contains a project scaffold with a Go Core session configuration model, an event timeline, HLS playlist metadata reading, and a desktop experiment that plays one source through MyGo's native video path. Media capture, cross-source synchronization, mixing, and audio separation are not implemented.
+The repository currently contains a project scaffold with a Go Core session configuration model, an event timeline, HLS playlist metadata reading, and a desktop experiment that registers several sources into one Core session, where a scene decides which picture is shown and which sound is heard through MyGo's native video path. Media capture, cross-source synchronization, mixing, and audio separation are not implemented.
 
 [简体中文](README.md)
 
@@ -10,7 +10,7 @@ The repository currently contains a project scaffold with a Go Core session conf
 
 - `core/`: shared Go Core session configuration model and event timeline.
 - `core/hls/`: reads HLS playlists, tracks, and first sample times; no transcoding and no serving.
-- `desktop/`: MyGo desktop experiment that plays one local file or http(s) address and owns the player lifecycle.
+- `desktop/`: MyGo desktop experiment that registers several local files or http(s) addresses into one Core session, selects picture and sound per scene, and owns the player lifecycle.
 - `web/`: placeholder for a web client.
 - `extension/`: placeholder for a browser extension.
 - `docs/development/`: engineering architecture documents.
@@ -33,11 +33,9 @@ The desktop application is built and run on Windows, where it opens a real windo
 ```sh
 cd desktop
 go build .
-./desktop.exe -media <local file or http(s) address>
+./desktop.exe -media <local file or http(s) address> [-media <second> ...]
 ```
 
-Its playback results come from watching the window and are not unit-tested.
+The buttons select which source's picture is shown and which sources are heard, and set their volume and mute state; `-scenario` runs the scripted checks in `desktop/scenarios.go`. Its results come from real window captures, logs, and level samples of the output device, and are not unit-tested.
 
 ## License
-
-See [LICENSE](LICENSE).

@@ -5,6 +5,11 @@
 // mute, switch between sources, close them, and report the real state of each
 // player rather than an assumed one.
 //
+// What the window shows and hears comes from a Core session: the sources and
+// tracks registered for each address, and one scene that names the video track
+// drawn and the audio tracks heard. The buttons edit that scene, and the scene
+// is applied to the players; see session.go.
+//
 //	go run . -media <file-or-url> [-media <another>]
 //
 // -media accepts a local path or an http(s) address and may be given more than
@@ -26,66 +31,72 @@ import (
 	"github.com/egoist/mygo/ui/video"
 )
 
-// source is one media address, the player opened for it, and what stopped it
-// from opening.
-type source struct {
-	uri     string
-	player  *ui.VideoPlayer
-	openErr error
-	shown   bool
+// mygoRunOnMain runs fn on the thread that draws the window and waits for it.
+func mygoRunOnMain(fn func()) {
+	mygo.RunOnMain(fn)
 }
 
-// state is every source the window knows, in the order they were given.
-type state struct {
-	sources []*source
-}
-
-// add opens uri and keeps its player, so the window can show it.
-func (s *state) add(uri string) *source {
-	src := &source{uri: uri}
-	s.open(src)
-	s.sources = append(s.sources, src)
-	return src
-}
-
-// open opens the player of src, replacing one it had.
-func (s *state) open(src *source) {
-	s.close(src)
-	player, err := openPlayer(src.uri)
-	if err != nil {
-		src.openErr = err
-		return
-	}
-	src.openErr = nil
-	src.player = player
-	src.shown = true
-	if isNetworkAddress(src.uri) {
-		wakeNetworkPlayer(player)
-	}
-}
-
-// close stops showing the player of src and then closes it.
+// reopenPlayer closes the player of it and opens it again from the same
+// address, keeping the session's source and tracks.
 //
-// The order matters: a player closed while a frame still draws it crashes the
-// process in Media Foundation, so the view drops it first, a frame goes by, and
-// only then the player is closed. Both steps run on the main thread, where
-// drawing happens.
-func (s *state) close(src *source) {
-	if src.player == nil {
+// The old player is not closed first. In this MyGo build a window that is left
+// with no video element at all never hands a picture to the next player: the
+// player reports its duration but stays not ready and keeps its position at
+// zero. The smallest reproduction (testplace/poc/onevid -reopen -reopen-mode
+// view) fails the same way, while reopening the address with the old player
+// still drawn works for both a local file and HLS (testplace/poc/onevid -reopen
+// -reopen-mode keep). So the old player stays drawn until the new one has a
+// picture, and is closed then.
+func (a *appState) reopenPlayer(it *item) {
+	previous := it.player
+	player, err := openPlayer(it.uri)
+	if err != nil {
+		it.openErr = err
 		return
 	}
-	mygo.RunOnMain(func() { src.shown = false })
-	time.Sleep(100 * time.Millisecond)
-	p := src.player
-	src.player = nil
-	mygo.RunOnMain(func() { p.Close() })
+	it.openErr = nil
+	if previous != nil {
+		it.previous = previous
+	}
+	it.player = player
+	it.generation++
+	a.apply()
+	wakeNetworkPlayer(it.uri, player, a.generationIs(it, it.generation))
+	a.closePendingWhenReady()
+	go a.closePreviousWhenReady(it)
 }
 
-// release closes every player.
-func (s *state) release() {
-	for _, src := range s.sources {
-		s.close(src)
+// closePreviousWhenReady closes the player a reopen left drawn, as soon as the
+// replacement has a picture.
+func (a *appState) closePreviousWhenReady(it *item) {
+	for i := 0; i < 40; i++ {
+		ready := false
+		mygoRunOnMain(func() {
+			ready = it.player != nil && it.player.Ready() && !it.player.Buffering()
+		})
+		if ready {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
 	}
+	var previous *ui.VideoPlayer
+	mygoRunOnMain(func() {
+		previous = it.previous
+		it.previous = nil
+	})
+	if previous == nil {
+		return
+	}
+	a.waitFrames(3)
+	if a.livePlayers() > 0 || it.player != nil {
+		mygoRunOnMain(func() { previous.Close() })
+		return
+	}
+	mygoRunOnMain(func() { previous.Pause() })
+	a.pendingMu.Lock()
+	a.pending = append(a.pending, previous)
+	a.pendingMu.Unlock()
+	a.closePendingWhenReady()
 }
 
 // openPlayer opens a local file or a network address.
@@ -102,8 +113,7 @@ func isNetworkAddress(uri string) bool {
 	return strings.HasPrefix(uri, "http://") || strings.HasPrefix(uri, "https://")
 }
 
-// wakeNetworkPlayer nudges a network player once its first second went by
-// without a picture.
+// wakeNetworkPlayer nudges a network player into showing its first picture.
 //
 // In this MyGo build a network source plays, reports its duration and moves its
 // position, but its first picture never reaches the window: the player stays
@@ -111,15 +121,27 @@ func isNetworkAddress(uri string) bool {
 // frame over. A seek to just ahead of the current position keeps the playhead
 // where it was and is enough. A second video in the same window does it too,
 // which is why the P1 probe, which showed a local file first, did not see this.
-func wakeNetworkPlayer(player *ui.VideoPlayer) {
+//
+// The seek is a compensation for the missing first frame, not a synchronisation
+// step: it moves the playhead by a millisecond and is not something a precise
+// timeline should build on. live reports whether this task still owns the
+// player it was started for; once the player is replaced or closed the task
+// stops, so it never touches a released player.
+func wakeNetworkPlayer(uri string, player *ui.VideoPlayer, live func() bool) {
+	if !isNetworkAddress(uri) {
+		return
+	}
 	go func() {
 		switch wakeMode {
 		case "none":
 			return
 		case "once":
 			time.Sleep(1500 * time.Millisecond)
-			mygo.RunOnMain(func() {
-				if player.Ready() || player.Err() != nil {
+			if !live() {
+				return
+			}
+			mygoRunOnMain(func() {
+				if !live() || player.Ready() || player.Err() != nil {
 					return
 				}
 				player.Seek(player.Position() + time.Millisecond)
@@ -130,8 +152,15 @@ func wakeNetworkPlayer(player *ui.VideoPlayer) {
 		// few times, half a second apart, and stop as soon as it arrives.
 		for i := 0; i < 8; i++ {
 			time.Sleep(500 * time.Millisecond)
+			if !live() {
+				return
+			}
 			done := make(chan bool, 1)
-			mygo.RunOnMain(func() {
+			mygoRunOnMain(func() {
+				if !live() {
+					done <- true
+					return
+				}
 				if player.Ready() || player.Err() != nil {
 					done <- true
 					return
@@ -152,20 +181,20 @@ var wakeMode = "retry"
 
 // status is one player's state as a line, so the window reports what actually
 // happened: an opening error, buffering, or the position it reached.
-func status(src *source) string {
+func status(it *item) string {
 	switch {
-	case src.openErr != nil:
-		return "error: " + src.openErr.Error()
-	case src.player == nil:
-		return "no media"
-	case src.player.Err() != nil:
-		return "error: " + src.player.Err().Error()
-	case !src.player.Ready():
+	case it.openErr != nil:
+		return "error: " + it.openErr.Error()
+	case it.player == nil:
+		return "closed"
+	case it.player.Err() != nil:
+		return "error: " + it.player.Err().Error()
+	case !it.player.Ready():
 		return "opening"
-	case src.player.Buffering():
+	case it.player.Buffering():
 		return "buffering"
 	}
-	return fmt.Sprintf("%s / %s", clock(src.player.Position()), clock(src.player.Duration()))
+	return fmt.Sprintf("%s / %s", clock(it.player.Position()), clock(it.player.Duration()))
 }
 
 // clock is a duration as minutes and seconds.
@@ -180,27 +209,41 @@ func clock(d time.Duration) string {
 // its first picture for a network source in this MyGo build: the player stayed
 // not ready with a black area while its clock ran, and the same address played
 // once the video was a direct child.
-func (s *state) view(c *ui.Context) {
+func (a *appState) view(c *ui.Context) {
+	defer a.signalFrame()
 	ui.Column(c).Fill().Children(func() {
 		shown := 0
-		for _, src := range s.sources {
-			if src.shown && src.player != nil {
-				ui.Video(c, src.player).Fill()
+		for _, it := range a.items {
+			if it.player == nil {
+				continue
+			}
+			// Every player keeps its video element in the tree and the scene
+			// hides the ones it does not show. Adding and removing a video
+			// element as the shown source changed froze the window: after the
+			// switch nothing repainted, and the status line kept its old text.
+			// The player a reopen left behind keeps its element drawn until the
+			// replacement has a picture; see reopenPlayer.
+			if it.previous != nil {
+				ui.Video(c, it.previous).Fill()
+				shown++
+			}
+			ui.Video(c, it.player).Fill().Hidden(!it.shown)
+			if it.shown {
 				shown++
 			}
 		}
-		if shown == 0 && len(s.sources) > 0 {
-			ui.Text(c, status(s.sources[0])).Center()
+		if shown == 0 {
+			ui.Text(c, a.status()).Center()
 		}
 		ui.Row(c).Gap(8).Padding(12).AlignItems(ui.Center).Children(func() {
-			main := s.first()
+			main := a.first()
 			if main != nil && main.player != nil {
 				p := main.player
 				label := "Pause"
 				if !p.Playing() {
 					label = "Play"
 				}
-				if ui.Button(c.Key("play"), label).Width(88).Clicked() {
+				if ui.Button(c.Key("play"), label).Width(80).Clicked() {
 					if p.Playing() {
 						p.Pause()
 					} else {
@@ -212,38 +255,68 @@ func (s *state) view(c *ui.Context) {
 				}
 			}
 			if ui.Button(c.Key("reload"), "Reload").Width(88).Clicked() && main != nil {
-				s.open(main)
+				a.reopenPlayer(main)
 			}
 			if ui.Button(c.Key("quit"), "Close").Width(88).Clicked() {
-				s.release()
+				a.release()
 				mygo.App.Quit()
 			}
-			ui.Text(c, s.status()).FontFeatures("tnum")
+			ui.Text(c, a.sceneLabel()).FontFeatures("tnum")
+		})
+		ui.Row(c).Gap(8).Padding(12).AlignItems(ui.Center).Children(func() {
+			for i, it := range a.items {
+				index := i
+				if it.video != "" {
+					if ui.Button(c.Key(fmt.Sprintf("show-%d", i)), fmt.Sprintf("Show %d", i+1)).Width(88).Clicked() {
+						if err := a.showVideo(index); err != nil {
+							a.lastErr = err
+						}
+					}
+				}
+				if it.audio != "" {
+					if ui.Button(c.Key(fmt.Sprintf("hear-%d", i)), fmt.Sprintf("Hear %d", i+1)).Width(88).Clicked() {
+						if err := a.hearAudio(index, it.volume); err != nil {
+							a.lastErr = err
+						}
+					}
+					if ui.Button(c.Key(fmt.Sprintf("vol-down-%d", i)), "Vol -").Width(64).Clicked() {
+						if err := a.setVolume(index, max(0, it.volume-0.25)); err != nil {
+							a.lastErr = err
+						}
+					}
+					if ui.Button(c.Key(fmt.Sprintf("vol-up-%d", i)), "Vol +").Width(64).Clicked() {
+						if err := a.setVolume(index, min(1, it.volume+0.25)); err != nil {
+							a.lastErr = err
+						}
+					}
+				}
+			}
+			ui.Text(c, a.status()).FontFeatures("tnum")
 		})
 	})
 }
 
-// first is the source the buttons drive: the first one given.
-func (s *state) first() *source {
-	if len(s.sources) == 0 {
+// first is the item the buttons drive: the first one given.
+func (a *appState) first() *item {
+	if len(a.items) == 0 {
 		return nil
 	}
-	return s.sources[0]
+	return a.items[0]
 }
 
-// status is every source as one line, with its index.
-func (s *state) status() string {
-	switch len(s.sources) {
-	case 0:
+// status is every source as one line, with its index, followed by the scene.
+func (a *appState) status() string {
+	if a.lastErr != nil {
+		return "error: " + a.lastErr.Error()
+	}
+	parts := make([]string, 0, len(a.items))
+	for i, it := range a.items {
+		parts = append(parts, fmt.Sprintf("%d: %s", i+1, status(it)))
+	}
+	if len(parts) == 0 {
 		return "no media"
-	case 1:
-		return status(s.sources[0])
 	}
-	parts := make([]string, 0, len(s.sources))
-	for i, src := range s.sources {
-		parts = append(parts, fmt.Sprintf("%d: %s", i+1, status(src)))
-	}
-	return strings.Join(parts, "   ")
+	return strings.Join(parts, "   ") + "   ·   " + a.sceneLabel()
 }
 
 // muteLabel names what the mute button does next.
@@ -309,21 +382,25 @@ func main() {
 		}
 	}
 
-	s := &state{}
-	for _, uri := range media {
-		s.add(uri)
+	s, err := newAppState(media)
+	if err != nil {
+		log.Fatalf("muxshift-desktop: %v", err)
 	}
+	for i, it := range s.items {
+		log.Printf("source %d: %s · video=%q audio=%q open=%v", i+1, it.uri, it.video, it.audio, errorString(it.openErr))
+	}
+	log.Printf("scene %s: %s", s.scene, s.sceneLabel())
 	if *trace {
 		go func() {
 			for range time.Tick(500 * time.Millisecond) {
-				for i, src := range s.sources {
-					if src.player == nil {
+				for i, it := range s.items {
+					if it.player == nil {
 						log.Printf("trace %d: no player", i+1)
 						continue
 					}
-					p := src.player
-					log.Printf("trace %d: ready=%v playing=%v buffering=%v duration=%s position=%s err=%v",
-						i+1, p.Ready(), p.Playing(), p.Buffering(), p.Duration(), p.Position(), p.Err())
+					p := it.player
+					log.Printf("trace %d: ready=%v playing=%v muted=%v buffering=%v duration=%s position=%s err=%v",
+						i+1, p.Ready(), p.Playing(), p.Muted(), p.Buffering(), p.Duration(), p.Position(), p.Err())
 				}
 			}
 		}()
@@ -341,7 +418,7 @@ func main() {
 			time.AfterFunc(*shotDelay, func() {
 				// The window and the players belong to the main thread: capturing and
 				// closing from the timer's goroutine races a frame that is drawing.
-				mygo.RunOnMain(func() {
+				mygoRunOnMain(func() {
 					capture(window, *shot)
 					s.release()
 					mygo.App.Quit()

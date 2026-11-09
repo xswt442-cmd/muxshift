@@ -295,6 +295,10 @@ var wakeMode = "once"
 // replay served by this application can be compared with one served as files.
 var replayProbeURL string
 
+// replayMode marks a process that was started to play one recording as its only
+// source; the window title and the status line say so.
+var replayMode bool
+
 // status is one player's state as a line, so the window reports what actually
 // happened: an opening error, buffering, or the position it reached.
 func status(it *item) string {
@@ -515,6 +519,7 @@ func capture(window *mygo.Window, path string) (err error) {
 func main() {
 	var media multiFlag
 	flag.Var(&media, "media", "local file or http(s) address to play; may be repeated")
+	replay := flag.String("replay", "", "play one joined recording as the only source, in a window labelled as a recording")
 	shot := flag.String("shot", "", "write a PNG of the window here and quit")
 	shotDelay := flag.Duration("shot-delay", 6*time.Second, "how long to let the first picture arrive before -shot")
 	trace := flag.Bool("trace", false, "log every player's state twice a second")
@@ -529,8 +534,22 @@ func main() {
 	flag.DurationVar(&dvrRetention, "dvr-retention", dvrRetention, "how much history the replay buffer keeps")
 	flag.Int64Var(&dvrMaxBytes, "dvr-max-bytes", dvrMaxBytes, "byte limit of the replay buffer; 0 keeps only the retention limit")
 	flag.Parse()
+	if *replay != "" {
+		// A recording is played by a process of its own: this build cannot put a
+		// recording on screen inside a session that already presents sources, but
+		// it does play one as the only source. The mode is labelled so nobody
+		// mistakes it for replay inside a running session.
+		if len(media) > 0 {
+			log.Fatal("muxshift-desktop: -replay cannot be combined with -media")
+		}
+		if _, err := os.Stat(*replay); err != nil {
+			log.Fatalf("muxshift-desktop: %v", err)
+		}
+		media = append(media, *replay)
+		replayMode = true
+	}
 	if len(media) == 0 {
-		log.Fatal("muxshift-desktop: -media is required")
+		log.Fatal("muxshift-desktop: -media or -replay is required")
 	}
 	for _, uri := range media {
 		if !isNetworkAddress(uri) {
@@ -584,8 +603,12 @@ func main() {
 	}
 
 	mygo.App.WhenReady(func() {
+		title := "MuxShift"
+		if replayMode {
+			title = "MuxShift replay (recording)"
+		}
 		window := mygo.NewWindow(mygo.WindowOptions{
-			Title:   "MuxShift",
+			Title:   title,
 			Width:   960,
 			Height:  600,
 			Content: ui.View(s.view),

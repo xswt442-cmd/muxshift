@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: zh-CN
+tone_instructions: >-
+  优先报告可定位的正确性、安全边界、媒体时间轴、浏览器权限、
+  平台兼容性和 CI 回归问题。说明受影响的路径、复现条件和可行修复。
+  忽略纯样式建议与尚未实现模块的假设性设计建议。
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: false
+  poem: false
+  commit_status: false
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - dev
+      - main
+  path_instructions:
+    - path: "core/**"
+      instructions: >-
+        Go Core must remain independent of desktop and browser clients.
+        Focus on media timestamps, buffer ownership, synchronization safety,
+        data races, failure handling, and untrusted media input.
+    - path: "desktop/**"
+      instructions: >-
+        Desktop uses MyGo. Check platform-specific behavior, native lifecycle,
+        resource cleanup, and preservation of Core ownership.
+    - path: "web/**"
+      instructions: >-
+        Check browser feature support, autoplay, media permissions,
+        cross-origin restrictions, and fallbacks without implying access
+        to sessions from unrelated origins.
+    - path: "extension/**"
+      instructions: >-
+        Review minimum browser permissions, origin validation, message
+        authentication, and prevention of credential leakage.
+    - path: ".github/workflows/**"
+      instructions: >-
+        Check job permissions, untrusted PR execution, branch triggers,
+        supply-chain exposure, and CI completeness.

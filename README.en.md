@@ -2,13 +2,13 @@
 
 MuxShift is an open-source project for composing multiple audio/video sources and controlling their timelines.
 
-The repository currently contains only a project scaffold. No working player, media capture, synchronization, or audio separation is implemented.
+The repository currently contains a project scaffold with a Go Core session configuration model. No working player, media capture, synchronization, or audio separation is implemented.
 
 [简体中文](README.md)
 
 ## Layout
 
-- `core/`: package boundary for the shared Go Core.
+- `core/`: shared Go Core session configuration model.
 - `desktop/`: placeholder for a MyGo-based desktop client.
 - `web/`: placeholder for a web client.
 - `extension/`: placeholder for a browser extension.
@@ -25,7 +25,7 @@ With Go 1.27 or newer, from the repository root:
 go test ./...
 ```
 
-For now this only checks that the existing Go package builds; it does not validate media functionality.
+This runs the Core session tests; it does not validate media functionality.
 
 ## License
 

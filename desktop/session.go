@@ -274,7 +274,22 @@ func (a *appState) showVideo(index int) error {
 		return err
 	}
 	a.apply()
+	a.wakeShown(it)
 	return nil
+}
+
+// wakeShown asks one seek of a network player that only became visible now. A
+// network source that is shown for the first time after it was opened does not
+// deliver its first picture on its own with this build of MyGo, and the seek is
+// the only signal observed to make it start.
+func (a *appState) wakeShown(it *item) {
+	if it == nil || it.player == nil || !needsWake(it.uri) {
+		return
+	}
+	if it.player.Ready() || it.player.Err() != nil {
+		return
+	}
+	wakeNetworkPlayer(it.uri, it.player, a.generationIs(it, it.generation))
 }
 
 // hearAudio makes the scene play one source's audio at the given level and mute
@@ -554,9 +569,9 @@ func (a *appState) sceneLabel() string {
 		video = "none"
 	}
 	if len(audio) == 0 {
-		return "video " + shortURI(video) + " · silent"
+		return "video " + shortURI(video) + " 路 silent"
 	}
-	return "video " + shortURI(video) + " · audio " + strings.Join(audio, " + ")
+	return "video " + shortURI(video) + " 路 audio " + strings.Join(audio, " + ")
 }
 
 // containsTrack reports whether the track is in the list.

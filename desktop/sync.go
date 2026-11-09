@@ -40,6 +40,67 @@ func newSyncState() *syncState {
 	return &syncState{timeline: core.NewTimeline(), playhead: core.NewPlayhead()}
 }
 
+// replaySource is one source's replay buffer, paired with the index of its item
+// so a window can be reported back in the same terms the window shows.
+type replaySource struct {
+	index  int
+	runner *dvrRunner
+}
+
+// commonReplay is the part of the buffered history that every listed source can
+// play after its own offset moves it onto the shared event clock. The answer is
+// an intersection, not the union: a window only one source holds is not a moment
+// both can show. An unaligned source, or one whose buffered range has not
+// reached the others, makes an honest answer impossible, so the error says which
+// source refused instead of guessing a number.
+func (a *appState) commonReplay(sources []replaySource) (time.Duration, time.Duration, error) {
+	if len(sources) == 0 {
+		return 0, 0, fmt.Errorf("no buffered source")
+	}
+	var start, end time.Duration
+	first := true
+	for _, source := range sources {
+		it, err := a.at(source.index)
+		if err != nil {
+			return 0, 0, err
+		}
+		track := it.audio
+		if track == "" {
+			track = it.video
+		}
+		if track == "" {
+			return 0, 0, fmt.Errorf("source %d (%s) has no track in the session", source.index+1, shortURI(it.uri))
+		}
+		shift, ok := a.sync.timeline.Shift(track)
+		if !ok {
+			return 0, 0, fmt.Errorf("source %d (%s): %w", source.index+1, shortURI(it.uri), core.ErrNotAligned)
+		}
+		window, ok := source.runner.buffer.Available()
+		if !ok {
+			return 0, 0, fmt.Errorf("source %d (%s) has no playable buffered range", source.index+1, shortURI(it.uri))
+		}
+		// media = event + offset, so the same range on the event clock is
+		// media - offset.
+		eventStart := window.Start - shift.Offset
+		eventEnd := window.End - shift.Offset
+		if first {
+			start, end = eventStart, eventEnd
+			first = false
+			continue
+		}
+		if eventStart > start {
+			start = eventStart
+		}
+		if eventEnd < end {
+			end = eventEnd
+		}
+	}
+	if end <= start {
+		return 0, 0, fmt.Errorf("the buffered ranges do not overlap on shared event time: %s..%s", start, end)
+	}
+	return start, end, nil
+}
+
 // tick moves the shared event clock by the wall time that has passed since the
 // previous tick. A paused timeline keeps its event where it is: Core's Advance
 // ignores elapsed time while paused. It runs on the main thread, from the

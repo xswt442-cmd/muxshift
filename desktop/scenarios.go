@@ -6,6 +6,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -36,6 +37,65 @@ var scenarios = map[string]scenario{
 	"syncgroup":     runSyncGroup,
 	"syncmap":       runSyncMap,
 	"syncfail":      runSyncFail,
+	"dvr":           runDVR,
+	"replayprobe":   runReplayProbe,
+}
+
+// runReplayProbe narrows down why a replay player added mid-run does not start:
+// it opens a known-good recorded playlist while the live players are paused, then
+// resumes them, and reports the replay player at each step.
+func runReplayProbe(window *mygo.Window, a *appState, dir string) {
+	const scenario = "replayprobe"
+	url := replayProbeURL
+	if url == "" {
+		url = "http://127.0.0.1:8791/replay-from1/index.m3u8"
+	}
+	step(window, a, dir, scenario, "", "live sources at start", nil)
+	time.Sleep(3 * time.Second)
+	step(window, a, dir, scenario, "", "pause the live output", func(a *appState) {
+		logGroup(scenario, "pause", a.pauseAll())
+	})
+	time.Sleep(2 * time.Second)
+	index := -1
+	step(window, a, dir, scenario, "", "add and show the recorded source while paused", func(a *appState) {
+		it, err := a.add(url)
+		if err != nil {
+			logf(scenario, "open replay: %v", err)
+			return
+		}
+		a.items = append(a.items, it)
+		index = len(a.items) - 1
+		if err := a.showVideo(index); err != nil {
+			logf(scenario, "show replay: %v", err)
+		}
+	})
+	if index < 0 {
+		return
+	}
+	time.Sleep(3 * time.Second)
+	step(window, a, dir, scenario, "", "recorded source three seconds after showing while paused", nil)
+	// Sample for a while: a recorded source added mid-run has been seen to take
+	// far longer than a startup source before it presents its first picture.
+	for i := 1; i <= 8; i++ {
+		time.Sleep(5 * time.Second)
+		step(window, a, dir, scenario, "", fmt.Sprintf("recorded source %d0 seconds after showing", i*5), nil)
+	}
+	step(window, a, dir, scenario, "", "resume the live group", func(a *appState) {
+		logGroup(scenario, "play", a.playAll())
+	})
+	time.Sleep(3 * time.Second)
+	step(window, a, dir, scenario, "1-replay-after-resume.png", "recorded source after the live group resumed", nil)
+	step(window, a, dir, scenario, "", "seek inside the recorded source", func(a *appState) {
+		it, err := a.at(index)
+		if err != nil || it.player == nil {
+			logf(scenario, "seek: %v", err)
+			return
+		}
+		it.player.Seek(4 * time.Second)
+	})
+	time.Sleep(2 * time.Second)
+	step(window, a, dir, scenario, "2-replay-after-seek.png", "recorded source after a four second seek", nil)
+	mygoRunOnMain(func() { mygo.App.Quit() })
 }
 
 // syncAt and syncOffset are the syncmap measurement points, set by flags.
@@ -951,4 +1011,212 @@ func missingAddress(uri string) string {
 // goodAddress is the address a source had before missingAddress changed it.
 func goodAddress(uri string) string {
 	return strings.Replace(uri, "/missing.m3u8", "/index.m3u8", 1)
+}
+
+// runDVR checks the replay window: the buffer keeps filling while the output is
+// paused, two sources agree on the part of history both can play, and a player
+// opens that part through the loopback endpoint and jumps inside it.
+func runDVR(window *mygo.Window, a *appState, dir string) {
+	const scenario = "dvr"
+	if len(a.items) < 2 {
+		logf(scenario, "needs two network sources, got %d", len(a.items))
+		return
+	}
+	uris := make([]string, len(a.items))
+	for i, it := range a.items {
+		if !isNetworkAddress(it.uri) {
+			logf(scenario, "source %d is not a network address; the window needs live playlists", i+1)
+			return
+		}
+		if it.video == "" {
+			logf(scenario, "source %d did not open: %s", i+1, errorString(it.openErr))
+			return
+		}
+		uris[i] = it.uri
+	}
+
+	liveCount := len(a.items)
+	sources := make([]replaySource, 0, liveCount)
+	bufferDirs := make([]string, 0, liveCount)
+	for index := 0; index < liveCount; index++ {
+		bufferDir := filepath.Join(dvrDir, fmt.Sprintf("source-%d", index+1))
+		runner, err := startDVR(uris[index], dvrFromMedia(bufferDir, dvrRetention, dvrMaxBytes))
+		if err != nil {
+			logf(scenario, "source %d: open replay buffer: %v", index+1, err)
+			return
+		}
+		sources = append(sources, replaySource{index: index, runner: runner})
+		bufferDirs = append(bufferDirs, bufferDir)
+	}
+	defer func() {
+		// The buffer owns its directory: closing it must leave nothing behind.
+		mygoRunOnMain(func() {
+			for i, source := range sources {
+				if err := source.runner.Close(); err != nil {
+					logf(scenario, "source %d: close buffer: %v", i+1, err)
+				}
+				if _, err := os.Stat(bufferDirs[i]); err == nil {
+					logf(scenario, "source %d: the cache directory survived the close", i+1)
+				}
+			}
+			a.release()
+			mygo.App.Quit()
+		})
+	}()
+
+	// Wait for the pollers to collect a few segments of each stream.
+	time.Sleep(8 * time.Second)
+	for i, source := range sources {
+		logf(scenario, "buffered at %s: %s", shortURI(uris[i]), source.runner.state())
+	}
+
+	// The second stream is the same content two seconds later, so it needs a
+	// -2s offset to sit on the first one's clock.
+	step(window, a, dir, scenario, "1-live.png", "both live sources playing", func(a *appState) {
+		for _, source := range sources {
+			it, err := a.at(source.index)
+			if err != nil {
+				logf(scenario, "%v", err)
+				continue
+			}
+			offset := time.Duration(0)
+			if source.index == 1 {
+				offset = -2000 * time.Millisecond
+			}
+			for _, track := range []core.TrackID{it.video, it.audio} {
+				if track == "" {
+					continue
+				}
+				if err := a.sync.timeline.SetShift(track, offset); err != nil {
+					logf(scenario, "align %s: %v", track, err)
+				}
+			}
+		}
+		a.apply()
+	})
+
+	// Pausing the output must not pause the input: the window only helps if it
+	// keeps growing while the picture stands still. Both sources join the scene
+	// first, so the sync group that pause acts on covers both of them.
+	step(window, a, dir, scenario, "2-paused.png", "pause the output", func(a *appState) {
+		if err := a.showVideo(0); err != nil {
+			logf(scenario, "show source 1: %v", err)
+		}
+		if err := a.hearAudio(1, 1); err != nil {
+			logf(scenario, "hear source 2: %v", err)
+		}
+		logGroup(scenario, "pause", a.pauseAll())
+	})
+	for i, source := range sources {
+		logf(scenario, "while paused, at %s: %s", shortURI(uris[i]), source.runner.state())
+	}
+	time.Sleep(6 * time.Second)
+	for i, source := range sources {
+		logf(scenario, "six seconds paused, at %s: %s", shortURI(uris[i]), source.runner.state())
+	}
+
+	var start, end time.Duration
+	var windowErr error
+	mygoRunOnMain(func() {
+		start, end, windowErr = a.commonReplay(sources)
+	})
+	if windowErr != nil {
+		logf(scenario, "common window: %v", windowErr)
+	} else {
+		logf(scenario, "common window on the shared event clock: %s..%s", start, end)
+	}
+
+	// Open the replay of every source at the common start, so the picture and
+	// the sound belong to the same moment.
+	replayIndex := -1
+	step(window, a, dir, scenario, "", "open the replay of the common window", func(a *appState) {
+		for _, source := range sources {
+			it, err := a.at(source.index)
+			if err != nil {
+				logf(scenario, "%v", err)
+				continue
+			}
+			shift, ok := a.sync.timeline.Shift(it.audio)
+			if !ok {
+				shift, _ = a.sync.timeline.Shift(it.video)
+			}
+			media := start + shift.Offset
+			path, err := source.runner.replayPath(media)
+			if err != nil {
+				logf(scenario, "source %d: replay from %s: %v", source.index+1, media, err)
+				continue
+			}
+			replayed, err := a.add(path)
+			if err != nil {
+				logf(scenario, "source %d: open the recording: %v", source.index+1, err)
+				continue
+			}
+			// a.add builds the Core source and the player but leaves the window
+			// list to its caller, which is what newAppState does as well.
+			a.items = append(a.items, replayed)
+			index := len(a.items) - 1
+			logf(scenario, "source %d: replay %s from %s as source %d", source.index+1, shortURI(path), media, index+1)
+			if replayIndex < 0 {
+				replayIndex = index
+				if err := a.showVideo(index); err != nil {
+					logf(scenario, "show replay: %v", err)
+				}
+			} else if err := a.hearAudio(index, 1); err != nil {
+				logf(scenario, "hear replay: %v", err)
+			}
+		}
+	})
+	if replayIndex < 0 {
+		return
+	}
+	// A recorded source added while the output is paused needs tens of seconds
+	// before it presents a picture in this build; waiting for that is part of
+	// what the scenario measures, not a hidden sleep.
+	if !waitReplayReady(scenario, a, replayIndex, 60*time.Second) {
+		logf(scenario, "the replay did not start within 60s")
+	}
+	step(window, a, dir, scenario, "3-replay-start.png", "the replay shows the start of the common window", nil)
+
+	// Jumping inside the window is a seek into buffered media, not a new stream.
+	step(window, a, dir, scenario, "4-replay-jump.png", "jump six seconds into the buffered window", func(a *appState) {
+		it, err := a.at(replayIndex)
+		if err != nil || it.player == nil {
+			logf(scenario, "the replay player is gone")
+			return
+		}
+		target := it.player.Position() + 6*time.Second
+		it.player.Seek(target)
+		logf(scenario, "seek replay to %s (asked %s)", it.player.Position(), target)
+	})
+	time.Sleep(3 * time.Second)
+	step(window, a, dir, scenario, "5-replay-later.png", "play on from the jump", nil)
+}
+
+// waitReplayReady waits for one player to present its first picture, logging its
+// position every five seconds so a slow start is visible in the record.
+func waitReplayReady(scenario string, a *appState, index int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	next := time.Now()
+	for time.Now().Before(deadline) {
+		time.Sleep(time.Second)
+		var ready bool
+		var position, duration time.Duration
+		mygoRunOnMain(func() {
+			it, err := a.at(index)
+			if err != nil || it.player == nil {
+				return
+			}
+			ready = it.player.Ready()
+			position = it.player.Position()
+			duration = it.player.Duration()
+		})
+		if ready {
+			return true
+		}
+		if time.Now().After(next) {
+			logf(scenario, "the replay has not started yet: position %s of %s", position, duration)
+			next = time.Now().Add(5 * time.Second)
+		}
+	}
+	return false
 }

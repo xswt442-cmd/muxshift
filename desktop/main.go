@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -116,6 +117,14 @@ func (a *appState) releasePlayer(player *ui.VideoPlayer) {
 // handover gives up and keeps the player it was replacing.
 var handoverWait = 10 * time.Second
 
+// The replay buffer's defaults: a minute of history in the user's temporary
+// directory, which the buffer removes again when the session ends.
+var (
+	dvrDir       = filepath.Join(os.TempDir(), "muxshift-dvr")
+	dvrRetention = 60 * time.Second
+	dvrMaxBytes  int64
+)
+
 // handOver waits for the replacement player of a reopen to show a picture, then
 // releases the player the reopen kept drawn.
 //
@@ -206,6 +215,17 @@ func isNetworkAddress(uri string) bool {
 	return strings.HasPrefix(uri, "http://") || strings.HasPrefix(uri, "https://")
 }
 
+// needsWake reports whether a source is played through a player that does not
+// deliver its first picture on its own. A local file does, but an HLS playlist
+// holds segments behind another layer even when it sits on this machine, and it
+// behaved like a network source in the replay runs.
+func needsWake(uri string) bool {
+	if isNetworkAddress(uri) {
+		return true
+	}
+	return strings.HasSuffix(strings.ToLower(uri), ".m3u8")
+}
+
 // wakeNetworkPlayer nudges a network player into showing its first picture.
 //
 // In this MyGo build a network source plays, reports its duration and moves its
@@ -224,7 +244,7 @@ func isNetworkAddress(uri string) bool {
 // for; once the player is replaced or closed the task stops, so it never
 // touches a released player.
 func wakeNetworkPlayer(uri string, player *ui.VideoPlayer, live func() bool) {
-	if !isNetworkAddress(uri) {
+	if !needsWake(uri) {
 		return
 	}
 	go func() {
@@ -257,6 +277,10 @@ func wakeNetworkPlayer(uri string, player *ui.VideoPlayer, live func() bool) {
 // repeating mode because a task that keeps seeking would move the playhead
 // behind the timeline's back. -wake=none records what happens without it.
 var wakeMode = "once"
+
+// replayProbeURL lets the replayprobe scenario open any recorded playlist, so a
+// replay served by this application can be compared with one served as files.
+var replayProbeURL string
 
 // status is one player's state as a line, so the window reports what actually
 // happened: an opening error, buffering, or the position it reached.
@@ -422,9 +446,9 @@ func (a *appState) status() string {
 	if len(parts) == 0 {
 		return "no media"
 	}
-	line := strings.Join(parts, "   ") + "   ·   " + a.sceneLabel() + "   ·   " + a.syncLabel()
+	line := strings.Join(parts, "   ") + "   路   " + a.sceneLabel() + "   路   " + a.syncLabel()
 	if a.syncNote != "" {
-		line += "   ·   " + a.syncNote
+		line += "   路   " + a.syncNote
 	}
 	return line
 }
@@ -481,12 +505,16 @@ func main() {
 	shot := flag.String("shot", "", "write a PNG of the window here and quit")
 	shotDelay := flag.Duration("shot-delay", 6*time.Second, "how long to let the first picture arrive before -shot")
 	trace := flag.Bool("trace", false, "log every player's state twice a second")
+	flag.StringVar(&replayProbeURL, "replay-url", "", "recorded playlist the replayprobe scenario opens")
 	scenario := flag.String("scenario", "", "run a scripted check: "+scenarioNames())
 	dir := flag.String("dir", "", "directory the scenario writes its PNGs into")
 	flag.StringVar(&wakeMode, "wake", wakeMode, "nudge a network player once for its first frame, or none to record what happens without it")
 	flag.DurationVar(&handoverWait, "handover", handoverWait, "how long a reopened player may take to show a picture before the previous one is kept")
 	flag.DurationVar(&syncAt, "at", 10*time.Second, "syncmap: the shared event time to measure")
 	flag.DurationVar(&syncOffset, "offset", 0, "syncmap: the offset applied to the measured source")
+	flag.StringVar(&dvrDir, "dvr-dir", dvrDir, "directory the replay buffer keeps its segments in")
+	flag.DurationVar(&dvrRetention, "dvr-retention", dvrRetention, "how much history the replay buffer keeps")
+	flag.Int64Var(&dvrMaxBytes, "dvr-max-bytes", dvrMaxBytes, "byte limit of the replay buffer; 0 keeps only the retention limit")
 	flag.Parse()
 	if len(media) == 0 {
 		log.Fatal("muxshift-desktop: -media is required")
@@ -512,7 +540,7 @@ func main() {
 		log.Fatalf("muxshift-desktop: %v", err)
 	}
 	for i, it := range s.items {
-		log.Printf("source %d: %s · video=%q audio=%q open=%v", i+1, it.uri, it.video, it.audio, errorString(it.openErr))
+		log.Printf("source %d: %s 路 video=%q audio=%q open=%v", i+1, it.uri, it.video, it.audio, errorString(it.openErr))
 	}
 	log.Printf("scene %s: %s", s.scene, s.sceneLabel())
 	// The shared event clock is wall time while the group plays and stands

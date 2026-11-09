@@ -1,0 +1,46 @@
+# Local-only research, experiments, and agent handoffs
+testplace/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.local.md
+
+# Go outputs and coverage
+/bin/
+/build/
+/dist/
+/coverage/
+*.exe
+*.test
+*.out
+coverage*.txt
+coverage*.html
+
+# Frontend dependencies and build outputs
+node_modules/
+.pnpm-store/
+.vite/
+.next/
+.svelte-kit/
+
+# Logs and caches
+*.log
+*.tmp
+*.cache
+
+# Editors, tools, and OS files
+.vs/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+.claude/
+.codex/
+.cursor/
+.workbuddy/

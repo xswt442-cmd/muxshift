@@ -13,7 +13,7 @@ MuxShift 是一个面向多路音视频组合与时间轴控制的开源项目�
 - `core/dvr/`：把一个直播源的分片存进有界目录，报告真实可回看区间与缺口，并把一段连续区间拼成一份可播放的录制文件。
 - `desktop/`：MyGo 桌面实验应用，把多个本地文件或 http(s) 地址登记进一个 Core 会话，按场景选择画面与声音，管理播放器生命周期，并为直播源保留有限历史窗口。
 - `web/`：Web 客户端，用 Go 起一个只监听本机的会话服务，页面用 hls.js 播放 HLS，并演示同一个会话里多路源、场景、音量与播放控制。
-- `extension/`：浏览器扩展预留位置。
+- `extension/`：浏览器扩展与它的本机 Host，把用户确认过的一个媒体地址交给正在运行的会话。
 - `docs/development/`：工程架构文档。
 - `testplace/`：被 Git 忽略的本地实验、草稿和 Agent 工作材料。
 
@@ -49,6 +49,14 @@ go run ./web -media-root testplace/media \
 它打印 `http://127.0.0.1:<端口>/?token=<令牌>`。打开这个地址后，页面通过 `GET /api/session` 读取会话、通过 `POST /api/scene` 切换显示与声音；媒体文件由同一个进程在 `/media/` 下提供，路径被限定在 `-media-root` 内，且令牌以 cookie 形式带上，因为媒体元素与 hls.js 无法给每个分片加请求头。未带令牌的请求返回 403，响应也不带 CORS 头，所以别的网页读不到这个会话。浏览器只允许用户点击之后出声，因此所有源一开始都是静音的。
 
 Web 端只播放一路 HLS 或 MP4 到各自的媒体元素，不参与跨源对轴，也不保留历史窗口；Seek 只落在浏览器已缓冲的范围内。`hls.js` 1.7.4 的 light 构建与 Apache-2.0 许可证放在 `web/vendor/`。
+
+浏览器扩展把用户点击后选中的那一个地址交给本机会话，不复制 Cookie、请求头或密钥：
+
+```sh
+go build -o testplace/bin/muxshift-host.exe ./extension/host
+```
+
+把 `extension/` 以开发者模式加载进 Edge，按[扩展说明](extension/README.md)登记 `com.muxshift.bridge` 这个本机 Host，再启动 Web 会话。会话会把地址与令牌写进 `%LOCALAPPDATA%\MuxShift\bridge.json`（`-token-file` 可改），Host 用该文件里的令牌调用 `POST /api/import`，扩展本身拿不到令牌。扩展只列出页面已经加载的 `http(s)` 地址：`blob:` 地址属于页面自身，会被拒绝并说明原因；跨源地址按目标站点的 CORS 规则播放，不做代理；受保护媒体一律不碰。`activeTab`、`scripting`、`nativeMessaging` 是全部权限，没有主机权限，因此不点击就读不到任何页面。页面每两秒读取一次会话，导入的源无需刷新即可出现。
 
 ## 许可证
 

@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>MuxShift</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      body {
+        margin: 0;
+        padding: 12px;
+        width: 340px;
+        font: 13px/1.45 system-ui, sans-serif;
+        background: #16181c;
+        color: #e6e8ec;
+      }
+      h1 {
+        font-size: 14px;
+        margin: 0 0 2px;
+      }
+      .page {
+        color: #9aa0aa;
+        word-break: break-all;
+        margin-bottom: 10px;
+      }
+      ul {
+        list-style: none;
+        margin: 0 0 10px;
+        padding: 0;
+      }
+      li {
+        border: 1px solid #2a2e36;
+        border-radius: 6px;
+        padding: 8px;
+        margin-bottom: 6px;
+      }
+      li.selected {
+        border-color: #4c7dd8;
+        background: #1b2130;
+      }
+      .kind {
+        color: #8fb3ff;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .url {
+        word-break: break-all;
+        font-family: ui-monospace, monospace;
+        font-size: 11px;
+        margin-top: 2px;
+      }
+      .from {
+        color: #7d838d;
+        font-size: 11px;
+      }
+      .note {
+        color: #c9a227;
+        font-size: 11px;
+        margin: 4px 0;
+      }
+      button {
+        width: 100%;
+        padding: 8px;
+        border-radius: 6px;
+        border: 1px solid #3a4150;
+        background: #232833;
+        color: #e6e8ec;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      #status {
+        margin-top: 8px;
+        min-height: 18px;
+        font-size: 12px;
+      }
+      #status.ok {
+        color: #5fbf7f;
+      }
+      #status.bad {
+        color: #e06c6c;
+      }
+      .meta {
+        color: #7d838d;
+        font-size: 11px;
+        margin-top: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>MuxShift bridge</h1>
+    <div class="page" id="page">reading the active tab…</div>
+    <ul id="sources"></ul>
+    <button id="import" disabled>Import the selected address</button>
+    <div id="status"></div>
+    <div class="meta">
+      Only addresses this page already loads are offered. Cookies, headers, and
+      protected media are not exported; tab capture is not offered because the
+      local session cannot take a live capture stream.
+    </div>
+    <script src="popup.js"></script>
+  </body>
+</html>

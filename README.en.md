@@ -13,7 +13,7 @@ The repository currently contains a project scaffold with a Go Core session conf
 - `core/dvr/`: keeps one live source's segments in a bounded directory, reports the ranges that can really be replayed, and joins one contiguous range into a playable recording file.
 - `desktop/`: MyGo desktop experiment that registers several local files or http(s) addresses into one Core session, selects picture and sound per scene, owns the player lifecycle, and keeps a bounded replay window for live sources.
 - `web/`: web client: a loopback-only Go session service plus a page that plays HLS through hls.js and demonstrates several sources, a scene, volumes, and playback control inside one session.
-- `extension/`: placeholder for a browser extension.
+- `extension/`: browser extension and its native host, which hand one address the user confirmed to the running session.
 - `docs/development/`: engineering architecture documents.
 - `testplace/`: Git-ignored local experiments, drafts, and agent working material.
 
@@ -49,5 +49,13 @@ go run ./web -media-root testplace/media \
 It prints `http://127.0.0.1:<port>/?token=<token>`. The page reads the session through `GET /api/session` and switches picture and sound through `POST /api/scene`; the same process serves the media under `/media/`, limited to `-media-root`, and the token travels in a cookie because media elements and hls.js cannot add a header to every segment. Requests without the token get 403, and the responses carry no CORS header, so another page cannot read this session. Browsers only allow sound after a click, so every source starts muted.
 
 The web client plays one HLS or MP4 source per media element, does not align sources, and keeps no history; seeking stays inside what the browser has buffered. The hls.js 1.7.4 light build and its Apache-2.0 license live in `web/vendor/`.
+
+The browser extension hands the one address the user picked to the local session and copies no cookies, headers, or keys:
+
+```sh
+go build -o testplace/bin/muxshift-host.exe ./extension/host
+```
+
+Load `extension/` unpacked in Edge, register the `com.muxshift.bridge` host as described in the [extension notes](extension/README.md), and start the web session. The session writes its address and token to `%LOCALAPPDATA%\MuxShift\bridge.json` (`-token-file` changes it); the host uses that token to call `POST /api/import`, so the extension never sees it. The extension lists only `http(s)` addresses the page already loaded: a `blob:` address belongs to the page and is refused with a note, a cross-origin address plays under that site's CORS rules because nothing is proxied, and protected media is never touched. `activeTab`, `scripting`, and `nativeMessaging` are the whole permission set, and without a host permission the extension cannot read any page until the user clicks it. The page re-reads the session every two seconds, so an imported source appears without a reload.
 
 ## License

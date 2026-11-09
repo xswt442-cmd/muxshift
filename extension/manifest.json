@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "MuxShift bridge",
+  "version": "0.1.0",
+  "description": "Hands one media address from the current tab to the local MuxShift session after the user picks it.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArtFPXRP76jX3yY3ZlYcIrOsMjudHAH20Nvx1DCIT5Nws9SnvDfisuoNYAaTvz+Lc2o3fb/coo5Hi5LKmyI+yCPJZ2JSfQoGPsohsG7c2PdPAp1v7PyUvcydCKjHJODrDrvwTB6ptPf8qLfxDQOTkoAtpX7NyE7x6DSvfdW+fNdGDgP99g99cYVvH9LMEKh+K5uqAjWgmLI9j179fotwHm7j8AY2zSHHUFpQ4DRdQWpvjkSGjuulIz6w8+bhkgNELn+Q/WdjzolCpFC3gAQ1uG9uuDXZIDMbOQ1NeXAjZVu5W4Rcarq9BcuCL5NpBufLSGfvHa8wDUhUmOX5n59uOJQIDAQAB",
+  "permissions": ["activeTab", "scripting", "nativeMessaging"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "MuxShift"
+  }
+}

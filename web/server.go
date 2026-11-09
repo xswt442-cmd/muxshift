@@ -19,6 +19,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -135,7 +136,7 @@ func (s *sessionState) snapshotLocked() (view, error) {
 	}
 	out := view{Session: string(s.session.Name()), Scene: string(current.ID)}
 	for _, src := range s.sources {
-		entry := srcView{ID: string(src.ID), URI: src.URI, URL: mediaURL(src.URI), Video: string(src.Video), Audio: string(src.Audio)}
+		entry := srcView{ID: string(src.ID), URI: src.URI, URL: sourceURL(src.URI), Video: string(src.Video), Audio: string(src.Audio)}
 		entry.Shown = shown[src.Video]
 		if level, ok := levels[src.Audio]; ok {
 			entry.Volume = level.Volume
@@ -196,16 +197,113 @@ func (s *sessionState) change(request changeScene) (view, error) {
 	return s.snapshotLocked()
 }
 
+// add registers one more media address in the session. The browser extension
+// uses this through the local bridge, so it takes the same shape as the sources
+// started from the command line: one video and one audio track, because the
+// player does not enumerate the tracks of an address it has not opened yet.
+func (s *sessionState) add(uri string) (srcView, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := checkImportAddress(uri); err != nil {
+		return srcView{}, err
+	}
+	existing, err := s.snapshotLocked()
+	if err != nil {
+		return srcView{}, err
+	}
+	for _, candidate := range existing.Sources {
+		if candidate.URI == uri {
+			return srcView{}, fmt.Errorf("source %s is already in the session", candidate.ID)
+		}
+	}
+	src, err := s.session.AddSource(uri)
+	if err != nil {
+		return srcView{}, err
+	}
+	video, err := s.session.AddTrack(src.ID, core.MediaVideo, "video (the player does not enumerate tracks)")
+	if err != nil {
+		return srcView{}, err
+	}
+	audio, err := s.session.AddTrack(src.ID, core.MediaAudio, "audio (the player does not enumerate tracks)")
+	if err != nil {
+		return srcView{}, err
+	}
+	s.sources = append(s.sources, source{ID: src.ID, URI: uri, Video: video.ID, Audio: audio.ID})
+	if len(existing.Sources) == 0 {
+		if _, err := s.session.SetSceneVideo(s.scene, video.ID); err != nil {
+			return srcView{}, err
+		}
+		if _, err := s.session.SetSceneAudio(s.scene, audio.ID, 1, false); err != nil {
+			return srcView{}, err
+		}
+	}
+	snapshot, err := s.snapshotLocked()
+	if err != nil {
+		return srcView{}, err
+	}
+	for _, candidate := range snapshot.Sources {
+		if candidate.URI == uri {
+			return candidate, nil
+		}
+	}
+	return srcView{}, fmt.Errorf("source %s was added but not reported", src.ID)
+}
+
+// checkImportAddress keeps the bridge from turning this process into a fetcher
+// for anything it should not read: only plain http(s) addresses, never one that
+// carries credentials.
+func checkImportAddress(raw string) error {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return fmt.Errorf("%w: %v", core.ErrInvalid, err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("%w: only http and https addresses can be imported", core.ErrInvalid)
+	}
+	if parsed.Host == "" {
+		return fmt.Errorf("%w: the address has no host", core.ErrInvalid)
+	}
+	if parsed.User != nil {
+		return fmt.Errorf("%w: the address carries credentials", core.ErrCredentialsInURI)
+	}
+	return nil
+}
+
+// importSource is what the local bridge asks the server to add.
+type importSource struct {
+	URL string `json:"url"`
+}
+
+// bridgeFile is the small file the server leaves for the native host: where it
+// is listening and which token it expects. It stays inside the user's profile
+// directory, so another user cannot read it.
+type bridgeFile struct {
+	URL   string `json:"url"`
+	Token string `json:"token"`
+}
+
 // mediaURL turns one address into the path the page asks this server for.
 func mediaURL(uri string) string {
 	name := strings.TrimPrefix(uri, "/media/")
 	return "/media/" + name
 }
 
+// sourceURL is the address the page plays. An address this server owns stays a
+// path on this server; an address imported from a page is already absolute and
+// is handed over untouched, because prefixing it would produce a nonsense URL
+// such as /media/http://host/...
+func sourceURL(uri string) string {
+	if strings.HasPrefix(uri, "/media/") {
+		return mediaURL(uri)
+	}
+	return uri
+}
+
 func main() {
 	mediaRoot := flag.String("media-root", "", "directory the demo media is read from")
 	addr := flag.String("addr", "127.0.0.1:0", "address to listen on")
 	token := flag.String("token", "", "token to require; a random one is generated when empty")
+	tokenFile := flag.String("token-file", "", "write the listening address and token to this file for the local bridge; defaults to a file under LOCALAPPDATA")
 	var media multiFlag
 	flag.Var(&media, "media", "path under -media-root to offer as one source; may be repeated")
 	flag.Parse()
@@ -293,6 +391,32 @@ func main() {
 		}
 		writeJSON(w, snapshot)
 	})
+	// /api/import lets the local bridge add one address the user chose in the
+	// browser extension. The token is the same one the page uses; the browser
+	// extension reaches it through a native host, never from a web page.
+	mux.HandleFunc("/api/import", func(w http.ResponseWriter, r *http.Request) {
+		if !authorized(r, tokenValue) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var request importSource
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		added, err := state.add(request.URL)
+		if err != nil {
+			log.Printf("web: import %q refused: %v", request.URL, err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		log.Printf("web: imported %q as %s", added.URI, added.ID)
+		writeJSON(w, added)
+	})
 	mux.HandleFunc("/media/", func(w http.ResponseWriter, r *http.Request) {
 		if !authorized(r, tokenValue) {
 			http.Error(w, "forbidden", http.StatusForbidden)
@@ -302,6 +426,29 @@ func main() {
 	})
 	server := &http.Server{Handler: mux}
 	log.Printf("web: listening on http://%s/?token=%s", listener.Addr().String(), tokenValue)
+	// The native host looks for this file under LOCALAPPDATA by default, so the
+	// browser extension can reach the running session without the user copying
+	// an address or a token.
+	bridgePath := *tokenFile
+	if bridgePath == "" {
+		if base := os.Getenv("LOCALAPPDATA"); base != "" {
+			bridgePath = filepath.Join(base, "MuxShift", "bridge.json")
+		}
+	}
+	if bridgePath != "" {
+		bridge := bridgeFile{URL: "http://" + listener.Addr().String(), Token: tokenValue}
+		encoded, err := json.MarshalIndent(bridge, "", "  ")
+		if err != nil {
+			log.Fatalf("muxshift-web: %v", err)
+		}
+		if err := os.MkdirAll(filepath.Dir(bridgePath), 0o700); err != nil {
+			log.Fatalf("muxshift-web: %v", err)
+		}
+		if err := os.WriteFile(bridgePath, append(encoded, '\n'), 0o600); err != nil {
+			log.Fatalf("muxshift-web: %v", err)
+		}
+		log.Printf("web: bridge file written to %s", bridgePath)
+	}
 	if err := server.Serve(listener); err != nil {
 		log.Fatalf("muxshift-web: %v", err)
 	}

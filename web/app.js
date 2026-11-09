@@ -259,6 +259,7 @@ async function start() {
   for (const source of session.sources) {
     buildPlayer(source);
   }
+  renderSources();
   applyScene();
   for (const state of players.values()) {
     const result = state.video.play();
@@ -267,6 +268,42 @@ async function start() {
     }
   }
   setInterval(applyScene, 500);
+  setInterval(refreshSession, 2000);
+}
+
+// refreshSession picks up changes another client made, which is how a source
+// imported through the browser extension appears without a reload. It adopts a
+// new source only when the session really lists one the page has no player
+// for, and takes the scene only when it differs from what is shown here.
+async function refreshSession() {
+  if (!token) return;
+  let fresh;
+  try {
+    fresh = await api("/api/session");
+  } catch (error) {
+    return;
+  }
+  const known = new Set(players.keys());
+  const added = fresh.sources.filter((source) => !known.has(source.id));
+  const shownNow = fresh.sources.find((source) => source.shown)?.id || "";
+  const heardNow = fresh.sources.find((source) => !source.muted)?.id || "";
+  const changed =
+    added.length > 0 ||
+    shownNow !== (session.sources.find((source) => source.shown)?.id || "") ||
+    heardNow !== heard;
+  session = fresh;
+  if (!changed) return;
+  for (const source of added) {
+    const state = buildPlayer(source);
+    state.video.play().catch((error) => log(`${source.id}: play() refused: ${error.message}`, "error"));
+  }
+  heard = heardNow || heard;
+  elements.sessionLine.textContent = `session ${session.session} · scene ${session.scene} · ${session.sources.length} sources`;
+  renderSources();
+  applyScene();
+  if (added.length) {
+    log(`session now lists ${added.map((source) => source.id).join(", ")}`, "info");
+  }
 }
 
 document.getElementById("play-all").addEventListener("click", () => {

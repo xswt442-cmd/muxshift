@@ -223,7 +223,8 @@ func needsWake(uri string) bool {
 	if isNetworkAddress(uri) {
 		return true
 	}
-	return strings.HasSuffix(strings.ToLower(uri), ".m3u8")
+	lower := strings.ToLower(uri)
+	return strings.HasSuffix(lower, ".m3u8") || strings.HasSuffix(lower, ".ts")
 }
 
 // wakeNetworkPlayer nudges a network player into showing its first picture.
@@ -251,23 +252,35 @@ func wakeNetworkPlayer(uri string, player *ui.VideoPlayer, live func() bool) {
 		if wakeMode == "none" {
 			return
 		}
-		time.Sleep(1500 * time.Millisecond)
-		if !live() {
-			return
-		}
-		var before, after time.Duration
-		mygoRunOnMain(func() {
-			if !live() || player.Ready() || player.Err() != nil {
+		// A few attempts while the player still reports no picture. One seek is
+		// enough for a live stream, but a recording opened while other sources
+		// are in the window needed the seek after it had buffered, so the task
+		// stops as soon as the player is ready or reports an error, and gives up
+		// after six attempts instead of moving the playhead forever.
+		for attempt := 0; attempt < 6; attempt++ {
+			time.Sleep(1500 * time.Millisecond)
+			if !live() {
 				return
 			}
-			before = player.Position()
-			player.Seek(before + time.Millisecond)
-			// The position the player reports afterwards is the real result;
-			// the millisecond asked for is not assumed to have taken effect.
-			after = player.Position()
-		})
-		if before != 0 || after != 0 {
-			log.Printf("wake: %s seeked from %s to %s (asked for +1ms)", shortURI(uri), before, after)
+			var before, after time.Duration
+			var done bool
+			mygoRunOnMain(func() {
+				if !live() || player.Ready() || player.Err() != nil {
+					done = true
+					return
+				}
+				before = player.Position()
+				player.Seek(before + time.Millisecond)
+				// The position the player reports afterwards is the real result;
+				// the millisecond asked for is not assumed to have taken effect.
+				after = player.Position()
+			})
+			if done {
+				return
+			}
+			if before != 0 || after != 0 {
+				log.Printf("wake: %s seeked from %s to %s (asked for +1ms)", shortURI(uri), before, after)
+			}
 		}
 	}()
 }

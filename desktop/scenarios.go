@@ -5,14 +5,17 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/ui"
 	"github.com/xswt442-cmd/muxshift/core"
 )
 
@@ -1126,97 +1129,184 @@ func runDVR(window *mygo.Window, a *appState, dir string) {
 		logf(scenario, "common window on the shared event clock: %s..%s", start, end)
 	}
 
-	// Open the replay of every source at the common start, so the picture and
-	// the sound belong to the same moment.
-	replayIndex := -1
-	step(window, a, dir, scenario, "", "open the replay of the common window", func(a *appState) {
-		for _, source := range sources {
-			it, err := a.at(source.index)
-			if err != nil {
-				logf(scenario, "%v", err)
-				continue
-			}
-			shift, ok := a.sync.timeline.Shift(it.audio)
-			if !ok {
-				shift, _ = a.sync.timeline.Shift(it.video)
-			}
-			media := start + shift.Offset
-			path, err := source.runner.replayPath(media)
-			if err != nil {
-				logf(scenario, "source %d: replay from %s: %v", source.index+1, media, err)
-				continue
-			}
-			replayed, err := a.add(path)
-			if err != nil {
-				logf(scenario, "source %d: open the recording: %v", source.index+1, err)
-				continue
-			}
-			// a.add builds the Core source and the player but leaves the window
-			// list to its caller, which is what newAppState does as well.
-			a.items = append(a.items, replayed)
-			index := len(a.items) - 1
-			logf(scenario, "source %d: replay %s from %s as source %d", source.index+1, shortURI(path), media, index+1)
-			if replayIndex < 0 {
-				replayIndex = index
-				if err := a.showVideo(index); err != nil {
-					logf(scenario, "show replay: %v", err)
-				}
-			} else if err := a.hearAudio(index, 1); err != nil {
-				logf(scenario, "hear replay: %v", err)
-			}
+	// The recording is opened in a window of its own: a player added to a window
+	// that already presents other sources never draws a frame in this build of
+	// MyGo, which is what every earlier P8 run measured. One player in one fresh
+	// window is the same arrangement that does play a recording.
+	var replayWindow *mygo.Window
+	var replayView *replayPane
+	var replayPlayer *ui.VideoPlayer
+	step(window, a, dir, scenario, "", "open the recording in its own window", func(a *appState) {
+		source := sources[0]
+		it, err := a.at(source.index)
+		if err != nil {
+			logf(scenario, "%v", err)
+			return
 		}
+		shift, ok := a.sync.timeline.Shift(it.audio)
+		if !ok {
+			shift, _ = a.sync.timeline.Shift(it.video)
+		}
+		media := start + shift.Offset
+		path, err := source.runner.replayPath(media)
+		if err != nil {
+			logf(scenario, "source 1: replay from %s: %v", media, err)
+			return
+		}
+		player, err := openPlayer(path)
+		if err != nil {
+			logf(scenario, "source 1: open %s: %v", shortURI(path), err)
+			return
+		}
+		replayPlayer = player
+		replayView = &replayPane{player: player}
+		replayWindow = mygo.NewWindow(mygo.WindowOptions{
+			Title:   "MuxShift replay",
+			Width:   640,
+			Height:  360,
+			Content: ui.View(replayView.render),
+		})
+		logf(scenario, "source 1: replay %s from %s in a window of its own", shortURI(path), media)
+		// The recording is kept beside the run so a later run can open it as the
+		// only source, which is the arrangement in which a recording does play in
+		// this build; the buffer removes its own directory when it closes.
+		kept := filepath.Join(dir, "replay-kept.ts")
+		if err := copyFile(path, kept); err != nil {
+			logf(scenario, "keep the recording: %v", err)
+		} else {
+			logf(scenario, "kept the recording at %s", kept)
+		}
+		// The recording is a transport stream on this machine, and such a file
+		// shows its first frame but stops there until it is nudged, which is the
+		// same first-frame limit the network sources are woken for.
+		wakeNetworkPlayer(path, player, func() bool { return true })
 	})
-	if replayIndex < 0 {
+	if replayWindow == nil {
 		return
 	}
-	// A recorded source added while the output is paused needs tens of seconds
-	// before it presents a picture in this build; waiting for that is part of
-	// what the scenario measures, not a hidden sleep.
-	if !waitReplayReady(scenario, a, replayIndex, 60*time.Second) {
-		logf(scenario, "the replay did not start within 60s")
+	defer mygoRunOnMain(func() {
+		if replayView != nil {
+			replayView.set(nil)
+		}
+		if replayPlayer != nil {
+			replayPlayer.Close()
+		}
+		replayWindow.Close()
+	})
+	if !waitPlayerReady(scenario, replayPlayer, 30*time.Second) {
+		logf(scenario, "the replay did not report itself ready within 30s")
 	}
-	step(window, a, dir, scenario, "3-replay-start.png", "the replay shows the start of the common window", nil)
+	// Three captures five seconds apart show whether the recording advances at
+	// the speed it was recorded, which its reported position cannot tell: the
+	// player keeps reporting position 0 while the picture moves.
+	for _, sample := range []struct {
+		name string
+		wait time.Duration
+	}{
+		{"3-replay-start.png", 0},
+		{"3b-replay-plus5.png", 5 * time.Second},
+		{"3c-replay-plus10.png", 5 * time.Second},
+	} {
+		time.Sleep(sample.wait)
+		step(window, a, dir, scenario, "", "record the replay window", func(a *appState) {
+			if err := capture(replayWindow, filepath.Join(dir, sample.name)); err != nil {
+				logf(scenario, "capture the replay: %v", err)
+			}
+		})
+	}
 
 	// Jumping inside the window is a seek into buffered media, not a new stream.
-	step(window, a, dir, scenario, "4-replay-jump.png", "jump six seconds into the buffered window", func(a *appState) {
-		it, err := a.at(replayIndex)
-		if err != nil || it.player == nil {
+	step(window, a, dir, scenario, "", "jump six seconds into the buffered window", func(a *appState) {
+		if replayPlayer == nil {
 			logf(scenario, "the replay player is gone")
 			return
 		}
-		target := it.player.Position() + 6*time.Second
-		it.player.Seek(target)
-		logf(scenario, "seek replay to %s (asked %s)", it.player.Position(), target)
+		target := replayPlayer.Position() + 6*time.Second
+		replayPlayer.Seek(target)
+		logf(scenario, "seek replay to %s (asked %s)", replayPlayer.Position(), target)
 	})
 	time.Sleep(3 * time.Second)
-	step(window, a, dir, scenario, "5-replay-later.png", "play on from the jump", nil)
+	step(window, a, dir, scenario, "", "record the replay window after the jump", func(a *appState) {
+		if err := capture(replayWindow, filepath.Join(dir, "5-replay-later.png")); err != nil {
+			logf(scenario, "capture the replay: %v", err)
+		}
+	})
 }
 
-// waitReplayReady waits for one player to present its first picture, logging its
+// replayPane holds the player a replay window draws. The window is built before
+// the recording is opened, so the pane keeps the player in a field the view can
+// read on every frame instead of rebuilding its elements.
+type replayPane struct {
+	mu     sync.Mutex
+	player *ui.VideoPlayer
+}
+
+func (p *replayPane) set(player *ui.VideoPlayer) {
+	p.mu.Lock()
+	p.player = player
+	p.mu.Unlock()
+}
+
+func (p *replayPane) render(c *ui.Context) {
+	p.mu.Lock()
+	player := p.player
+	p.mu.Unlock()
+	if player == nil {
+		ui.Text(c, "no recording").Center()
+		return
+	}
+	ui.Video(c, player).Fill()
+}
+
+// waitPlayerReady waits for one player to present its first picture, logging its
 // position every five seconds so a slow start is visible in the record.
-func waitReplayReady(scenario string, a *appState, index int, timeout time.Duration) bool {
+func waitPlayerReady(scenario string, player *ui.VideoPlayer, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	next := time.Now()
 	for time.Now().Before(deadline) {
 		time.Sleep(time.Second)
-		var ready bool
+		var ready, playing, buffering bool
 		var position, duration time.Duration
+		var err error
 		mygoRunOnMain(func() {
-			it, err := a.at(index)
-			if err != nil || it.player == nil {
+			if player == nil {
 				return
 			}
-			ready = it.player.Ready()
-			position = it.player.Position()
-			duration = it.player.Duration()
+			ready = player.Ready()
+			playing = player.Playing()
+			buffering = player.Buffering()
+			position = player.Position()
+			duration = player.Duration()
+			err = player.Err()
 		})
 		if ready {
+			logf(scenario, "the replay started at %s of %s", position, duration)
 			return true
 		}
 		if time.Now().After(next) {
-			logf(scenario, "the replay has not started yet: position %s of %s", position, duration)
+			logf(scenario, "the replay has not started yet: position %s of %s ready=%v playing=%v buffering=%v err=%v",
+				position, duration, ready, playing, buffering, err)
 			next = time.Now().Add(5 * time.Second)
 		}
 	}
 	return false
+}
+
+// copyFile copies one file to another, which is how a recording leaves the
+// buffer directory before the buffer removes it.
+func copyFile(from, to string) error {
+	source, err := os.Open(from)
+	if err != nil {
+		return err
+	}
+	defer source.Close()
+	target, err := os.Create(to)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(target, source); err != nil {
+		target.Close()
+		return err
+	}
+	return target.Close()
 }

@@ -381,11 +381,13 @@ func (b *Buffer) Locate(at time.Duration) (Segment, error) {
 	return Segment{}, fmt.Errorf("%w: %s is outside %s", ErrNoRange, at.Round(time.Millisecond), b.describeLocked())
 }
 
-// Playlist renders the stored recording that starts at from as an HLS playlist
-// whose segment entries are the file names beside it. A start inside a segment
-// begins at that segment's first frame, because a transport stream segment
-// cannot be cut.
-func (b *Buffer) Playlist(from time.Duration) (string, error) {
+// Join writes the continuous range that holds from into one transport stream
+// file and returns its path. The segments of a range follow each other in the
+// stream, so joining them yields one recording that a player can open as a file;
+// a range never crosses a gap, so the recording never splices two moments
+// together. A start inside a segment begins at that segment's first frame,
+// because a transport stream segment cannot be cut.
+func (b *Buffer) Join(from time.Duration) (string, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.closed {
@@ -395,38 +397,28 @@ func (b *Buffer) Playlist(from time.Duration) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	target := 1
-	for _, segment := range chosen.Segments {
-		if segment.End > from && int(segment.Duration.Seconds())+1 > target {
-			target = int(segment.Duration.Seconds()) + 1
-		}
+	name := fmt.Sprintf("replay-%d.ts", int64(from.Seconds()))
+	path := filepath.Join(b.opts.Dir, name)
+	out, err := os.Create(path)
+	if err != nil {
+		return "", fmt.Errorf("%w: create %s: %v", ErrNoSpace, name, err)
 	}
-	var body strings.Builder
-	body.WriteString("#EXTM3U\n#EXT-X-VERSION:3\n")
-	fmt.Fprintf(&body, "#EXT-X-TARGETDURATION:%d\n", target)
-	body.WriteString("#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:VOD\n")
 	for _, segment := range chosen.Segments {
 		if segment.End <= from {
 			continue
 		}
-		fmt.Fprintf(&body, "#EXTINF:%.3f,\n", segment.Duration.Seconds())
-		fmt.Fprintf(&body, "%s\n", filepath.Base(segment.Path))
+		data, err := os.ReadFile(segment.Path)
+		if err != nil {
+			out.Close()
+			return "", fmt.Errorf("%w: read %s: %v", ErrNotPlayable, filepath.Base(segment.Path), err)
+		}
+		if _, err := out.Write(data); err != nil {
+			out.Close()
+			return "", fmt.Errorf("%w: write %s: %v", ErrNoSpace, name, err)
+		}
 	}
-	body.WriteString("#EXT-X-ENDLIST\n")
-	return body.String(), nil
-}
-
-// PlaylistPath writes Playlist(from) into the buffer directory and returns its
-// path, for a player that opens local HLS files instead of a local endpoint.
-func (b *Buffer) PlaylistPath(from time.Duration) (string, error) {
-	list, err := b.Playlist(from)
-	if err != nil {
-		return "", err
-	}
-	name := fmt.Sprintf("replay-%d.m3u8", int64(from.Seconds()))
-	path := filepath.Join(b.opts.Dir, name)
-	if err := os.WriteFile(path, []byte(list), 0o644); err != nil {
-		return "", fmt.Errorf("%w: write playlist: %v", ErrNoSpace, err)
+	if err := out.Close(); err != nil {
+		return "", fmt.Errorf("%w: close %s: %v", ErrNoSpace, name, err)
 	}
 	return path, nil
 }

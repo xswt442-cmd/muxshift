@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -288,10 +287,11 @@ func TestSegmentNameCarriesNoAddress(t *testing.T) {
 	}
 }
 
-// TestPlaylistStartsAtTheAskedTime covers the local playlist the desktop opens
-// for replay: entries are file names beside the playlist, and a start inside a
-// segment begins at that segment.
-func TestPlaylistStartsAtTheAskedTime(t *testing.T) {
+// TestJoinStartsAtTheAskedSegment covers the recording the desktop opens for
+// replay: the range that holds the asked time is written as one transport
+// stream, and a start inside a segment begins at that segment because a
+// segment cannot be cut.
+func TestJoinStartsAtTheAskedSegment(t *testing.T) {
 	server := vodServer(t)
 	buffer, err := New(Options{Dir: t.TempDir()})
 	if err != nil {
@@ -303,37 +303,43 @@ func TestPlaylistStartsAtTheAskedTime(t *testing.T) {
 			t.Fatalf("add segment %d: %v", segment.Sequence, err)
 		}
 	}
-	whole, err := buffer.Playlist(0)
+	whole, err := buffer.Join(0)
 	if err != nil {
-		t.Fatalf("playlist: %v", err)
+		t.Fatalf("join: %v", err)
 	}
-	for _, want := range []string{"#EXT-X-PLAYLIST-TYPE:VOD", "#EXT-X-ENDLIST", "#EXTINF:2.000,", "seg-00000000.ts", "seg-00000001.ts"} {
-		if !strings.Contains(whole, want) {
-			t.Fatalf("playlist misses %q:\n%s", want, whole)
-		}
+	stored := buffer.Segments()
+	want := int64(0)
+	for _, segment := range stored {
+		want += segment.Bytes
 	}
-	path, err := buffer.PlaylistPath(2500 * time.Millisecond)
+	joined, err := os.ReadFile(whole)
 	if err != nil {
-		t.Fatalf("playlist path: %v", err)
+		t.Fatalf("read recording: %v", err)
 	}
-	body, err := os.ReadFile(path)
+	if int64(len(joined)) != want {
+		t.Fatalf("recording is %d bytes, want the %d of both segments", len(joined), want)
+	}
+	if len(joined) == 0 || joined[0] != 0x47 {
+		t.Fatalf("recording does not start with a transport stream sync byte")
+	}
+	late, err := buffer.Join(2500 * time.Millisecond)
 	if err != nil {
-		t.Fatalf("read playlist: %v", err)
+		t.Fatalf("join later: %v", err)
 	}
-	late := string(body)
-	if strings.Contains(late, "seg-00000000.ts") {
-		t.Fatalf("a start at 2.5s still lists the finished segment:\n%s", late)
+	lateBytes, err := os.ReadFile(late)
+	if err != nil {
+		t.Fatalf("read later recording: %v", err)
 	}
-	if !strings.Contains(late, "seg-00000001.ts") {
-		t.Fatalf("a start at 2.5s drops the segment it interrupts:\n%s", late)
+	if len(lateBytes) >= len(joined) {
+		t.Fatalf("a start at 2.5s keeps the finished segment: %d of %d bytes", len(lateBytes), len(joined))
 	}
-	if _, err := buffer.Playlist(9 * time.Second); !errors.Is(err, ErrNoRange) {
-		t.Fatalf("playlist after the buffer = %v, want ErrNoRange", err)
+	if _, err := buffer.Join(9 * time.Second); !errors.Is(err, ErrNoRange) {
+		t.Fatalf("join after the buffer = %v, want ErrNoRange", err)
 	}
 	if err := buffer.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	if _, err := buffer.Playlist(0); !errors.Is(err, core.ErrClosed) {
-		t.Fatalf("playlist after close = %v, want ErrClosed", err)
+	if _, err := buffer.Join(0); !errors.Is(err, core.ErrClosed) {
+		t.Fatalf("join after close = %v, want ErrClosed", err)
 	}
 }

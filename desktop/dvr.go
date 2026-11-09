@@ -156,11 +156,11 @@ func (r *dvrRunner) state() string {
 }
 
 // replayPath writes the buffered window that starts at from into the cache
-// directory and returns the playlist path. A start the buffer does not hold is
-// refused by the buffer, so a replay never begins at a time that was never
-// stored.
+// directory as one transport stream and returns its path. A start the buffer
+// does not hold is refused by the buffer, so a replay never begins at a time
+// that was never stored.
 func (r *dvrRunner) replayPath(from time.Duration) (string, error) {
-	return r.buffer.PlaylistPath(from)
+	return r.buffer.Join(from)
 }
 
 // Close stops polling and removes the cache directory.

@@ -76,6 +76,29 @@ func (t *Timeline) SetShift(track TrackID, offset time.Duration) error {
 	return nil
 }
 
+// AdjustShift moves a track's offset by delta and returns the new placement.
+//
+// This is how a manual nudge is applied: the offset moves from what is stored,
+// so pressing a button three times moves the track by three times delta from
+// where it was mapped, not from where its player happened to be. A track that
+// was never aligned is placed at delta. The sum is checked like any other
+// offset, so a nudge past the range time.Duration can hold fails with
+// ErrTimeRange instead of wrapping around.
+func (t *Timeline) AdjustShift(track TrackID, delta time.Duration) (Shift, error) {
+	if track == "" {
+		return Shift{}, fmt.Errorf("adjust shift: %w", ErrInvalid)
+	}
+	current := t.shifts[track]
+	next, err := addDuration(current, delta)
+	if err != nil {
+		return Shift{}, fmt.Errorf("adjust shift: %w", err)
+	}
+	if err := t.SetShift(track, next); err != nil {
+		return Shift{}, err
+	}
+	return Shift{Track: track, Offset: next}, nil
+}
+
 // Shift returns a track's placement. It reports false when the track is not
 // aligned.
 func (t *Timeline) Shift(track TrackID) (Shift, bool) {

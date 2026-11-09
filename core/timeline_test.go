@@ -412,6 +412,65 @@ func TestSeekDropsUnseekableSource(t *testing.T) {
 	}
 }
 
+// TestAdjustShiftMovesFromStoredOffset checks how a manual nudge is applied:
+// each step moves the offset stored on the timeline, so a repeated nudge adds
+// up exactly and does not depend on where a player happened to be.
+func TestAdjustShiftMovesFromStoredOffset(t *testing.T) {
+	line := NewTimeline()
+	const track TrackID = "track-voice"
+	steps := []struct {
+		delta time.Duration
+		want  time.Duration
+	}{
+		{-100 * time.Millisecond, -100 * time.Millisecond},
+		{-100 * time.Millisecond, -200 * time.Millisecond},
+		{-100 * time.Millisecond, -300 * time.Millisecond},
+		{1 * time.Second, 700 * time.Millisecond},
+		{-1700 * time.Millisecond, -1 * time.Second},
+	}
+	for i, step := range steps {
+		shift, err := line.AdjustShift(track, step.delta)
+		if err != nil {
+			t.Fatalf("step %d: adjust shift: %v", i, err)
+		}
+		if shift.Offset != step.want || shift.Track != track {
+			t.Fatalf("step %d: shift = %+v, want {%s %s}", i, shift, track, step.want)
+		}
+		stored, ok := line.Shift(track)
+		if !ok || stored.Offset != step.want {
+			t.Fatalf("step %d: stored shift = %+v (present %v), want %s", i, stored, ok, step.want)
+		}
+	}
+	// The target the media layer would seek to follows the nudged offset.
+	media, err := line.MediaTime(track, 10*time.Second)
+	if err != nil {
+		t.Fatalf("media time: %v", err)
+	}
+	if want := 9 * time.Second; media != want {
+		t.Fatalf("media time = %s, want %s", media, want)
+	}
+}
+
+// TestAdjustShiftRejectsBadNudges checks the two ways a nudge can fail: a track
+// identifier nothing can be stored under, and a sum past the range a duration
+// can hold.
+func TestAdjustShiftRejectsBadNudges(t *testing.T) {
+	line := NewTimeline()
+	if _, err := line.AdjustShift("", time.Second); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("empty track: err = %v, want ErrInvalid", err)
+	}
+	if err := line.SetShift("track-edge", math.MaxInt64); err != nil {
+		t.Fatalf("set shift: %v", err)
+	}
+	if _, err := line.AdjustShift("track-edge", time.Second); !errors.Is(err, ErrTimeRange) {
+		t.Fatalf("overflow: err = %v, want ErrTimeRange", err)
+	}
+	stored, ok := line.Shift("track-edge")
+	if !ok || stored.Offset != math.MaxInt64 {
+		t.Fatalf("stored shift = %+v (present %v), want the old offset kept", stored, ok)
+	}
+}
+
 // TestAlignmentNames fixes the spelling clients read.
 func TestAlignmentNames(t *testing.T) {
 	cases := map[Alignment]string{

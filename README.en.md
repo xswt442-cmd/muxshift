@@ -36,6 +36,6 @@ go build .
 ./desktop.exe -media <local file or http(s) address> [-media <second> ...]
 ```
 
-The buttons select which source's picture is shown and which sources are heard, and set their volume and mute state; `-scenario` runs the scripted checks in `desktop/scenarios.go`. Its results come from real window captures, logs, and level samples of the output device, and are not unit-tested.
+The buttons select which source's picture is shown and which sources are heard, set their volume and mute state, and align one source against another in 0.1s steps; a source that was never placed on the timeline stays silent until a button lets its sound through. Pause all and Play all go to the members of the scene's group and leave sources outside it alone. `-scenario` runs the scripted checks in `desktop/scenarios.go` (`sync` for manual alignment, `syncmap` for one-source position measurement, `syncfail` for a failing group member). Its results come from real window captures, logs, and level samples of the output device, and are not unit-tested.
 
 ## License

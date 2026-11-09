@@ -236,26 +236,36 @@ func (a *appState) view(c *ui.Context) {
 			ui.Text(c, a.status()).Center()
 		}
 		ui.Row(c).Gap(8).Padding(12).AlignItems(ui.Center).Children(func() {
-			main := a.first()
-			if main != nil && main.player != nil {
-				p := main.player
-				label := "Pause"
-				if !p.Playing() {
-					label = "Play"
+			// Pause and play go to every source the scene selects, not to one
+			// player: the group is what is being aligned, so it stops and
+			// starts together.
+			label := "Pause all"
+			if !a.sync.playhead.Playing() {
+				label = "Play all"
+			}
+			if ui.Button(c.Key("pause-all"), label).Width(96).Clicked() {
+				var problems []string
+				if a.sync.playhead.Playing() {
+					problems = a.pauseAll()
+				} else {
+					problems = a.playAll()
 				}
-				if ui.Button(c.Key("play"), label).Width(80).Clicked() {
-					if p.Playing() {
-						p.Pause()
-					} else {
-						p.Play()
-					}
-				}
-				if ui.Button(c.Key("mute"), muteLabel(p)).Width(88).Clicked() {
-					p.SetMuted(!p.Muted())
+				if len(problems) > 0 {
+					a.syncNote = "sync: group command reported: " + strings.Join(problems, "; ")
+					log.Printf("group command: %s", strings.Join(problems, "; "))
+				} else {
+					a.syncNote = "sync: group command done for " + itoa(len(a.group())) + " source(s)"
 				}
 			}
-			if ui.Button(c.Key("reload"), "Reload").Width(88).Clicked() && main != nil {
-				a.reopenPlayer(main)
+			if main := a.first(); main != nil && main.player != nil {
+				if ui.Button(c.Key("mute"), muteLabel(main.player)).Width(88).Clicked() {
+					main.player.SetMuted(!main.player.Muted())
+				}
+			}
+			if ui.Button(c.Key("reload"), "Reload").Width(88).Clicked() {
+				if first := a.first(); first != nil {
+					a.reopenPlayer(first)
+				}
 			}
 			if ui.Button(c.Key("quit"), "Close").Width(88).Clicked() {
 				a.release()
@@ -279,6 +289,11 @@ func (a *appState) view(c *ui.Context) {
 							a.lastErr = err
 						}
 					}
+					if ui.Button(c.Key(fmt.Sprintf("allow-%d", i)), allowLabel(a, it)).Width(104).Clicked() {
+						if err := a.allowAudio(index); err != nil {
+							a.lastErr = err
+						}
+					}
 					if ui.Button(c.Key(fmt.Sprintf("vol-down-%d", i)), "Vol -").Width(64).Clicked() {
 						if err := a.setVolume(index, max(0, it.volume-0.25)); err != nil {
 							a.lastErr = err
@@ -288,6 +303,17 @@ func (a *appState) view(c *ui.Context) {
 						if err := a.setVolume(index, min(1, it.volume+0.25)); err != nil {
 							a.lastErr = err
 						}
+					}
+				}
+				if it.video != "" || it.audio != "" {
+					// A tenth of a second is the step a person can still see on
+					// a timecode; the report after each press says where the
+					// player actually landed.
+					if ui.Button(c.Key(fmt.Sprintf("back-%d", i)), "-0.1s").Width(64).Clicked() {
+						a.nudgeAndRecord(index, -100*time.Millisecond)
+					}
+					if ui.Button(c.Key(fmt.Sprintf("fwd-%d", i)), "+0.1s").Width(64).Clicked() {
+						a.nudgeAndRecord(index, 100*time.Millisecond)
 					}
 				}
 			}
@@ -316,7 +342,23 @@ func (a *appState) status() string {
 	if len(parts) == 0 {
 		return "no media"
 	}
-	return strings.Join(parts, "   ") + "   ·   " + a.sceneLabel()
+	line := strings.Join(parts, "   ") + "   ·   " + a.sceneLabel() + "   ·   " + a.syncLabel()
+	if a.syncNote != "" {
+		line += "   ·   " + a.syncNote
+	}
+	return line
+}
+
+// allowLabel names what the override does next: a source whose offset is
+// unknown is held silent until someone says its sound is safe to hear.
+func allowLabel(a *appState, it *item) string {
+	if it.audio == "" {
+		return "No audio"
+	}
+	if a.audible[it.audio] {
+		return "Hold again"
+	}
+	return "Hear anyway"
 }
 
 // muteLabel names what the mute button does next.
@@ -362,6 +404,8 @@ func main() {
 	scenario := flag.String("scenario", "", "run a scripted check: "+scenarioNames())
 	dir := flag.String("dir", "", "directory the scenario writes its PNGs into")
 	flag.StringVar(&wakeMode, "wake", wakeMode, "how to nudge a network player into its first frame: once, retry, none")
+	flag.DurationVar(&syncAt, "at", 10*time.Second, "syncmap: the shared event time to measure")
+	flag.DurationVar(&syncOffset, "offset", 0, "syncmap: the offset applied to the measured source")
 	flag.Parse()
 	if len(media) == 0 {
 		log.Fatal("muxshift-desktop: -media is required")
@@ -390,6 +434,17 @@ func main() {
 		log.Printf("source %d: %s · video=%q audio=%q open=%v", i+1, it.uri, it.video, it.audio, errorString(it.openErr))
 	}
 	log.Printf("scene %s: %s", s.scene, s.sceneLabel())
+	// The shared event clock is wall time while the group plays and stands
+	// still while it is paused; Core's Playhead owns that rule.
+	go func() {
+		for range time.Tick(200 * time.Millisecond) {
+			mygoRunOnMain(func() {
+				if err := s.sync.tick(time.Now()); err != nil {
+					log.Printf("sync clock: %v", err)
+				}
+			})
+		}
+	}()
 	if *trace {
 		go func() {
 			for range time.Tick(500 * time.Millisecond) {

@@ -57,6 +57,18 @@ type appState struct {
 	items   []*item
 	lastErr error
 
+	// syncNote is the outcome of the last sync command, so a refused seek stays
+	// visible in the window instead of only in the log.
+	syncNote string
+
+	// sync is the shared event clock and the per-track offsets the panel
+	// edits; see sync.go.
+
+	// audible holds the audio tracks a person has explicitly allowed to be heard
+	// while their place on the shared timeline is still unknown.
+	audible map[core.TrackID]bool
+	sync    *syncState
+
 	// frames receives one token for every frame the window builds, which is
 	// what says a player dropped from the view is no longer being drawn.
 	frames chan struct{}
@@ -79,7 +91,7 @@ func newAppState(uris []string) (*appState, error) {
 	if err != nil {
 		return nil, err
 	}
-	app := &appState{session: session, scene: scene.ID, output: output.ID, frames: make(chan struct{}, 1)}
+	app := &appState{session: session, scene: scene.ID, output: output.ID, frames: make(chan struct{}, 1), sync: newSyncState(), audible: make(map[core.TrackID]bool)}
 	for _, uri := range uris {
 		it, err := app.add(uri)
 		if err != nil {
@@ -225,8 +237,19 @@ func (a *appState) apply() {
 		}
 		it.shown = shown[it.video]
 		level, ok := levels[it.audio]
-		it.player.SetMuted(!ok || level.Muted)
-		if ok && !level.Muted {
+		if !ok {
+			it.player.SetMuted(true)
+			continue
+		}
+		// A source whose place on the shared timeline is unknown makes no claim
+		// about which moment of the match it is playing, so its sound stays off
+		// until someone who can see both pictures says it is safe.
+		if !level.Muted && !a.audible[it.audio] && !a.aligned(it) {
+			it.player.SetMuted(true)
+			continue
+		}
+		it.player.SetMuted(level.Muted)
+		if !level.Muted {
 			it.player.SetVolume(level.Volume)
 		}
 	}

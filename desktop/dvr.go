@@ -253,12 +253,14 @@ func (r *dvrRunner) Close() error {
 }
 
 // dvrFromMedia builds the buffer options from the flags that configure it. The
-// source names the owner of the media times the buffer records, so every
-// recording says which source its clock belongs to; the budget bounds the disk
-// the recordings may take, and zero leaves them unbounded.
-func dvrFromMedia(dir string, retention time.Duration, maxBytes, recordingBytes int64, source core.SourceID) dvr.Options {
+// segments go under dir and the published recordings under recordingsDir, so a
+// session can keep the two kinds of file apart; the source names the owner of
+// the media times the buffer records, the budget bounds the disk the recordings
+// may take, and zero leaves them unbounded.
+func dvrFromMedia(dir, recordingsDir string, retention time.Duration, maxBytes, recordingBytes int64, source core.SourceID) dvr.Options {
 	return dvr.Options{
 		Dir:            dir,
+		RecordingsDir:  recordingsDir,
 		Retention:      retention,
 		MaxBytes:       maxBytes,
 		RecordingBytes: recordingBytes,

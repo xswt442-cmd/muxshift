@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"path/filepath"
 	"time"
 
@@ -29,7 +28,7 @@ func runContract(window *mygo.Window, a *appState, dir string) {
 	step(window, a, dir, scenario, "1-live.png", "the live source before the buffer is cut", nil)
 
 	bufferDir := a.dvrDirFor("contract")
-	runner, err := startDVR(it.uri, dvrFromMedia(bufferDir, dvrRetention, dvrMaxBytes, dvrRecordingBytes, it.source.ID))
+	runner, err := startDVR(it.uri, dvrFromMedia(bufferDir, a.dvrRecordingsDirFor("contract"), dvrRetention, dvrMaxBytes, dvrRecordingBytes, it.source.ID))
 	if err != nil {
 		logf(scenario, "open the buffer: %v", err)
 		return
@@ -174,5 +173,5 @@ func waitForRange(runner *dvrRunner, length, limit time.Duration) (dvr.Range, bo
 
 // logRange spells a range for the log.
 func logRange(r dvr.Range) string {
-	return fmt.Sprintf("%s (%d segments)", r.String(), len(r.Segments))
+	return r.String()
 }

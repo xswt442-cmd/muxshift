@@ -1111,7 +1111,8 @@ func runDVR(window *mygo.Window, a *appState, dir string) {
 	bufferDirs := make([]string, 0, liveCount)
 	for index := 0; index < liveCount; index++ {
 		bufferDir := a.dvrDirFor(fmt.Sprintf("source-%d", index+1))
-		runner, err := startDVR(uris[index], dvrFromMedia(bufferDir, dvrRetention, dvrMaxBytes, dvrRecordingBytes, a.items[index].source.ID))
+		recordingsDir := a.dvrRecordingsDirFor(fmt.Sprintf("source-%d", index+1))
+		runner, err := startDVR(uris[index], dvrFromMedia(bufferDir, recordingsDir, dvrRetention, dvrMaxBytes, dvrRecordingBytes, a.items[index].source.ID))
 		if err != nil {
 			logf(scenario, "source %d: open replay buffer: %v", index+1, err)
 			return

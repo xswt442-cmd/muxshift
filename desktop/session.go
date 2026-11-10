@@ -802,6 +802,16 @@ func (a *appState) dvrDirFor(name string) string {
 	return filepath.Join(a.dvrRoot, name)
 }
 
+// dvrRecordingsDirFor names the directory a buffer keeps its published
+// recordings in. It sits beside the segments rather than inside them, so a
+// recording is never mistaken for a rolling segment or swept up with one.
+func (a *appState) dvrRecordingsDirFor(name string) string {
+	if a.dvrSession != nil {
+		return filepath.Join(a.dvrSession.RecordingsDir(), name)
+	}
+	return filepath.Join(a.dvrRoot, name, "recordings")
+}
+
 // sceneLabel describes the scene by source number, which is what the cards and
 // the web page both show: "picture 2 · sound 1 at 1.00 · 3 at 0.50".
 func (a *appState) sceneLabel() string {

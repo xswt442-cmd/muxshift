@@ -39,7 +39,8 @@ func runLease(window *mygo.Window, a *appState, dir string) {
 	// after the second has to drop an unleased one to make room.
 	const budget = int64(5 << 20)
 	bufferDir := filepath.Join(dir, "buffer")
-	runner, err := startDVR(it.uri, dvrFromMedia(bufferDir, 20*time.Second, 0, budget, it.source.ID))
+	recordingsDir := filepath.Join(dir, "recordings")
+	runner, err := startDVR(it.uri, dvrFromMedia(bufferDir, recordingsDir, 20*time.Second, 0, budget, it.source.ID))
 	if err != nil {
 		logf(scenario, "open the buffer: %v", err)
 		return
@@ -67,7 +68,7 @@ func runLease(window *mygo.Window, a *appState, dir string) {
 		return
 	}
 	logf(scenario, "leased %s (%d bytes) before handing it to a consumer", recording.FileName(), recording.Size)
-	logRecordings(scenario, "after the cut", bufferDir)
+	logRecordings(scenario, "after the cut", bufferDir, recordingsDir)
 
 	// The consumer: an open handle the process keeps for the whole check, which is
 	// exactly the state Windows refuses to delete and the buffer must respect.
@@ -94,7 +95,7 @@ func runLease(window *mygo.Window, a *appState, dir string) {
 			i, cut.FileName(), cut.Size, recording.Valid())
 		logf(scenario, "budget: %s", runner.budgetLine())
 	}
-	logRecordings(scenario, "after three cuts", bufferDir)
+	logRecordings(scenario, "after three cuts", bufferDir, recordingsDir)
 
 	// Closing the buffer with the lease held is the strongest case: the segments
 	// go away, the recording the consumer reads does not.
@@ -102,7 +103,7 @@ func runLease(window *mygo.Window, a *appState, dir string) {
 	mygoRunOnMain(func() { closeErr = runner.Close() })
 	logf(scenario, "closed the buffer while the lease was held: %v", closeErr)
 	logf(scenario, "after the close the leased file is still valid: %v", recording.Valid())
-	logRecordings(scenario, "after the close", bufferDir)
+	logRecordings(scenario, "after the close", bufferDir, recordingsDir)
 
 	// A decode of the file the consumer still holds shows the bytes survived: the
 	// segments the buffer evicted and the close did not cut the file short.
@@ -123,12 +124,13 @@ func runLease(window *mygo.Window, a *appState, dir string) {
 	} else {
 		logf(scenario, "the recording is gone as soon as the consumer let it go: %v", err)
 	}
-	logRecordings(scenario, "after the release", bufferDir)
+	logRecordings(scenario, "after the release", bufferDir, recordingsDir)
 
 	// A budget that cannot hold a cut is refused instead of taking space from a
 	// file somebody is already reading.
 	tinyDir := filepath.Join(dir, "tiny")
-	tiny, err := startDVR(it.uri, dvrFromMedia(tinyDir, 20*time.Second, 0, 1, it.source.ID))
+	tinyRecordings := filepath.Join(dir, "tiny-recordings")
+	tiny, err := startDVR(it.uri, dvrFromMedia(tinyDir, tinyRecordings, 20*time.Second, 0, 1, it.source.ID))
 	if err != nil {
 		logf(scenario, "open the tiny buffer: %v", err)
 		return
@@ -188,7 +190,12 @@ func firstLine(text string) string {
 
 // logRecordings states what the buffer directory holds at this point, so the run
 // shows the files as well as what the buffer says about them.
-func logRecordings(scenario, when, dir string) {
+func logRecordings(scenario, when, dir, recordingsDir string) {
+	logDir(scenario, when+" segments", dir)
+	logDir(scenario, when+" recordings", recordingsDir)
+}
+
+func logDir(scenario, when, dir string) {
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		logf(scenario, "%s: %s is gone", when, filepath.Base(dir))

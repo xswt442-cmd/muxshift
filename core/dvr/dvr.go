@@ -134,6 +134,10 @@ type Options struct {
 	// Dir is the directory the buffer owns. It is created when missing and
 	// removed when the buffer is closed.
 	Dir string
+	// RecordingsDir is where published recordings go. Empty means Dir, which is
+	// what a standalone buffer wants; a session passes a directory of its own so
+	// a recording is not mixed in with the rolling segments.
+	RecordingsDir string
 	// Retention is how much media time to keep. Zero keeps everything the
 	// byte limit allows.
 	Retention time.Duration
@@ -173,6 +177,9 @@ type Buffer struct {
 	pending  *Gap
 	closed   bool
 	dirOwned bool
+	// recordingsOwned says this buffer created RecordingsDir, so only then does
+	// Close remove it. A shared recordings directory belongs to the session.
+	recordingsOwned bool
 	// cuts counts recordings so two cuts in the same nanosecond still get
 	// different names; recordings lists the published files, which Close keeps
 	// while a lease holds them.
@@ -193,6 +200,9 @@ func New(opts Options) (*Buffer, error) {
 	if opts.Retention < 0 || opts.MaxBytes < 0 || opts.RecordingBytes < 0 {
 		return nil, fmt.Errorf("%w: retention, size and recording limits cannot be negative", core.ErrInvalid)
 	}
+	if strings.TrimSpace(opts.RecordingsDir) == "" {
+		opts.RecordingsDir = opts.Dir
+	}
 	owned := false
 	if _, err := os.Stat(opts.Dir); errors.Is(err, os.ErrNotExist) {
 		owned = true
@@ -200,7 +210,16 @@ func New(opts Options) (*Buffer, error) {
 	if err := os.MkdirAll(opts.Dir, 0o755); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrNoSpace, err)
 	}
-	return &Buffer{opts: opts, dirOwned: owned}, nil
+	recordingsOwned := false
+	if opts.RecordingsDir != opts.Dir {
+		if _, err := os.Stat(opts.RecordingsDir); errors.Is(err, os.ErrNotExist) {
+			recordingsOwned = true
+		}
+		if err := os.MkdirAll(opts.RecordingsDir, 0o755); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrNoSpace, err)
+		}
+	}
+	return &Buffer{opts: opts, dirOwned: owned, recordingsOwned: recordingsOwned}, nil
 }
 
 // Add fetches one segment, checks that it can be played, stores it, and places
@@ -472,8 +491,8 @@ func (b *Buffer) Record(from time.Duration) (Recording, error) {
 	b.cuts++
 	id := fmt.Sprintf("rec-%d-%d", time.Now().UnixNano(), b.cuts)
 	name := id + ".ts"
-	path := filepath.Join(b.opts.Dir, name)
-	temporary := filepath.Join(b.opts.Dir, "."+id+".part")
+	path := filepath.Join(b.opts.RecordingsDir, name)
+	temporary := filepath.Join(b.opts.RecordingsDir, "."+id+".part")
 	out, err := os.OpenFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
 		return Recording{}, fmt.Errorf("%w: create %s: %v", ErrNoSpace, name, err)
@@ -651,6 +670,14 @@ func (b *Buffer) Close() error {
 	b.bytes = 0
 	if b.dirOwned && b.emptyLocked() {
 		if err := os.RemoveAll(b.opts.Dir); err != nil && first == nil {
+			first = err
+		}
+	}
+	// The recordings directory is only the buffer's to remove when the buffer
+	// created it and nothing it published is still leased. A session's shared
+	// recordings directory is left for the session to clear.
+	if b.recordingsOwned && b.emptyLocked() {
+		if err := os.RemoveAll(b.opts.RecordingsDir); err != nil && first == nil {
 			first = err
 		}
 	}

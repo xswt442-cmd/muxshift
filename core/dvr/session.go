@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/xswt442-cmd/muxshift/core"
@@ -115,23 +116,27 @@ func (s *Session) SegmentsDir() string { return filepath.Join(s.Dir, SegmentsNam
 // RecordingsDir is where this session's published recordings belong.
 func (s *Session) RecordingsDir() string { return filepath.Join(s.Dir, RecordingsName) }
 
-// Close removes everything the session owns. The order matters: the marker is
-// rewritten first to say the session is going away, then the media is removed,
-// and only a directory that is already empty loses its marker and its lock. A
-// failure part way through therefore leaves a directory the next sweep can
-// still identify and finish, rather than an unnamed orphan.
+// Close removes the session directory once nothing is left in it. The files
+// belong to the buffers, not to the session: the session only removes the
+// directories a buffer has already emptied, so a recording a player still holds
+// cannot be deleted from under it. The marker is rewritten first to say the
+// session is going away; a close that finds files still in use keeps the marker
+// and the lock and returns an error, and a later call retries once they are
+// gone.
 func (s *Session) Close() error {
 	if s == nil || s.close {
 		return nil
 	}
-	s.close = true
 	markerPath := filepath.Join(s.Dir, MarkerName)
 	going := s.record
 	going.State = markerRemoving
 	markErr := writeMarker(markerPath, going)
-	if err := s.clearContent(); err != nil {
+	if left, err := s.emptyContentDirs(); err != nil {
 		_ = s.releaseLock() // the lock file stays: it is part of the identity
 		return err
+	} else if len(left) > 0 {
+		_ = s.releaseLock()
+		return fmt.Errorf("%w: the session still holds %s", ErrNoSpace, strings.Join(left, ", "))
 	}
 	if markErr == nil {
 		if err := os.Remove(markerPath); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -148,22 +153,74 @@ func (s *Session) Close() error {
 	if err := os.Remove(s.Dir); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("%w: remove session directory: %v", ErrNoSpace, err)
 	}
+	s.close = true
 	return nil
 }
 
-// clearContent empties the segment and recording directories, then removes the
-// directories themselves once they are empty. A failure leaves whatever could
-// not be removed, and the marker, for the next sweep to retry.
-func (s *Session) clearContent() error {
+// emptyContentDirs removes the per-source directories a buffer has already
+// emptied, then the segments and recordings directories themselves, and reports
+// whatever is still there. It never removes a file: those belong to the buffers.
+func (s *Session) emptyContentDirs() ([]string, error) {
+	var left []string
 	for _, dir := range []string{s.SegmentsDir(), s.RecordingsDir()} {
-		if err := clearDirContents(dir); err != nil {
-			return fmt.Errorf("%w: remove session content in %s: %v", ErrNoSpace, filepath.Base(dir), err)
+		name := filepath.Base(dir)
+		entries, err := os.ReadDir(dir)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
 		}
-		if err := os.Remove(dir); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("%w: remove session directory %s: %v", ErrNoSpace, filepath.Base(dir), err)
+		if err != nil {
+			return left, fmt.Errorf("%w: read session %s: %v", ErrNoSpace, name, err)
+		}
+		remaining := 0
+		for _, entry := range entries {
+			path := filepath.Join(dir, entry.Name())
+			if !entry.IsDir() {
+				remaining++
+				left = append(left, filepath.Join(name, entry.Name()))
+				continue
+			}
+			n, err := emptySubdir(path)
+			if err != nil {
+				return left, fmt.Errorf("%w: read session %s: %v", ErrNoSpace, name, err)
+			}
+			if n == 0 {
+				if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+					left = append(left, filepath.Join(name, entry.Name()))
+					remaining++
+				}
+				continue
+			}
+			remaining++
+			left = append(left, fmt.Sprintf("%s (%d file(s))", filepath.Join(name, entry.Name()), n))
+		}
+		if remaining == 0 {
+			if err := os.Remove(dir); err != nil && !errors.Is(err, os.ErrNotExist) {
+				left = append(left, name)
+			}
+		} else {
+			left = append(left, name)
 		}
 	}
-	return nil
+	return left, nil
+}
+
+// emptySubdir removes dir when it holds nothing and reports how many entries
+// were left.
+func emptySubdir(dir string) (int, error) {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if len(entries) > 0 {
+		return len(entries), nil
+	}
+	if err := os.Remove(dir); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return 0, err
+	}
+	return 0, nil
 }
 
 func (s *Session) releaseLock() error {

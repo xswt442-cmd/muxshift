@@ -43,6 +43,9 @@ type dvrRunner struct {
 
 	stop chan struct{}
 	done chan struct{}
+	// stopOnce makes stopRecording idempotent: shutdown and an early scenario
+	// close both stop the same poller.
+	stopOnce sync.Once
 	// closeOnce makes Close idempotent: the runner is closed both when a scenario
 	// finishes the buffer early and when the session shuts down.
 	closeOnce sync.Once
@@ -240,13 +243,19 @@ func (r *dvrRunner) budgetLine() string {
 		len(r.buffer.Recordings()), r.buffer.RecordingBytes(), limit)
 }
 
+// stopRecording stops polling, so no new segment or recording is produced from
+// this point on. It is the first step of shutdown and is safe to repeat.
+func (r *dvrRunner) stopRecording() {
+	r.stopOnce.Do(func() { close(r.stop) })
+	<-r.done
+}
+
 // Close stops polling and removes the cache directory. A recording a lease holds
 // stays on disk; its release removes it. Closing twice is harmless: a scenario
 // that closes the buffer itself and then releases the session closes it again.
 func (r *dvrRunner) Close() error {
 	r.closeOnce.Do(func() {
-		close(r.stop)
-		<-r.done
+		r.stopRecording()
 		r.closeErr = r.buffer.Close()
 	})
 	return r.closeErr

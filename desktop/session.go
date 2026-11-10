@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -57,6 +58,13 @@ type item struct {
 	volume float64
 }
 
+// trackedRunner is one replay buffer this run opened, kept so shutdown can stop
+// recording before it closes anything else.
+type trackedRunner struct {
+	uri    string
+	runner *dvrRunner
+}
+
 // appState is a Core session plus the players it is mapped onto.
 type appState struct {
 	session *core.Session
@@ -71,10 +79,17 @@ type appState struct {
 	// one's and only collect the former.
 	dvrRoot    string
 	dvrSession *dvr.Session
+	// runners are the replay buffers this run opened, in the order they started.
+	// Shutdown walks them first: recording stops before any player closes.
+	runners []trackedRunner
 
 	// syncNote is the outcome of the last sync command, so a refused seek stays
 	// visible in the window instead of only in the log.
 	syncNote string
+
+	// releaseOnce makes shutdown run once even though a scenario and the window
+	// both ask for it.
+	releaseOnce sync.Once
 
 	// lastSeek is the most recent seek with what was requested, what the player
 	// reported, the playable window, and both wall-clock readings. It is the
@@ -767,7 +782,18 @@ func (a *appState) framesBuilt() int {
 }
 
 // release closes every player and the session.
+// release shuts the run down in the one order that keeps a recording readable:
+// stop producing files, close the players that read them, give the leases back,
+// let the buffers remove what nobody holds, then close the sessions. Closing the
+// same way in pieces — session first, say — would delete a file a lease was
+// still guarding. Both a scenario and the window call it, so it runs once.
 func (a *appState) release() {
+	a.releaseOnce.Do(a.shutdown)
+}
+
+func (a *appState) shutdown() {
+	a.stopRecording()
+	log.Printf("shutdown: recording stopped; closing %d player(s)", len(a.items))
 	for _, it := range a.items {
 		a.close(it)
 	}
@@ -782,6 +808,10 @@ func (a *appState) release() {
 			}
 		})
 	}
+	if pending := a.releaseLeases(); len(pending) > 0 {
+		log.Printf("shutdown: the system still holds %s", strings.Join(pending, ", "))
+	}
+	a.closeBuffers()
 	if a.session != nil && !a.session.Closed() {
 		a.lastErr = a.session.Close()
 	}
@@ -790,6 +820,38 @@ func (a *appState) release() {
 			a.lastErr = err
 		}
 		a.dvrSession = nil
+	}
+}
+
+// trackRunner records a buffer so shutdown reaches it after the players.
+func (a *appState) trackRunner(uri string, runner *dvrRunner) *dvrRunner {
+	a.runners = append(a.runners, trackedRunner{uri: uri, runner: runner})
+	return runner
+}
+
+func (a *appState) stopRecording() {
+	for _, tracked := range a.runners {
+		tracked.runner.stopRecording()
+	}
+}
+
+func (a *appState) releaseLeases() []string {
+	var pending []string
+	for _, tracked := range a.runners {
+		left, err := tracked.runner.releaseHold()
+		if err != nil {
+			log.Printf("shutdown: release the lease on %s: %v", shortURI(tracked.uri), err)
+		}
+		pending = append(pending, left...)
+	}
+	return pending
+}
+
+func (a *appState) closeBuffers() {
+	for _, tracked := range a.runners {
+		if err := tracked.runner.Close(); err != nil {
+			log.Printf("shutdown: close the buffer for %s: %v", shortURI(tracked.uri), err)
+		}
 	}
 }
 

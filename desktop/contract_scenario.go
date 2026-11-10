@@ -33,11 +33,11 @@ func runContract(window *mygo.Window, a *appState, dir string) {
 		logf(scenario, "open the buffer: %v", err)
 		return
 	}
+	a.trackRunner(it.uri, runner)
 	defer func() {
 		mygoRunOnMain(func() {
-			if err := runner.Close(); err != nil {
-				logf(scenario, "close the buffer: %v", err)
-			}
+			// release closes the buffer after the players and their leases, so
+			// the recording is not deleted while anything still reads it.
 			a.release()
 			mygo.App.Quit()
 		})

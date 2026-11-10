@@ -45,11 +45,9 @@ func runLease(window *mygo.Window, a *appState, dir string) {
 		logf(scenario, "open the buffer: %v", err)
 		return
 	}
+	a.trackRunner(it.uri, runner)
 	defer func() {
 		mygoRunOnMain(func() {
-			if err := runner.Close(); err != nil {
-				logf(scenario, "close the buffer: %v", err)
-			}
 			a.release()
 			mygo.App.Quit()
 		})
@@ -135,6 +133,7 @@ func runLease(window *mygo.Window, a *appState, dir string) {
 		logf(scenario, "open the tiny buffer: %v", err)
 		return
 	}
+	a.trackRunner(it.uri, tiny)
 	defer func() { _ = tiny.Close() }()
 	if windowOf, ok := waitForRange(tiny, 4*time.Second, 45*time.Second); ok {
 		var refused error

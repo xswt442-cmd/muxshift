@@ -1117,6 +1117,7 @@ func runDVR(window *mygo.Window, a *appState, dir string) {
 			logf(scenario, "source %d: open replay buffer: %v", index+1, err)
 			return
 		}
+		a.trackRunner(uris[index], runner)
 		sources = append(sources, replaySource{index: index, runner: runner})
 		bufferDirs = append(bufferDirs, bufferDir)
 	}

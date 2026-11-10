@@ -147,6 +147,56 @@ func TestSweepKeepsDirectoriesItCannotConfirm(t *testing.T) {
 	}
 }
 
+// The session does not own the files inside it: a close that finds one still
+// there must report it and stop, not delete a recording a buffer may still hand
+// to a player.
+func TestCloseDoesNotDeleteFilesABufferStillOwns(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "cache")
+	session, err := OpenSession(root)
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	source := filepath.Join(session.SegmentsDir(), "source-1")
+	if err := os.MkdirAll(source, 0o700); err != nil {
+		t.Fatalf("make a source directory: %v", err)
+	}
+	owned := filepath.Join(source, "seg-00000000.ts")
+	if err := os.WriteFile(owned, []byte("still buffered"), 0o600); err != nil {
+		t.Fatalf("write a segment: %v", err)
+	}
+
+	err = session.Close()
+	if err == nil {
+		t.Fatalf("close succeeded with a buffer file still in place")
+	}
+	if !strings.Contains(err.Error(), "still holds") {
+		t.Fatalf("close said %q, want it to name what is left", err)
+	}
+	if _, err := os.Stat(owned); err != nil {
+		t.Fatalf("the close removed a file the buffer owns: %v", err)
+	}
+	record, err := readMarker(filepath.Join(session.Dir, MarkerName))
+	if err != nil {
+		t.Fatalf("the refused close removed the marker: %v", err)
+	}
+	if record.State != markerRemoving {
+		t.Fatalf("marker state = %q, want %q", record.State, markerRemoving)
+	}
+	if _, err := os.Stat(filepath.Join(session.Dir, lockName)); err != nil {
+		t.Fatalf("the refused close removed the lock file: %v", err)
+	}
+
+	if err := os.Remove(owned); err != nil {
+		t.Fatalf("let the buffer go: %v", err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("close after the file was gone: %v", err)
+	}
+	if _, err := os.Stat(session.Dir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the second close left the directory: %v", err)
+	}
+}
+
 func TestSweepWithoutARootIsNotAnError(t *testing.T) {
 	result, err := SweepSessions(filepath.Join(t.TempDir(), "nothing-here"))
 	if err != nil {

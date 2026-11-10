@@ -2,7 +2,7 @@
 
 MuxShift is an open-source project for composing multiple audio/video sources and controlling their timelines.
 
-The repository currently contains a project scaffold with a Go Core session configuration model, an event timeline, HLS playlist metadata reading, a bounded replay buffer for live segments that can join its window into one playable recording, and two clients: a desktop experiment that registers several sources into one Core session and shows them through MyGo's native video path, and a web client that plays HLS in the browser through hls.js. Both let one scene decide which picture is shown and which sound is heard. Media capture, cross-source synchronization, mixing, and audio separation are not implemented; the web client neither aligns sources nor keeps history. A recording plays on its own, but showing the replay inside a running session window is not implemented yet.
+The repository currently contains a project scaffold with a Go Core session configuration model, an event timeline, HLS playlist metadata reading, a bounded replay buffer for live segments that can join its window into one playable recording, and two clients: a desktop experiment that registers several sources into one Core session and shows them through MyGo's native video path, and a web client that plays HLS in the browser through hls.js. Both let one scene decide which picture is shown and which sound is heard. Media capture, cross-source synchronization, and mixing are not implemented; audio separation exists only as an experimental script outside the playback path. The web client neither aligns sources nor keeps history. A recording plays on its own, but showing the replay inside a running session window is not implemented yet.
 
 [简体中文](README.md)
 
@@ -14,6 +14,7 @@ The repository currently contains a project scaffold with a Go Core session conf
 - `desktop/`: MyGo desktop experiment that registers several local files or http(s) addresses into one Core session, selects picture and sound per scene, owns the player lifecycle, and keeps a bounded replay window for live sources.
 - `web/`: web client: a loopback-only Go session service plus a page that plays HLS through hls.js and demonstrates several sources, a scene, volumes, and playback control inside one session.
 - `extension/`: browser extension and its native host, which hand one address the user confirmed to the running session.
+- `tools/separate/`: experimental vocal/non-vocal separation script that runs chunked ONNX inference on a model you supply; not wired into playback.
 - `docs/development/`: engineering architecture documents.
 - `testplace/`: Git-ignored local experiments, drafts, and agent working material.
 
@@ -57,5 +58,14 @@ go build -o testplace/bin/muxshift-host.exe ./extension/host
 ```
 
 Load `extension/` unpacked in Edge, register the `com.muxshift.bridge` host as described in the [extension notes](extension/README.md), and start the web session. The session writes its address and bridge token to `%LOCALAPPDATA%\MuxShift\bridge.json` (`-token-file` changes it, mode 0600); the host sends that token as `X-MuxShift-Bridge` to `POST /api/import`, so the extension never sees it, and the import log keeps only the scheme, host, and path of an address, since a signed address carries its credential in the query. The extension lists only `http(s)` addresses the page already loaded: a `blob:` address belongs to the page and is refused with a note, a cross-origin address plays under that site's CORS rules because nothing is proxied, and protected media is never touched. `activeTab`, `scripting`, and `nativeMessaging` are the whole permission set, and without a host permission the extension cannot read any page until the user clicks it. The page re-reads the session every two seconds, so an imported source appears without a reload.
+
+`tools/separate/` is an experiment: it splits one recording into a vocal stem and a non-vocal stem with chunked UVR MDX-Net inference and writes both as playable WAV files. It is **not** on the playback path, and neither client calls it yet; voice separation is not a product feature.
+
+```sh
+python tools\separate\separate.py --model testplace\models\Kim_Vocal_2.onnx \
+  --input testplace\media\p11\sample-mixed.wav --out-dir testplace\p11-stems
+```
+
+Model weights are not distributed with the repository and their redistribution license is unconfirmed, so the script only reads an explicit `--model` path. On this RTX 4060 Laptop, 44.1 kHz stereo with 5.92-second chunks: DirectML takes about 0.26 s per chunk (roughly 7.8x realtime, 6.2 GiB of video memory), plain CPU takes about 5.75 s per chunk (slower than realtime), and the algorithmic delay is a fixed one chunk of 5.92 s. On a synthetic sample the vocal stem correlates 0.99 with the commentary source and the non-vocal stem 0.83 with the crowd source; real stadium commentary is not verified. See [tools/separate/README.md](tools/separate/README.md) for details.
 
 ## License

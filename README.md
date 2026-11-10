@@ -2,7 +2,7 @@
 
 MuxShift 是一个面向多路音视频组合与时间轴控制的开源项目。
 
-仓库目前是工程骨架，已实现 Go Core 的会话配置模型、事件时间轴、从 HLS 播放列表读取轨道与时间信息、有界的直播回看缓冲与把窗口拼成一份可播放的录制，以及两个客户端：一个用 MyGo 原生播放的桌面实验应用，和一个用 hls.js 在浏览器里播放的 Web 客户端。两边都在同一个 Core 会话里登记多个媒体源，由场景决定显示哪路画面、听见哪路声音。尚未提供媒体采集、跨源同步、混音或音频分离功能；Web 客户端不做对轴，也不做回看。录制文件本身能播放，但在正在运行的会话窗口里放出回看画面还没有成立。
+仓库目前是工程骨架，已实现 Go Core 的会话配置模型、事件时间轴、从 HLS 播放列表读取轨道与时间信息、有界的直播回看缓冲与把窗口拼成一份可播放的录制，以及两个客户端：一个用 MyGo 原生播放的桌面实验应用，和一个用 hls.js 在浏览器里播放的 Web 客户端。两边都在同一个 Core 会话里登记多个媒体源，由场景决定显示哪路画面、听见哪路声音。尚未提供媒体采集、跨源同步或混音；音频分离只有一个未接入播放的实验脚本。Web 客户端不做对轴，也不做回看。录制文件本身能播放，但在正在运行的会话窗口里放出回看画面还没有成立。
 
 [English](README.en.md)
 
@@ -14,6 +14,7 @@ MuxShift 是一个面向多路音视频组合与时间轴控制的开源项目�
 - `desktop/`：MyGo 桌面实验应用，把多个本地文件或 http(s) 地址登记进一个 Core 会话，按场景选择画面与声音，管理播放器生命周期，并为直播源保留有限历史窗口。
 - `web/`：Web 客户端，用 Go 起一个只监听本机的会话服务，页面用 hls.js 播放 HLS，并演示同一个会话里多路源、场景、音量与播放控制。
 - `extension/`：浏览器扩展与它的本机 Host，把用户确认过的一个媒体地址交给正在运行的会话。
+- `tools/separate/`：实验性的人声/环境声分离脚本，用自带权重跑分块 ONNX 推理；尚未接入播放路径。
 - `docs/development/`：工程架构文档。
 - `testplace/`：被 Git 忽略的本地实验、草稿和 Agent 工作材料。
 
@@ -57,6 +58,15 @@ go build -o testplace/bin/muxshift-host.exe ./extension/host
 ```
 
 把 `extension/` 以开发者模式加载进 Edge，按[扩展说明](extension/README.md)登记 `com.muxshift.bridge` 这个本机 Host，再启动 Web 会话。会话会把地址与桥接令牌写进 `%LOCALAPPDATA%\MuxShift\bridge.json`（`-token-file` 可改，权限 0600），Host 用该令牌以 `X-MuxShift-Bridge` 头调用 `POST /api/import`，扩展本身拿不到令牌；导入日志只写地址的 scheme、host 与路径，带签名参数的地址不会把凭据写进日志。扩展只列出页面已经加载的 `http(s)` 地址：`blob:` 地址属于页面自身，会被拒绝并说明原因；跨源地址按目标站点的 CORS 规则播放，不做代理；受保护媒体一律不碰。`activeTab`、`scripting`、`nativeMessaging` 是全部权限，没有主机权限，因此不点击就读不到任何页面。页面每两秒读取一次会话，导入的源无需刷新即可出现。
+
+`tools/separate/` 是一个实验：它用 UVR MDX-Net 的分块推理把一段录音分成「人声」和「非人声」两条音轨，输出两份可播放的 WAV。它**不在播放路径上**，桌面端与 Web 端都还没有调用它；人声分离尚未成为产品功能。
+
+```sh
+python tools\separate\separate.py --model testplace\models\Kim_Vocal_2.onnx \
+  --input testplace\media\p11\sample-mixed.wav --out-dir testplace\p11-stems
+```
+
+模型权重不随仓库发布，也没有确认可再分发的许可，因此脚本只接受显式传入的 `--model` 路径。在这台 RTX 4060 Laptop 上，44.1 kHz 立体声、5.92 秒一块：DirectML 稳态每块约 0.26 秒（约 7.8 倍实时，显存约 6.2 GiB），纯 CPU 每块约 5.75 秒（比实时更慢），算法延迟固定为一块 5.92 秒。合成样例上人声轨与解说源相关 0.99、非人声轨与环境声源相关 0.83；真实球场解说尚未验证。细节见 [tools/separate/README.md](tools/separate/README.md)。
 
 ## 许可证
 

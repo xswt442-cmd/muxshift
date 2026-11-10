@@ -1192,19 +1192,28 @@ func runDVR(window *mygo.Window, a *appState, dir string) {
 			logf(scenario, "source 1: replay from %s: %v", media, err)
 			return
 		}
-		player, err := openPlayer(path)
+		// The window exists before the player does, the way the main window does
+		// for its own sources: a player created before any view draws it never
+		// delivered a picture here, and the player is created on the drawing
+		// thread for the same reason.
+		replayView = &replayPane{}
+		var paneWindow *mygo.Window
+		mygoRunOnMain(func() {
+			paneWindow = mygo.NewWindow(mygo.WindowOptions{
+				Title:   "MuxShift replay",
+				Width:   640,
+				Height:  360,
+				Content: ui.View(replayView.render),
+			})
+		})
+		replayWindow = paneWindow
+		player, err := openPlayerOnMain(path)
 		if err != nil {
 			logf(scenario, "source 1: open %s: %v", shortURI(path), err)
 			return
 		}
 		replayPlayer = player
-		replayView = &replayPane{player: player}
-		replayWindow = mygo.NewWindow(mygo.WindowOptions{
-			Title:   "MuxShift replay",
-			Width:   640,
-			Height:  360,
-			Content: ui.View(replayView.render),
-		})
+		replayView.set(player)
 		logf(scenario, "source 1: replay %s from %s in a window of its own", shortURI(path), media)
 		// The recording is kept beside the run so a later run can open it as the
 		// only source, which is the arrangement in which a recording does play in

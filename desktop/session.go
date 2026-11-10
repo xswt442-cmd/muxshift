@@ -151,7 +151,7 @@ func (a *appState) add(uri string) (*item, error) {
 	} else if err := a.addLocal(it); err != nil {
 		return it, err
 	}
-	player, err := openPlayer(uri)
+	player, err := openPlayerOnMain(uri)
 	if err != nil {
 		it.openErr = err
 		return it, err

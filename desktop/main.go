@@ -51,7 +51,7 @@ func mygoRunOnMain(fn func()) {
 // picture, and is closed then.
 func (a *appState) reopenPlayer(it *item) {
 	previous := it.player
-	player, err := openPlayer(it.uri)
+	player, err := openPlayerOnMain(it.uri)
 	if err != nil {
 		it.openErr = err
 		return
@@ -202,6 +202,17 @@ func (a *appState) handOver(it *item, generation int, kept *handover, older *han
 }
 
 // openPlayer opens a local file or a network address.
+// openPlayerOnMain creates a player on the thread that draws the window. A
+// player created from another goroutine never delivered a picture for a live
+// playlist in the runs recorded in testplace/evidence/P8/replay-isolation.md,
+// while a probe that created its players inside WhenReady drew frames at once.
+func openPlayerOnMain(uri string) (*ui.VideoPlayer, error) {
+	var player *ui.VideoPlayer
+	var err error
+	mygoRunOnMain(func() { player, err = openPlayer(uri) })
+	return player, err
+}
+
 func openPlayer(uri string) (*ui.VideoPlayer, error) {
 	if isNetworkAddress(uri) {
 		return video.OpenURL(uri)
@@ -229,12 +240,15 @@ func needsWake(uri string) bool {
 
 // wakeNetworkPlayer nudges a network player into showing its first picture.
 //
-// In this MyGo build a network source plays, reports its duration and moves its
-// position, but its first picture never reaches the window: the player stays
-// not ready with a black area, and a seek is what makes Media Foundation hand a
-// frame over. A seek to just ahead of the current position keeps the playhead
-// where it was and is enough. A second video in the same window does it too,
-// which is why the P1 probe, which showed a local file first, did not see this.
+// In this desktop build a network source plays, reports its duration and moves
+// its position, but its first picture does not reach the window: the player
+// stays not ready with a black area, and a seek is what brings a frame over. A
+// seek to just ahead of the current position keeps the playhead where it was
+// and is enough. A second video in the same window was once believed to do it
+// too; an isolation probe (testplace/poc/twowin) showed that a second player,
+// a second window, and a paused window all draw frames, so that explanation is
+// no longer used. What the probe did not settle is why a live playlist nudged
+// this way stops at the point of the seek instead of playing on.
 //
 // The seek is a compensation for the missing first frame, not a synchronisation
 // step: it moves the playhead by a millisecond and is not something a precise
@@ -252,11 +266,12 @@ func wakeNetworkPlayer(uri string, player *ui.VideoPlayer, live func() bool) {
 		if wakeMode == "none" {
 			return
 		}
-		// A few attempts while the player still reports no picture. One seek is
-		// enough for a live stream, but a recording opened while other sources
-		// are in the window needed the seek after it had buffered, so the task
-		// stops as soon as the player is ready or reports an error, and gives up
-		// after six attempts instead of moving the playhead forever.
+		// A few attempts while the player still reports no picture, spaced so a
+		// source that needs to buffer first gets the chance: the task stops as
+		// soon as the player is ready or reports an error, and gives up after
+		// six attempts instead of moving the playhead forever. How many attempts
+		// a live playlist tolerates is still open; testplace/poc/twowin is where
+		// that question is being narrowed down.
 		for attempt := 0; attempt < 6; attempt++ {
 			time.Sleep(1500 * time.Millisecond)
 			if !live() {

@@ -58,6 +58,13 @@ type item struct {
 	// buffer was started for, which is what SourceID on it says.
 	replay *dvr.Recording
 
+	// replayAnchor is the measured pair that places that recording on the
+	// source's media clock, and replayAnchorErr says why it could not be
+	// measured. A switch commits without an anchor — the picture is the product
+	// — and a time conversion then refuses instead of guessing.
+	replayAnchor    *dvr.Anchor
+	replayAnchorErr error
+
 	// replayLease keeps the file of replay alive while its player reads it. A
 	// live source has none.
 	replayLease *dvr.Lease

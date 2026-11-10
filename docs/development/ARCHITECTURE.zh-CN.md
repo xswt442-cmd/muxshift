@@ -68,6 +68,9 @@ P14 把引擎细节收进一层适配：`desktop/player.go` 只暴露受控播�
 
 三种身份彼此分开、绝不互相替代。`PlayerGeneration` 指 item 内一个播放器的一生，切换替换播放器时递增。`SourceMediaEpoch` 指源媒体时钟的一段连续运行：`Buffer.Epoch()` 从 `Options.SourceEpoch`（或 1）起算，遇到播放列表里的 `EXT-X-DISCONTINUITY` 就前移，因此在跳变之前切出的录制仍保留当时的 epoch。`BufferInstance` 指一个 DVR 缓冲区：`Buffer.Instance()` 在创建时固定，所以同一个源的两个缓冲区各有一份时钟，尽管它们的录制写着同一个源。`RecordAndLease` 把实例与 epoch 一并写进 `Recording`，`Anchor` 则声明同样三件事以及自己实测时的连续区间。`SourceMediaTime` 只有在锚点确实实测过（`MeasuredAt` 非零）、与录制同源、来自同一个缓冲区实例、属于同一个 epoch，且声明的区间包含被换算的缓冲时间时才返回结果，否则以 `ErrNoAnchor` 明确拒绝。因此一次回放切换只递增播放器代次：`swap` 场景会打印 `buffer buf-… epoch 1 -> buf-… epoch 1, generation 1 -> 2`，三者中任何一个变化都会让这次运行失败（`testplace/evidence/P16/epoch.md`）。
 
+锚点是**量出来的**，不是从源标识推出来的：`desktop/replay_clock.go` 用 ffprobe 读录制文件首帧的容器时间戳，把 `Recording.StartBufferTime` 与这个媒体时间配成一对实测值，`Interval` 覆盖该录制；测量在缓冲区存下第一段之后就在后台进行，从不跑在绘制线程上。换算按 `B = R + StartBufferTime`、`M = Anchor.MediaStart + (B − Anchor.BufferStart)`、`E = M − 该轨已确认偏移` 进行，并且逐项拒绝：锚点未测量、源或缓冲区实例不同、epoch 已经前移、窗口早于被测量的那个分片、轨道在 Core 时间轴上没有已确认的偏移（零偏移合法，但必须确认过）。`commonReplay` 因此不再把缓冲时间当成媒体时间：它先把每路 `Available()` 的起点换算成媒体时间，再按窗口长度推出终点——同一 epoch 内缓冲时间与媒体时间一起走，只有起点是实测样本。`hls-vod` 的一次 `swap` 实测里，缓冲 0s 处的媒体时间是 `1.466667s`，说明这两个时钟本来就不一样；`live-a`/`live-b` 跑 `dvr` 时两路的容器 PTS 基准相差约 52 秒，换算后如实报告「不重叠」，而不是像按缓冲时间相减那样把它们当成同一段（`testplace/evidence/P16/anchor.md`）。
+
+
 录制文件的时间轴是缓冲区自己的时钟，从它存下第一段起算，所以文件内位置 `p` 对应缓冲时间 `StartBufferTime + p`，`StartBufferTime` 是首帧的缓冲时间，通常比请求早不到一个分片。这个时钟不是源媒体时钟：缓冲区可能中途加入直播流，因此只有拿**为这个源实例实测过的** `Anchor` 才能把录制放回源时钟，缺锚点或锚点属于别的源一律拒绝，而不是默认从零开始；再回到共同事件时间时减去已确认的该轨偏移。`contract` 场景用带烧录时码的源验证这一点：请求 3 秒得到从 2 秒开始的文件，首帧时码 `00:00:02.000`，文件内 1 秒处时码 `00:00:03.000`，正是请求的那个时间；第二次切割不会损坏第一份文件（`testplace/evidence/P16/contract.md`）。
 
 桌面端每秒读一次直播源的播放列表写进这样的缓冲区，读取与画面无关：暂停输出不会暂停输入，这一点由 P8 实测记录。两路缓冲按与时间轴相同的偏移规则把各自的 `Available()` 换算到共同事件时间再求交集；没有已知偏移时返回错误而不是猜测，区间不重叠时如实报告而不是悄悄丢掉一路。

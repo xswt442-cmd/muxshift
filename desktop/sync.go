@@ -79,11 +79,29 @@ func (a *appState) commonReplay(sources []replaySource) (time.Duration, time.Dur
 		if !ok {
 			return 0, 0, fmt.Errorf("source %d (%s) has no playable buffered range", source.index+1, shortURI(it.uri))
 		}
-		eventStart, err := eventFromMedia(window.Start, shift.Offset)
+		// The buffer's clock is not the source's media clock: the buffer
+		// started at whichever segment it stored first, and a recording says
+		// where that was. Converting through the measured anchor keeps a
+		// window whose first segment is not media time zero honest — the
+		// guessing version shifted the whole history by that difference.
+		anchor, err := source.runner.bufferAnchor(window)
 		if err != nil {
 			return 0, 0, fmt.Errorf("source %d (%s): %w", source.index+1, shortURI(it.uri), err)
 		}
-		eventEnd, err := eventFromMedia(window.End, shift.Offset)
+		mediaStart, err := anchor.MediaTime(window.Start)
+		if err != nil {
+			return 0, 0, fmt.Errorf("source %d (%s): %w", source.index+1, shortURI(it.uri), err)
+		}
+		// Only the start is measured. Buffer time and media time advance
+		// together within one epoch, so the length of the window carries over
+		// unchanged and the end is a limit of that relation, not a second
+		// sample. See bufferAnchor.
+		mediaEnd := mediaStart + (window.End - window.Start)
+		eventStart, err := eventFromMedia(mediaStart, shift.Offset)
+		if err != nil {
+			return 0, 0, fmt.Errorf("source %d (%s): %w", source.index+1, shortURI(it.uri), err)
+		}
+		eventEnd, err := eventFromMedia(mediaEnd, shift.Offset)
 		if err != nil {
 			return 0, 0, fmt.Errorf("source %d (%s): %w", source.index+1, shortURI(it.uri), err)
 		}

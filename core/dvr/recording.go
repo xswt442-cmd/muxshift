@@ -139,10 +139,6 @@ func (r Recording) SourceMediaTime(position time.Duration, anchor Anchor) (time.
 	if anchor.Source != r.Source {
 		return 0, fmt.Errorf("%w: the anchor belongs to %s, not %s", ErrNoAnchor, anchor.Source, r.Source)
 	}
-	if !anchor.Measured() {
-		return 0, fmt.Errorf("%w: the anchor for %s was not measured; a constructed mapping would shift the result by an unknown amount",
-			ErrNoAnchor, r.Source)
-	}
 	if anchor.BufferInstance != r.BufferInstance || anchor.BufferInstance == "" {
 		return 0, fmt.Errorf("%w: the anchor was measured on %s, %s was cut from %s",
 			ErrNoAnchor, orUnknown(anchor.BufferInstance), r.name(), orUnknown(r.BufferInstance))
@@ -151,10 +147,25 @@ func (r Recording) SourceMediaTime(position time.Duration, anchor Anchor) (time.
 		return 0, fmt.Errorf("%w: the anchor is for epoch %d of %s, %s was cut in epoch %d",
 			ErrNoAnchor, anchor.Epoch, r.Source, r.name(), r.SourceMediaEpoch)
 	}
-	if err := anchor.explains(at); err != nil {
+	return anchor.MediaTime(at)
+}
+
+// MediaTime maps a buffer time to the source's media clock. The anchor must
+// have been measured, and it only explains the contiguous interval it states:
+// outside that interval the relation was never observed. A missing or guessed
+// anchor is refused instead of assuming the buffer started at zero.
+func (a Anchor) MediaTime(at time.Duration) (time.Duration, error) {
+	if a.Source == "" {
+		return 0, fmt.Errorf("%w: the anchor names no source", ErrNoAnchor)
+	}
+	if !a.Measured() {
+		return 0, fmt.Errorf("%w: the anchor for %s was not measured; a constructed mapping would shift the result by an unknown amount",
+			ErrNoAnchor, a.Source)
+	}
+	if err := a.explains(at); err != nil {
 		return 0, fmt.Errorf("%w: %v", ErrNoAnchor, err)
 	}
-	return anchor.MediaStart + (at - anchor.BufferStart), nil
+	return a.MediaStart + (at - a.BufferStart), nil
 }
 
 // explains reports whether the anchor covers a buffer time. The interval is the

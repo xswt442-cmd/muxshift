@@ -92,7 +92,12 @@ func (a *appState) settleReplay(swap *replaySwap) {
 			return
 		}
 		if started {
-			a.commitReplay(swap)
+			recording := swap.recording
+			anchor, anchorErr := measureRecordingAnchor(recording)
+			if anchorErr != nil {
+				logf("replay", "no measured anchor for %s: %v", recording.FileName(), anchorErr)
+			}
+			a.commitReplay(swap, anchor, anchorErr)
 			return
 		}
 		if !time.Now().Before(deadline) {
@@ -107,8 +112,11 @@ func (a *appState) settleReplay(swap *replaySwap) {
 // main-thread step: from the commit on, the item draws the new player, keeps the
 // new lease and remembers which recording it is showing; the old player and the
 // old lease are released after it, in that order, so the picture a viewer sees
-// is never left without a player behind it.
-func (a *appState) commitReplay(swap *replaySwap) {
+// is never left without a player behind it. The anchor is the measurement taken
+// for this file before the commit; measuring never happens on the drawing
+// thread, and a recording without one still switches, it just refuses a time
+// conversion.
+func (a *appState) commitReplay(swap *replaySwap, anchor dvr.Anchor, anchorErr error) {
 	it := swap.item
 	var (
 		old      desktopPlayer
@@ -126,6 +134,13 @@ func (a *appState) commitReplay(swap *replaySwap) {
 		it.replayLease = swap.lease
 		recording := swap.recording
 		it.replay = &recording
+		if anchorErr == nil {
+			it.replayAnchor = &anchor
+			it.replayAnchorErr = nil
+		} else {
+			it.replayAnchor = nil
+			it.replayAnchorErr = anchorErr
+		}
 		it.generation++
 		ok = true
 		logf("replay", "committed %s on %s: shows %s..%s of buffer time",

@@ -95,6 +95,31 @@ func swapBody(window *mygo.Window, a *appState, dir string) {
 	open, given := a.leaseStats()
 	logf(scenario, "the recording is on the stage: %s | leases open=%d given=%d", replayLine(it), open, given)
 	check(open == 1 && given == 1, "the first switch asked for %d lease(s) and left %d open", given, open)
+	event, clockErr := a.replayEventTime(it, 0)
+	if clockErr != nil {
+		// An unconfirmed offset is a refusal, not a zero offset — so the first
+		// answer here must be the refusal. Confirming the track at zero then
+		// lets the same position convert, and the answer must be the measured
+		// media start, because event = media - 0.
+		logf(scenario, "replay clock: a position inside the recording does not convert: %v", clockErr)
+		track := it.audio
+		if track == "" {
+			track = it.video
+		}
+		if err := a.sync.timeline.SetShift(track, 0); err != nil {
+			logf(scenario, "replay clock: confirming %s at 0 failed: %v", track, err)
+		} else if converted, err := a.replayEventTime(it, 0); err != nil {
+			logf(scenario, "replay clock: %s is confirmed at 0 but the position still does not convert: %v", track, err)
+		} else {
+			logf(scenario, "replay clock: with %s confirmed at 0, position 0 of %s converts to %s (measured media %s at buffer %s)",
+				track, showing(it).FileName(), converted, it.replayAnchor.MediaStart, it.replayAnchor.BufferStart)
+			check(converted == it.replayAnchor.MediaStart,
+				"the measured start converted to %s, not to the media time the anchor measured (%s)", converted, it.replayAnchor.MediaStart)
+		}
+	} else {
+		logf(scenario, "replay clock: position 0s of %s is event %s (anchor media %s at buffer %s, interval %s)",
+			showing(it).FileName(), event, it.replayAnchor.MediaStart, it.replayAnchor.BufferStart, logRange(it.replayAnchor.Interval))
+	}
 	check(showing(it) != nil && showing(it).RequestedBufferTime == base+2*time.Second,
 		"the stage shows %v, not the recording asked for at %s", showing(it), sceneClock(base+2*time.Second))
 	step(window, a, dir, scenario, "1-replay.png", "the recording on the stage", nil)

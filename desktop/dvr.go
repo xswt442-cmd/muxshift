@@ -44,6 +44,14 @@ type dvrRunner struct {
 	// player takes it when it opens the file and gives it back when it closes.
 	lease *dvr.Lease
 
+	// anchorOnce measures where this buffer's clock sits on the source's media
+	// clock, once, as soon as a segment exists; anchorDone is closed when that
+	// measurement finished. See replay_clock.go.
+	anchorOnce sync.Once
+	anchorDone chan struct{}
+	anchor     *dvr.Anchor
+	anchorErr  error
+
 	stop chan struct{}
 	done chan struct{}
 	// stopOnce makes stopRecording idempotent: shutdown and an early scenario
@@ -128,6 +136,10 @@ func (r *dvrRunner) pollOnce() {
 		r.started = true
 		r.next = segment.Sequence + 1
 		r.mu.Unlock()
+		// The anchor names the first segment the buffer stored, so it can be
+		// measured as soon as one exists — and measuring it here keeps ffprobe
+		// off the drawing thread. See replay_clock.go.
+		r.startAnchorMeasurement()
 	}
 	if added == 0 && len(info.Segments) > 0 {
 		log.Printf("dvr: %s: poll %d added nothing: %d segments %d..%d, next %d",

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"sync"
+
+	"github.com/xswt442-cmd/muxshift/core"
 )
 
 // Lease holds one recording open for a player. While a lease exists, the buffer
@@ -42,10 +44,16 @@ func (l *Lease) Release() error {
 }
 
 // Lease opens the recording with this id for a player. A recording that was
-// already removed, or that never existed, is refused with ErrNoRange.
+// already removed, or that never existed, is refused with ErrNoRange, and a
+// closed buffer hands out no new leases: the leases it already issued stay
+// usable until they are released, but nothing new starts reading a file the
+// buffer has stopped owning.
 func (b *Buffer) Lease(id string) (*Lease, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.closed {
+		return nil, fmt.Errorf("%w: the buffer is closed", core.ErrClosed)
+	}
 	for i := range b.recordings {
 		if b.recordings[i].ID != id {
 			continue
@@ -141,11 +149,19 @@ func (b *Buffer) PendingCleanup() []string {
 	return append([]string(nil), b.pendingCleanup...)
 }
 
-// dropOldestRecordingLocked removes the oldest recording nobody holds, to make
-// room under the recording budget. The caller holds the lock.
+// dropOldestRecordingLocked tries to remove the oldest recording nobody holds,
+// to make room under the recording budget. It reports whether it found a
+// candidate, not whether the file went away: a file the system refuses to delete
+// is listed for cleanup and skipped by later calls, so a budget loop moves on to
+// the next candidate instead of retrying the same file forever. The caller holds
+// the lock.
 func (b *Buffer) dropOldestRecordingLocked() bool {
 	for i := range b.recordings {
-		if b.recordings[i].gone || b.recordings[i].refs > 0 {
+		rec := &b.recordings[i]
+		if rec.gone || rec.refs > 0 {
+			continue
+		}
+		if contains(b.pendingCleanup, rec.Path) {
 			continue
 		}
 		b.removeRecordingLocked(i)

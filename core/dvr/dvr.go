@@ -464,7 +464,7 @@ func (b *Buffer) Record(from time.Duration) (Recording, error) {
 	}
 	for b.opts.RecordingBytes > 0 && b.recordingBytes+need > b.opts.RecordingBytes {
 		if !b.dropOldestRecordingLocked() {
-			return Recording{}, fmt.Errorf("%w: the recording budget of %d bytes is held by files a player is using",
+			return Recording{}, fmt.Errorf("%w: the recording budget of %d bytes is held by files a player is using or files the system will not let the buffer remove",
 				ErrNoSpace, b.opts.RecordingBytes)
 		}
 	}

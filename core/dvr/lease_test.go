@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/xswt442-cmd/muxshift/core"
 )
 
 func TestLeaseKeepsARecordingThroughClose(t *testing.T) {
@@ -115,8 +117,46 @@ func TestLeaseRefusesUnknownAndGoneRecordings(t *testing.T) {
 	if err := buffer.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	if _, err := buffer.Lease(recording.ID); !errors.Is(err, ErrNoRange) {
-		t.Fatalf("a removed recording was leased again: %v", err)
+	// A closed buffer refuses new consumers outright; the lease it issued earlier
+	// was released above, so the file is gone and there is nothing left to hand
+	// out either.
+	if _, err := buffer.Lease(recording.ID); !errors.Is(err, core.ErrClosed) {
+		t.Fatalf("leasing from a closed buffer = %v, want ErrClosed", err)
+	}
+}
+
+func TestLeaseRefusesARecordingTheBudgetDropped(t *testing.T) {
+	probe, err := New(Options{Dir: filepath.Join(t.TempDir(), "probe")})
+	if err != nil {
+		t.Fatalf("new probe buffer: %v", err)
+	}
+	addFixture(t, probe)
+	sample, err := probe.Record(0)
+	if err != nil {
+		t.Fatalf("probe record: %v", err)
+	}
+	if err := probe.Close(); err != nil {
+		t.Fatalf("close the probe buffer: %v", err)
+	}
+
+	buffer, err := New(Options{Dir: filepath.Join(t.TempDir(), "buffer"), RecordingBytes: sample.Size})
+	if err != nil {
+		t.Fatalf("new buffer: %v", err)
+	}
+	addFixture(t, buffer)
+	dropped, err := buffer.Record(0)
+	if err != nil {
+		t.Fatalf("first record: %v", err)
+	}
+	kept, err := buffer.Record(0)
+	if err != nil {
+		t.Fatalf("second record: %v", err)
+	}
+	if _, err := buffer.Lease(dropped.ID); !errors.Is(err, ErrNoRange) {
+		t.Fatalf("the dropped recording was leased again: %v", err)
+	}
+	if _, err := buffer.Lease(kept.ID); err != nil {
+		t.Fatalf("the surviving recording was refused: %v", err)
 	}
 }
 
@@ -203,6 +243,94 @@ func TestPendingCleanupReportsAFileWindowsStillHolds(t *testing.T) {
 	}
 	if _, err := os.Stat(dir); err != nil {
 		t.Fatalf("the directory was removed with a file still inside: %v", err)
+	}
+}
+
+func TestAClosedBufferHandsOutNoNewLease(t *testing.T) {
+	buffer, err := New(Options{Dir: filepath.Join(t.TempDir(), "buffer")})
+	if err != nil {
+		t.Fatalf("new buffer: %v", err)
+	}
+	addFixture(t, buffer)
+	recording, err := buffer.Record(0)
+	if err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	lease, err := buffer.Lease(recording.ID)
+	if err != nil {
+		t.Fatalf("lease: %v", err)
+	}
+	if err := buffer.Close(); err != nil {
+		t.Fatalf("close with a lease: %v", err)
+	}
+	// The recording is still on disk because the lease holds it, but the buffer
+	// has stopped owning it: nothing new may start reading it.
+	if _, err := buffer.Lease(recording.ID); !errors.Is(err, core.ErrClosed) {
+		t.Fatalf("lease after close = %v, want ErrClosed", err)
+	}
+	if err := lease.Release(); err != nil {
+		t.Fatalf("the lease issued before the close no longer works: %v", err)
+	}
+}
+
+func TestABudgetLoopDoesNotRetryAFileTheSystemWillNotDelete(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("only Windows refuses to delete a file another handle has open")
+	}
+	// Measure one cut first, so the budget below is exactly two of them: the
+	// third cut then has to drop one recording to fit.
+	probe, err := New(Options{Dir: filepath.Join(t.TempDir(), "probe")})
+	if err != nil {
+		t.Fatalf("new probe buffer: %v", err)
+	}
+	addFixture(t, probe)
+	sample, err := probe.Record(0)
+	if err != nil {
+		t.Fatalf("probe record: %v", err)
+	}
+	if err := probe.Close(); err != nil {
+		t.Fatalf("close the probe buffer: %v", err)
+	}
+
+	// Two recordings fit, the oldest held open by a second handle but leased by
+	// nobody: a third cut must skip the file it cannot delete, drop the younger
+	// one, and finish instead of looping on the file the system keeps.
+	buffer, err := New(Options{Dir: filepath.Join(t.TempDir(), "buffer"), RecordingBytes: 2 * sample.Size})
+	if err != nil {
+		t.Fatalf("new buffer: %v", err)
+	}
+	addFixture(t, buffer)
+	first, err := buffer.Record(0)
+	if err != nil {
+		t.Fatalf("first record: %v", err)
+	}
+	if _, err := buffer.Record(0); err != nil {
+		t.Fatalf("second record: %v", err)
+	}
+	held, err := os.Open(first.Path)
+	if err != nil {
+		t.Fatalf("open the first recording: %v", err)
+	}
+	defer held.Close()
+
+	done := make(chan error, 1)
+	go func() { _, err := buffer.Record(0); done <- err }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("the third cut = %v, want it to drop the younger recording", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("the budget loop is still retrying a file that cannot be deleted")
+	}
+	if pending := buffer.PendingCleanup(); len(pending) != 1 || pending[0] != first.Path {
+		t.Fatalf("pending cleanup = %v, want the file the system holds", pending)
+	}
+	if err := first.Valid(); err != nil {
+		t.Fatalf("the held file was lost anyway: %v", err)
+	}
+	if got := buffer.RecordingBytes(); got > 2*sample.Size {
+		t.Fatalf("the budget went over: %d bytes", got)
 	}
 }
 

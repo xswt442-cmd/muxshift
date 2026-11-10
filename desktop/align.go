@@ -44,10 +44,11 @@ func (w alignWindow) String() string {
 }
 
 // alignSuggestion is one probe result together with the state it was computed
-// from. A caller must check fresh() before showing it.
+// from. A caller must check Expired (or fresh) before showing it as current.
 type alignSuggestion struct {
 	Reference  alignWindow
 	Target     alignWindow
+	Snapshot   probeSnapshot
 	Result     align.Result
 	CoreOffset time.Duration
 	Current    time.Duration
@@ -55,6 +56,22 @@ type alignSuggestion struct {
 	Group      core.SyncGroupID
 	GroupShift time.Duration
 	Elapsed    time.Duration
+	Expired    string
+}
+
+// probeSnapshot is the session state the probe started from: both windows, the
+// target track's offset and the sync group as they were before the decode began.
+// The result is checked against this snapshot rather than against the session as
+// it looks when the decode finishes, so a change made while the probe ran shows
+// up as an expired result instead of being folded into the suggestion.
+type probeSnapshot struct {
+	Reference alignWindow
+	Target    alignWindow
+	Track     core.TrackID
+	Offset    time.Duration
+	Aligned   bool
+	Group     core.SyncGroupID
+	HasGroup  bool
 }
 
 // probeLength bounds how much audio is decoded for one comparison: a minute at
@@ -67,14 +84,11 @@ const probeLength = 60 * time.Second
 // nothing convincing comes back with Result.Accepted false and a reason.
 func (a *appState) suggestAlign(reference, target int) (alignSuggestion, error) {
 	started := time.Now()
-	ref, err := a.windowOnMain(reference)
+	snapshot, err := a.snapshotOnMain(reference, target)
 	if err != nil {
 		return alignSuggestion{}, err
 	}
-	tgt, err := a.windowOnMain(target)
-	if err != nil {
-		return alignSuggestion{}, err
-	}
+	ref, tgt := snapshot.Reference, snapshot.Target
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -93,15 +107,49 @@ func (a *appState) suggestAlign(reference, target int) (alignSuggestion, error) 
 		return alignSuggestion{}, err
 	}
 
-	suggestion := alignSuggestion{Reference: ref, Target: tgt, Result: result, Elapsed: time.Since(started)}
+	suggestion := alignSuggestion{
+		Reference: ref,
+		Target:    tgt,
+		Snapshot:  snapshot,
+		Result:    result,
+		Current:   snapshot.Offset,
+		Elapsed:   time.Since(started),
+	}
 	if result.Accepted {
 		suggestion.CoreOffset = tgt.Start - ref.Start + result.Offset
+		suggestion.Delta = suggestion.CoreOffset - snapshot.Offset
 	}
-	// Reading the current offset needs the session, so it happens on the UI
-	// thread even when the comparison above ran on its own goroutine.
+	// Reading the session to decide whether the result is still current needs the
+	// UI thread even when the comparison above ran on its own goroutine.
 	finish := func() { a.finishSuggestion(&suggestion) }
 	mygoRunOnMain(finish)
 	return suggestion, nil
+}
+
+// snapshotOnMain captures the windows and the offset the probe starts from, on
+// the UI thread, before any decoding happens.
+func (a *appState) snapshotOnMain(reference, target int) (probeSnapshot, error) {
+	var snapshot probeSnapshot
+	var err error
+	mygoRunOnMain(func() {
+		if snapshot.Reference, err = a.alignWindowAt(reference); err != nil {
+			return
+		}
+		if snapshot.Target, err = a.alignWindowAt(target); err != nil {
+			return
+		}
+		track := a.trackOfAudio(a.itemOf(snapshot.Target.Source))
+		snapshot.Track = track
+		if shift, ok := a.sync.timeline.Shift(track); ok {
+			snapshot.Offset = shift.Offset
+			snapshot.Aligned = true
+		}
+		if group, ok := a.existingGroup(); ok {
+			snapshot.Group = group.ID
+			snapshot.HasGroup = true
+		}
+	})
+	return snapshot, err
 }
 
 // windowOnMain reads one player's state on the UI thread: the player and the
@@ -114,23 +162,41 @@ func (a *appState) windowOnMain(index int) (alignWindow, error) {
 	return window, err
 }
 
-// finishSuggestion fills in the parts of a proposal that describe the current
-// session. It only reads, and it finds the source by identity: a source that was
-// reordered since the probe must not be confused with another one.
+// finishSuggestion checks the finished comparison against the snapshot it
+// started from and records why it can no longer be shown as current. It only
+// reads the session: nothing here writes an offset or moves a player.
 func (a *appState) finishSuggestion(s *alignSuggestion) {
-	track := a.trackOfAudio(a.itemOf(s.Target.Source))
-	if s.Result.Accepted {
-		if shift, ok := a.sync.timeline.Shift(track); ok {
-			s.Current = shift.Offset
-		}
-		s.Delta = s.CoreOffset - s.Current
+	s.Expired = a.expiredAgainst(*s)
+	if s.Expired != "" {
+		return
 	}
 	if group, ok := a.existingGroup(); ok {
 		s.Group = group.ID
-		if shift, ok := a.sync.timeline.Shift(track); ok {
-			s.GroupShift = shift.Offset
+		s.GroupShift = s.Current
+	}
+}
+
+// expiredAgainst reports why a suggestion no longer describes the session, or ""
+// when it still does.
+func (a *appState) expiredAgainst(s alignSuggestion) string {
+	for _, window := range []alignWindow{s.Reference, s.Target} {
+		it := a.itemOf(window.Source)
+		if it == nil {
+			return fmt.Sprintf("source %d is gone", window.Index+1)
+		}
+		if it.generation != window.Generation {
+			return fmt.Sprintf("%s was reopened since the probe", a.name(it))
 		}
 	}
+	current, ok := a.sync.timeline.Shift(s.Snapshot.Track)
+	if ok != s.Snapshot.Aligned || (ok && current.Offset != s.Snapshot.Offset) {
+		return "the offset of the target changed since the probe started"
+	}
+	group, has := a.existingGroup()
+	if s.Snapshot.HasGroup && (!has || group.ID != s.Snapshot.Group) {
+		return "the sync group changed since the probe started"
+	}
+	return ""
 }
 
 // itemOf finds the source a probe was computed from, by identity rather than by
@@ -231,47 +297,35 @@ func (a *appState) alignTrack(index int) core.TrackID {
 // fresh reports why a suggestion can no longer be applied, or "" when it still
 // describes the current session. Nothing here changes state.
 func (a *appState) fresh(s alignSuggestion) string {
-	for _, window := range []alignWindow{s.Reference, s.Target} {
-		it := a.itemOf(window.Source)
-		if it == nil {
-			return fmt.Sprintf("source %d is gone", window.Index+1)
-		}
-		if it.generation != window.Generation {
-			return fmt.Sprintf("%s was reopened since the probe", a.name(it))
-		}
-	}
-	if s.Result.Accepted {
-		track := a.trackOfAudio(a.itemOf(s.Target.Source))
-		current, ok := a.sync.timeline.Shift(track)
-		switch {
-		case !ok && s.Current != 0:
-			return "the offset of the target changed since the probe"
-		case ok && current.Offset != s.Current:
-			return "the offset of the target changed since the probe"
-		}
-	}
-	if group, ok := a.existingGroup(); ok {
-		if s.Group != "" && group.ID != s.Group {
-			return "the sync group changed since the probe"
-		}
-	} else if s.Group != "" {
-		return "the sync group is gone since the probe"
-	}
-	return ""
+	return a.expiredAgainst(s)
 }
 
 // suggestionLine renders a proposal for the status bar. It is deliberately
 // verbose: the user must be able to see why a value was proposed or refused.
 func (a *appState) suggestionLine(s alignSuggestion) string {
-	if !s.Result.Accepted {
-		return fmt.Sprintf("no suggestion for %s: %s (peak %.3f, next %.3f, %s)",
-			shortURI(s.Target.URI), s.Result.Reason, s.Result.Peak, s.Result.RunnerUp, s.Elapsed.Round(time.Millisecond))
+	common := s.Reference.Length
+	if s.Target.Length < common {
+		common = s.Target.Length
 	}
-	line := fmt.Sprintf("suggested %+.3fs for %s (now %+.3fs, difference %+.3fs); peak %.3f vs %.3f, overlap %s, %s",
+	expired := s.Expired
+	if expired == "" {
+		expired = a.fresh(s)
+	}
+	if !s.Result.Accepted {
+		line := fmt.Sprintf("no suggestion for %s: %s (peak %.3f, next %.3f, %s)",
+			shortURI(s.Target.URI), s.Result.Reason, s.Result.Peak, s.Result.RunnerUp, s.Elapsed.Round(time.Millisecond))
+		if expired != "" {
+			line += " (expired: " + expired + ")"
+		}
+		return line
+	}
+	line := fmt.Sprintf("suggested %+.3fs for %s (now %+.3fs, difference %+.3fs); peak %.3f vs %.3f, matched %s of %s, %s",
 		s.CoreOffset.Seconds(), shortURI(s.Target.URI), s.Current.Seconds(), s.Delta.Seconds(),
-		s.Result.Peak, s.Result.RunnerUp, s.Result.Overlap.Round(10*time.Millisecond), s.Elapsed.Round(time.Millisecond))
-	if stalled := a.fresh(s); stalled != "" {
-		return line + " (expired: " + stalled + ")"
+		s.Result.Peak, s.Result.RunnerUp,
+		s.Result.Overlap.Round(10*time.Millisecond), common.Round(10*time.Millisecond),
+		s.Elapsed.Round(time.Millisecond))
+	if expired != "" {
+		line += " (expired: " + expired + ")"
 	}
 	return line
 }
@@ -293,17 +347,26 @@ func (a *appState) probeAndReport(reference, target int) alignSuggestion {
 }
 
 // probeAsync is the button's path: the comparison decodes two files, so it runs
-// off the UI thread and only the finished text is handed back to it.
+// off the UI thread and only the finished text is handed back to it. The running
+// flag lets a scenario (and the button) tell a comparison in flight from a
+// finished one without reading the wording of the status line.
 func (a *appState) probeAsync(reference, target int) {
+	if a.probeRunning {
+		a.syncNote = "a comparison is already running"
+		return
+	}
+	a.probeRunning = true
 	a.syncNote = fmt.Sprintf("comparing source %d with source %d…", reference+1, target+1)
 	go func() {
 		suggestion, err := a.suggestAlign(reference, target)
 		mygoRunOnMain(func() {
+			a.probeRunning = false
 			if err != nil {
 				a.syncNote = fmt.Sprintf("alignment probe failed: %v", err)
 				logf("align", "probe failed: %v", err)
 				return
 			}
+			a.lastProbe = suggestion
 			a.syncNote = a.suggestionLine(suggestion)
 			logf("align", "%s", a.syncNote)
 		})

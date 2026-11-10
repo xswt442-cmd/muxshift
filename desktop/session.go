@@ -78,6 +78,16 @@ type appState struct {
 	// what says a player dropped from the view is no longer being drawn.
 	frames chan struct{}
 
+	// frameCount counts the same frames without losing any: the channel drops a
+	// token when the buffer is full, the counter does not.
+	frameCount int
+
+	// probeRunning and lastProbe describe the one alignment comparison that may
+	// be in flight: the button refuses a second one, and a scenario reads the
+	// finished suggestion here instead of parsing the status line.
+	probeRunning bool
+	lastProbe    alignSuggestion
+
 	// pending holds players that were removed while no other player was alive.
 	// See close for why they cannot be released at that moment.
 	pendingMu sync.Mutex
@@ -518,12 +528,20 @@ func (a *appState) waitFrames(n int) {
 }
 
 // signalFrame records that the window built a frame, so a close that just
-// dropped a player can wait for the view to stop drawing it.
+// dropped a player can wait for the view to stop drawing it. The counter next to
+// it lets a scenario prove the window kept drawing while a probe ran.
 func (a *appState) signalFrame() {
+	a.frameCount++
 	select {
 	case a.frames <- struct{}{}:
 	default:
 	}
+}
+
+// framesBuilt reports how many frames the window has drawn. It is read on the UI
+// thread, where the counter is written.
+func (a *appState) framesBuilt() int {
+	return a.frameCount
 }
 
 // release closes every player and the session.

@@ -8,6 +8,84 @@ import (
 	"github.com/xswt442-cmd/muxshift/core"
 )
 
+// runAlignAsync proves two things at once: the probe runs off the UI thread, so
+// the window keeps drawing while it decodes, and a change made to the session
+// while it runs comes back as an expired suggestion instead of being folded in.
+func runAlignAsync(window *mygo.Window, a *appState, dir string) {
+	go func() {
+		wait := time.Sleep
+		wait(3 * time.Second)
+		step(window, a, dir, "async", "", "second source shown once", func(a *appState) {
+			if err := a.showVideo(1); err != nil {
+				a.lastErr = err
+			}
+		})
+		wait(3 * time.Second)
+
+		step(window, a, dir, "async", "", "first picture with second sound", func(a *appState) {
+			if err := a.showVideo(0); err != nil {
+				a.lastErr = err
+			}
+			if err := a.hearAudio(1, 1); err != nil {
+				a.lastErr = err
+			}
+			logGroup("async", "play", a.playAll())
+		})
+		wait(2 * time.Second)
+
+		// The group keeps playing on purpose: a paused window does not repaint in
+		// this MyGo build, and the point here is that the window keeps drawing
+		// while the comparison runs.
+		step(window, a, dir, "async", "", "anchor the event clock", func(a *appState) {
+			logGroup("async", "pause", a.pauseAll())
+			if err := a.anchor(0); err != nil {
+				a.lastErr = err
+			}
+			logGroup("async", "play", a.playAll())
+		})
+		wait(700 * time.Millisecond)
+
+		var framesBefore int
+		step(window, a, dir, "async", "", "start the probe off the UI thread", func(a *appState) {
+			framesBefore = a.framesBuilt()
+			a.probeAsync(0, 1)
+			logf("async", "probe started, frames so far %d", framesBefore)
+		})
+
+		// The decode takes a few hundred milliseconds, so this lands inside it.
+		wait(150 * time.Millisecond)
+		step(window, a, dir, "async", "", "the user moves the target while the probe runs", func(a *appState) {
+			logf("async", "frames drawn while the probe ran: %d", a.framesBuilt()-framesBefore)
+			logf("async", "positions while the probe ran [%s]", strings.Join(a.positions(), " | "))
+			a.nudgeAndRecord(1, -100*time.Millisecond)
+		})
+
+		// The result arrives on the UI thread; the running flag says when.
+		for done := time.Now().Add(30 * time.Second); time.Now().Before(done); {
+			var running bool
+			mygoRunOnMain(func() { running = a.probeRunning })
+			if !running {
+				break
+			}
+			wait(100 * time.Millisecond)
+		}
+
+		step(window, a, dir, "async", "1-async-expired.png", "what the window kept doing", func(a *appState) {
+			logf("async", "frames drawn in total while the probe ran: %d", a.framesBuilt()-framesBefore)
+			logf("async", "positions after the probe [%s]", strings.Join(a.positions(), " | "))
+			logf("async", "the finished probe says: %s", a.suggestionLine(a.lastProbe))
+			if a.lastProbe.Expired == "" {
+				logf("async", "the result did not report the change made after the probe started")
+			}
+		})
+
+		mygoRunOnMain(func() {
+			a.release()
+			mygo.App.Quit()
+		})
+	}()
+}
+
 // runAlignProbe shows what the alignment probe proposes and what it refuses,
 // then proves that neither answer touched the timeline or the players.
 func runAlignProbe(window *mygo.Window, a *appState, dir string) {

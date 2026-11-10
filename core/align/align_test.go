@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math"
 	"math/rand"
+	"strings"
 	"testing"
 	"time"
 
@@ -108,6 +109,44 @@ func TestCompareRefusesCandidateAtWindowEdge(t *testing.T) {
 	}
 	if result.Reason == "" {
 		t.Fatal("a refusal must say why")
+	}
+}
+
+func TestCompareReportsOverlapOfUnequalWindows(t *testing.T) {
+	// A short copy of the start of a longer recording: the two windows share only
+	// the shorter one, so that is what the result has to report.
+	base := samples(40, 11)
+	short := base[:15*testRate]
+	result, err := Compare(envelope(t, base), envelope(t, short), Limits{MaxLag: time.Second})
+	if err != nil {
+		t.Fatalf("compare: %v", err)
+	}
+	if want := 15 * time.Second; result.Overlap != want {
+		t.Fatalf("overlap = %s, want %s", result.Overlap, want)
+	}
+	if result.Offset != 0 {
+		t.Fatalf("offset = %s, want 0", result.Offset)
+	}
+	if !result.Accepted {
+		t.Fatalf("the same content was refused: %s", result.Reason)
+	}
+}
+
+func TestCompareRefusesShortOverlap(t *testing.T) {
+	// The candidate is real, but only six seconds of the windows would line up:
+	// that is too little to stand for an event, so it must be refused with the
+	// matched length rather than guessed.
+	base := samples(20, 13)
+	short := base[:6*testRate]
+	result, err := Compare(envelope(t, base), envelope(t, short), Limits{MaxLag: 2 * time.Second})
+	if err != nil {
+		t.Fatalf("compare: %v", err)
+	}
+	if result.Accepted {
+		t.Fatalf("six seconds of overlap were accepted as %s", result.Offset)
+	}
+	if !strings.Contains(result.Reason, "overlap") {
+		t.Fatalf("the refusal should name the overlap, got %q", result.Reason)
 	}
 }
 

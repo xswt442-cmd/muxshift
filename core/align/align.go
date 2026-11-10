@@ -88,11 +88,15 @@ type Limits struct {
 	// MinConfidence is how far the best candidate must stand above the
 	// runner-up, as a fraction of the peak.
 	MinConfidence float64
+	// MinOverlap is the shortest span the two windows must still share at the
+	// chosen offset. Two windows of different lengths are compared over the part
+	// they share, so this is what a proposal may rest on.
+	MinOverlap time.Duration
 }
 
 // DefaultLimits are the values the offline probe uses.
 func DefaultLimits() Limits {
-	return Limits{MaxLag: 60 * time.Second, MinPeak: 0.25, MinConfidence: 0.5}
+	return Limits{MaxLag: 60 * time.Second, MinPeak: 0.25, MinConfidence: 0.5, MinOverlap: 10 * time.Second}
 }
 
 func (l Limits) withDefaults() Limits {
@@ -104,6 +108,9 @@ func (l Limits) withDefaults() Limits {
 	}
 	if l.MinConfidence <= 0 {
 		l.MinConfidence = DefaultLimits().MinConfidence
+	}
+	if l.MinOverlap <= 0 {
+		l.MinOverlap = DefaultLimits().MinOverlap
 	}
 	return l
 }
@@ -138,6 +145,7 @@ func Compare(a, b Envelope, limits Limits) (Result, error) {
 
 	best := -math.MaxFloat64
 	bestLag := 0
+	bestOverlap := 0
 	maxLag := int(limits.MaxLag / a.Hop)
 	shortest := len(a.Values)
 	if len(b.Values) < shortest {
@@ -161,7 +169,7 @@ func Compare(a, b Envelope, limits Limits) (Result, error) {
 		scores = append(scores, score)
 		lags = append(lags, lag)
 		if score > best {
-			best, bestLag = score, lag
+			best, bestLag, bestOverlap = score, lag, overlap
 		}
 	}
 	if best == -math.MaxFloat64 {
@@ -193,14 +201,16 @@ func Compare(a, b Envelope, limits Limits) (Result, error) {
 	if best > 0 {
 		confidence = 1 - runnerUp/best
 	}
-	overlapFrames := len(a.Values) - abs(bestLag)
+	// The overlap is the part of the two windows that actually takes part in the
+	// comparison at the chosen lag: with windows of different lengths it is the
+	// shorter one, and a large lag removes that many frames from the end.
 	result := Result{
 		Offset:       time.Duration(bestLag) * a.Hop,
 		Peak:         best,
 		RunnerUp:     runnerUp,
 		RunnerOffset: time.Duration(runnerLag) * a.Hop,
 		Confidence:   confidence,
-		Overlap:      time.Duration(overlapFrames) * a.Hop,
+		Overlap:      time.Duration(bestOverlap) * a.Hop,
 		Accepted:     true,
 	}
 	switch {
@@ -213,6 +223,10 @@ func Compare(a, b Envelope, limits Limits) (Result, error) {
 	case abs(bestLag) == maxLag:
 		result.Accepted = false
 		result.Reason = fmt.Sprintf("the candidate sits at the edge of the %s search window", limits.MaxLag)
+	case result.Overlap < limits.MinOverlap:
+		result.Accepted = false
+		result.Reason = fmt.Sprintf("only %s of the windows overlap at this offset, below %s",
+			result.Overlap.Round(10*time.Millisecond), limits.MinOverlap)
 	default:
 		result.Reason = "a single candidate stands out"
 	}

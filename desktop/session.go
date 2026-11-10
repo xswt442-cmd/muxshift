@@ -569,9 +569,9 @@ func (a *appState) sceneLabel() string {
 		video = "none"
 	}
 	if len(audio) == 0 {
-		return "video " + shortURI(video) + " 路 silent"
+		return "video " + shortURI(video) + " · silent"
 	}
-	return "video " + shortURI(video) + " 路 audio " + strings.Join(audio, " + ")
+	return "video " + shortURI(video) + " · audio " + strings.Join(audio, " + ")
 }
 
 // containsTrack reports whether the track is in the list.

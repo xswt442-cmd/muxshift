@@ -22,6 +22,20 @@ func runAlignProbe(window *mygo.Window, a *appState, dir string) {
 			}
 		})
 		wait(3 * time.Second)
+
+		// The probe is read-only, so this one runs before any sync command has
+		// created a group: a suggestion may not build one either.
+		step(window, a, dir, "align", "", "probe before any sync command", func(a *appState) {
+			logf("align", "groups before [%s]", a.groupState())
+			before := a.sync.timeline.Shifts()
+			a.probeAndReport(0, 1)
+			logf("align", "groups after [%s] shifts [%s]", a.groupState(), describeShifts(a.sync.timeline.Shifts()))
+			if !sameShifts(before, a.sync.timeline.Shifts()) {
+				logf("align", "the probe changed the timeline offsets")
+			}
+		})
+		wait(500 * time.Millisecond)
+
 		step(window, a, dir, "align", "", "first picture with second sound", func(a *appState) {
 			if err := a.showVideo(0); err != nil {
 				a.lastErr = err

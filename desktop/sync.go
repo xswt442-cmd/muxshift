@@ -202,6 +202,21 @@ func (a *appState) syncMembers() (core.SyncGroup, error) {
 	return group, nil
 }
 
+// existingGroup reports the session sync group without creating one. The
+// alignment probe reads through this: showing a suggestion must not change the
+// session, and building the group belongs to the first sync command instead.
+func (a *appState) existingGroup() (core.SyncGroup, bool) {
+	if a.sync.group == "" {
+		return core.SyncGroup{}, false
+	}
+	for _, group := range a.session.SyncGroups() {
+		if group.ID == a.sync.group {
+			return group, true
+		}
+	}
+	return core.SyncGroup{}, false
+}
+
 // name labels a source in group messages so a failure names the source it came
 // from instead of only the error text.
 func (a *appState) name(it *item) string {

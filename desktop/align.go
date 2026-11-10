@@ -115,20 +115,45 @@ func (a *appState) windowOnMain(index int) (alignWindow, error) {
 }
 
 // finishSuggestion fills in the parts of a proposal that describe the current
-// session. It only reads.
+// session. It only reads, and it finds the source by identity: a source that was
+// reordered since the probe must not be confused with another one.
 func (a *appState) finishSuggestion(s *alignSuggestion) {
+	track := a.trackOfAudio(a.itemOf(s.Target.Source))
 	if s.Result.Accepted {
-		if shift, ok := a.sync.timeline.Shift(a.alignTrack(s.Target.Index)); ok {
+		if shift, ok := a.sync.timeline.Shift(track); ok {
 			s.Current = shift.Offset
 		}
 		s.Delta = s.CoreOffset - s.Current
 	}
-	if group, err := a.syncMembers(); err == nil {
+	if group, ok := a.existingGroup(); ok {
 		s.Group = group.ID
-		if shift, ok := a.sync.timeline.Shift(a.alignTrack(s.Target.Index)); ok {
+		if shift, ok := a.sync.timeline.Shift(track); ok {
 			s.GroupShift = shift.Offset
 		}
 	}
+}
+
+// itemOf finds the source a probe was computed from, by identity rather than by
+// position, and returns nil when it is gone.
+func (a *appState) itemOf(id core.SourceID) *item {
+	for _, it := range a.items {
+		if it.source.ID == id {
+			return it
+		}
+	}
+	return nil
+}
+
+// trackOfAudio names the track whose shift a probe describes: the audio track
+// when there is one, because that is what was compared.
+func (a *appState) trackOfAudio(it *item) core.TrackID {
+	if it == nil {
+		return ""
+	}
+	if it.audio != "" {
+		return it.audio
+	}
+	return it.video
 }
 
 // alignWindowAt captures the media window of one source. The generation is part
@@ -144,9 +169,11 @@ func (a *appState) alignWindowAt(index int) (alignWindow, error) {
 	if err := it.player.Err(); err != nil {
 		return alignWindow{}, fmt.Errorf("%s is not playable: %w", a.name(it), err)
 	}
-	length, err := mediaLength(it.uri)
-	if err != nil {
-		return alignWindow{}, err
+	// The length comes from the player that already decoded the stream, so the
+	// probe does not need a second tool just to ask how long the media is.
+	length := it.player.Duration()
+	if length <= 0 {
+		return alignWindow{}, fmt.Errorf("%s has no readable duration (a live stream cannot be compared yet)", shortURI(it.uri))
 	}
 	if length > probeLength {
 		length = probeLength
@@ -159,24 +186,6 @@ func (a *appState) alignWindowAt(index int) (alignWindow, error) {
 		Start:      0,
 		Length:     length,
 	}, nil
-}
-
-// mediaLength asks ffprobe for the duration of the media behind a URI. Live
-// streams have no duration and are reported as unsupported instead of guessed.
-func mediaLength(uri string) (time.Duration, error) {
-	command := exec.Command("ffprobe", "-v", "error", "-show_entries", "format=duration",
-		"-of", "default=noprint_wrappers=1:nokey=1", uri)
-	var out bytes.Buffer
-	command.Stdout = &out
-	if err := command.Run(); err != nil {
-		return 0, fmt.Errorf("cannot read the length of %s: %w", uri, err)
-	}
-	text := strings.TrimSpace(out.String())
-	seconds, err := strconv.ParseFloat(text, 64)
-	if err != nil || seconds <= 0 {
-		return 0, fmt.Errorf("%s has no readable duration (a live stream cannot be compared yet)", uri)
-	}
-	return time.Duration(seconds * float64(time.Second)), nil
 }
 
 // decodeEnvelope turns a slice of one source into the envelope the matcher uses.
@@ -223,16 +232,17 @@ func (a *appState) alignTrack(index int) core.TrackID {
 // describes the current session. Nothing here changes state.
 func (a *appState) fresh(s alignSuggestion) string {
 	for _, window := range []alignWindow{s.Reference, s.Target} {
-		it, err := a.at(window.Index)
-		if err != nil {
+		it := a.itemOf(window.Source)
+		if it == nil {
 			return fmt.Sprintf("source %d is gone", window.Index+1)
 		}
-		if it.source.ID != window.Source || it.generation != window.Generation {
+		if it.generation != window.Generation {
 			return fmt.Sprintf("%s was reopened since the probe", a.name(it))
 		}
 	}
 	if s.Result.Accepted {
-		current, ok := a.sync.timeline.Shift(a.alignTrack(s.Target.Index))
+		track := a.trackOfAudio(a.itemOf(s.Target.Source))
+		current, ok := a.sync.timeline.Shift(track)
 		switch {
 		case !ok && s.Current != 0:
 			return "the offset of the target changed since the probe"
@@ -240,10 +250,12 @@ func (a *appState) fresh(s alignSuggestion) string {
 			return "the offset of the target changed since the probe"
 		}
 	}
-	if group, err := a.syncMembers(); err == nil {
+	if group, ok := a.existingGroup(); ok {
 		if s.Group != "" && group.ID != s.Group {
 			return "the sync group changed since the probe"
 		}
+	} else if s.Group != "" {
+		return "the sync group is gone since the probe"
 	}
 	return ""
 }

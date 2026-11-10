@@ -394,39 +394,43 @@ func (a *appState) view(c *ui.Context) {
 			}
 			ui.Text(c, a.sceneLabel()).FontFeatures("tnum")
 		})
-		ui.Row(c).Gap(8).Padding(12).AlignItems(ui.Center).Children(func() {
-			for i, it := range a.items {
-				index := i
-				if it.video != "" {
+		for i, it := range a.items {
+			index := i
+			item := it
+			// One row per source: every source carries up to seven buttons, and a
+			// single row for all of them ran past the right edge of the window,
+			// which hid the probe button for the third source entirely.
+			ui.Row(c).Gap(8).Padding(12).AlignItems(ui.Center).Children(func() {
+				if item.video != "" {
 					if ui.Button(c.Key(fmt.Sprintf("show-%d", i)), fmt.Sprintf("Show %d", i+1)).Width(88).Clicked() {
 						if err := a.showVideo(index); err != nil {
 							a.lastErr = err
 						}
 					}
 				}
-				if it.audio != "" {
+				if item.audio != "" {
 					if ui.Button(c.Key(fmt.Sprintf("hear-%d", i)), fmt.Sprintf("Hear %d", i+1)).Width(88).Clicked() {
-						if err := a.hearAudio(index, it.volume); err != nil {
+						if err := a.hearAudio(index, item.volume); err != nil {
 							a.lastErr = err
 						}
 					}
-					if ui.Button(c.Key(fmt.Sprintf("allow-%d", i)), allowLabel(a, it)).Width(104).Clicked() {
+					if ui.Button(c.Key(fmt.Sprintf("allow-%d", i)), allowLabel(a, item)).Width(104).Clicked() {
 						if err := a.allowAudio(index); err != nil {
 							a.lastErr = err
 						}
 					}
 					if ui.Button(c.Key(fmt.Sprintf("vol-down-%d", i)), "Vol -").Width(64).Clicked() {
-						if err := a.setVolume(index, max(0, it.volume-0.25)); err != nil {
+						if err := a.setVolume(index, max(0, item.volume-0.25)); err != nil {
 							a.lastErr = err
 						}
 					}
 					if ui.Button(c.Key(fmt.Sprintf("vol-up-%d", i)), "Vol +").Width(64).Clicked() {
-						if err := a.setVolume(index, min(1, it.volume+0.25)); err != nil {
+						if err := a.setVolume(index, min(1, item.volume+0.25)); err != nil {
 							a.lastErr = err
 						}
 					}
 				}
-				if it.video != "" || it.audio != "" {
+				if item.video != "" || item.audio != "" {
 					// A tenth of a second is the step a person can still see on
 					// a timecode; the report after each press says where the
 					// player actually landed.
@@ -444,7 +448,12 @@ func (a *appState) view(c *ui.Context) {
 						}
 					}
 				}
-			}
+			})
+		}
+		// The status text is its own row: with one row per source the buttons
+		// already fill the width, and a status line inside that row was pushed
+		// off the window exactly when there was something to report.
+		ui.Row(c).Gap(8).Padding(12).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, a.status()).FontFeatures("tnum")
 		})
 	})
@@ -470,9 +479,9 @@ func (a *appState) status() string {
 	if len(parts) == 0 {
 		return "no media"
 	}
-	line := strings.Join(parts, "   ") + "   路   " + a.sceneLabel() + "   路   " + a.syncLabel()
+	line := strings.Join(parts, "   ") + "   ·   " + a.sceneLabel() + "   ·   " + a.syncLabel()
 	if a.syncNote != "" {
-		line += "   路   " + a.syncNote
+		line += "   ·   " + a.syncNote
 	}
 	return line
 }
@@ -572,6 +581,11 @@ func main() {
 		if _, ok := scenarios[*scenario]; !ok {
 			log.Fatalf("muxshift-desktop: unknown scenario %q, want %s", *scenario, scenarioNames())
 		}
+		// A missing output directory used to turn every capture into a logged
+		// failure, so the check would look done while it had written nothing.
+		if err := os.MkdirAll(*dir, 0o755); err != nil {
+			log.Fatalf("muxshift-desktop: cannot create %s: %v", *dir, err)
+		}
 	}
 
 	s, err := newAppState(media)
@@ -579,7 +593,7 @@ func main() {
 		log.Fatalf("muxshift-desktop: %v", err)
 	}
 	for i, it := range s.items {
-		log.Printf("source %d: %s 路 video=%q audio=%q open=%v", i+1, it.uri, it.video, it.audio, errorString(it.openErr))
+		log.Printf("source %d: %s · video=%q audio=%q open=%v", i+1, it.uri, it.video, it.audio, errorString(it.openErr))
 	}
 	log.Printf("scene %s: %s", s.scene, s.sceneLabel())
 	// The shared event clock is wall time while the group plays and stands
@@ -614,10 +628,18 @@ func main() {
 		if replayMode {
 			title = "MuxShift replay (recording)"
 		}
+		// A scenario is read from its capture as well as its log, and the status
+		// text sits below the buttons, so the scripted runs get a window tall
+		// enough for one row per source plus the status line instead of a capture
+		// that cuts the answer off.
+		height := 600
+		if *scenario != "" {
+			height = 700 + 70*len(media)
+		}
 		window := mygo.NewWindow(mygo.WindowOptions{
 			Title:   title,
 			Width:   960,
-			Height:  600,
+			Height:  height,
 			Content: ui.View(s.view),
 		})
 		window.OnClose(func(*mygo.CloseEvent) { s.release() })

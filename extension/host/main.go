@@ -32,7 +32,8 @@ const callerOrigin = "chrome-extension://agacmebmmcbkclbblmekgdkfcehehccl/"
 const maxMessage = 1 << 20
 
 // bridgeFile mirrors the file the web service leaves behind: where it listens
-// and which token it expects.
+// and the token the host alone uses for imports. The page token is a different
+// value, so a page that holds its cookie still cannot import anything.
 type bridgeFile struct {
 	URL   string `json:"url"`
 	Token string `json:"token"`
@@ -92,7 +93,7 @@ func importSource(address string) response {
 		return response{Reason: err.Error()}
 	}
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-MuxShift-Token", bridge.Token)
+	request.Header.Set("X-MuxShift-Bridge", bridge.Token)
 	client := &http.Client{Timeout: 15 * time.Second}
 	reply, err := client.Do(request)
 	if err != nil {

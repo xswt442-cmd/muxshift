@@ -378,6 +378,15 @@ func main() {
 		}
 		tokenValue = hex.EncodeToString(buffer)
 	}
+	// The bridge token is separate from the page token: it only ever lives in
+	// the file the native host reads, it is never handed to a page, and the
+	// import endpoint accepts it only as a request header, so a page cannot
+	// import by reusing the cookie it already holds.
+	bridgeBuffer := make([]byte, 24)
+	if _, err := rand.Read(bridgeBuffer); err != nil {
+		log.Fatalf("muxshift-web: %v", err)
+	}
+	bridgeToken := hex.EncodeToString(bridgeBuffer)
 
 	listener, err := net.Listen("tcp", *addr)
 	if err != nil {
@@ -440,10 +449,10 @@ func main() {
 		writeJSON(w, snapshot)
 	})
 	// /api/import lets the local bridge add one address the user chose in the
-	// browser extension. The token is the same one the page uses; the browser
-	// extension reaches it through a native host, never from a web page.
+	// browser extension. It takes the bridge token, which only the file under
+	// LOCALAPPDATA holds; the cookie a page uses never authorizes an import.
 	mux.HandleFunc("/api/import", func(w http.ResponseWriter, r *http.Request) {
-		if !authorized(r, tokenValue) {
+		if !authorizedBridge(r, bridgeToken) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
@@ -465,11 +474,11 @@ func main() {
 		}
 		added, err := state.add(request.URL)
 		if err != nil {
-			log.Printf("web: import %q refused: %v", request.URL, err)
+			log.Printf("web: import %q refused: %v", redactAddress(request.URL), err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		log.Printf("web: imported %q as %s", added.URI, added.ID)
+		log.Printf("web: imported %q as %s", redactAddress(added.URI), added.ID)
 		writeJSON(w, added)
 	})
 	mux.HandleFunc("/media/", func(w http.ResponseWriter, r *http.Request) {
@@ -499,7 +508,7 @@ func main() {
 		}
 	}
 	if bridgePath != "" {
-		bridge := bridgeFile{URL: "http://" + listener.Addr().String(), Token: tokenValue}
+		bridge := bridgeFile{URL: "http://" + listener.Addr().String(), Token: bridgeToken}
 		encoded, err := json.MarshalIndent(bridge, "", "  ")
 		if err != nil {
 			log.Fatalf("muxshift-web: %v", err)
@@ -531,6 +540,30 @@ func authorized(r *http.Request, token string) bool {
 		}
 	}
 	return subtle.ConstantTimeCompare([]byte(got), []byte(token)) == 1
+}
+
+// authorizedBridge checks the credential the native host sends. It is a header
+// on purpose: the bridge token is never put in a URL, so it cannot appear in a
+// log line or the address bar, and a page cannot reach this endpoint with the
+// cookie it holds.
+func authorizedBridge(r *http.Request, token string) bool {
+	got := r.Header.Get("X-MuxShift-Bridge")
+	return got != "" && subtle.ConstantTimeCompare([]byte(got), []byte(token)) == 1
+}
+
+// redactAddress keeps a media address out of the log in anything but its
+// scheme, host, and path: a signed address carries its credential in the query,
+// so logging the whole URL would leak it.
+func redactAddress(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme == "" {
+		return "(unparsable address)"
+	}
+	parsed.User = nil
+	parsed.RawQuery = ""
+	parsed.ForceQuery = false
+	parsed.Fragment = ""
+	return parsed.String()
 }
 
 // guardMutation rejects a state change that did not come from this page. A

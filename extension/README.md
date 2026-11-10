@@ -10,8 +10,10 @@ clicks, and it never copies cookies, request headers, or keys.
   `video`, `audio`, and `source` elements, plus media-looking resource entries.
 - Choosing one address and pressing **Import the selected address** sends
   `{type: "import", url: ...}` to the native host `com.muxshift.bridge`.
-- The host forwards the address to `POST /api/import` on the running session
-  using the token from the bridge file, so the extension never holds the token.
+- The host forwards the address to `POST /api/import` on the running session,
+  using the bridge token from the bridge file as the `X-MuxShift-Bridge` header,
+  so neither the extension nor any page ever holds it. The token a page uses for
+  its own session is a different value, and it never authorizes an import.
 
 The extension does not capture a tab's stream. A capture produces a live
 `MediaStream` that only the browser can decode, and the local session takes
@@ -22,6 +24,13 @@ playable addresses and files; the popup says so instead of pretending.
 - `blob:` and `mediasource:` addresses belong to the page. They are listed with
   a note and refused, because nothing outside the page can read them.
 - An address with credentials in it is refused by the host and by the session.
+  The session's log keeps only the scheme, host, and path of an imported
+  address, because a signed address carries its credential in the query.
+- The host checks the caller origin in its first argument against the ID in
+  `allowed_origins`. That is what the browser enforces between an extension and
+  its host; it is not authentication against another process on this machine
+  that decides to start the host itself. The bridge token is what keeps such a
+  process from importing anything the user did not choose.
 - A cross-origin address is played by the page under the normal CORS rules of
   that origin. When the origin does not allow the page to read its segments,
   playback fails and the page reports the hls.js error; the extension does not

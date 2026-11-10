@@ -46,7 +46,7 @@ go run ./web -media-root testplace/media \
   -media /media/hls-vod/index.m3u8 -media /media/hls-sync-a/index.m3u8
 ```
 
-它打印 `http://127.0.0.1:<端口>/?token=<令牌>`。打开这个地址后，页面通过 `GET /api/session` 读取会话、通过 `POST /api/scene` 切换显示与声音；令牌只在引导地址里出现一次，随后由 HttpOnly cookie 承担，页面会立刻把它从地址栏移除，本机 Host 则用 `X-MuxShift-Token` 头。改场景还要求 JSON 请求体与和请求主机一致的 `Origin`，所以别的页面即使带着浏览器已有的 cookie 也驱动不了会话；每个请求还必须指向回环主机，`-addr` 在启动时就要求是回环地址。媒体文件由同一个进程在 `/media/` 下提供，用 `os.OpenRoot` 打开，`..`、符号链接或目录联接都逃不出 `-media-root`；一次场景改动要么整体生效要么整体拒绝，非法音量不会留下半改的状态。未带令牌的请求返回 403，响应也不带 CORS 头。浏览器只允许用户点击之后出声，因此所有源一开始都是静音的。
+它打印 `http://127.0.0.1:<端口>/?token=<令牌>`。打开这个地址后，页面通过 `GET /api/session` 读取会话、通过 `POST /api/scene` 切换显示与声音；令牌只在引导地址里出现一次，随后由 HttpOnly cookie 承担，页面会立刻把它从地址栏移除，本机 Host 则用 `X-MuxShift-Token` 头，而导入端点只认另一个只存在于本机文件里的桥接令牌（`X-MuxShift-Bridge`），因此页面即使带着自己的 cookie 也导入不了任何东西。改场景还要求 JSON 请求体与和请求主机一致的 `Origin`，所以别的页面即使带着浏览器已有的 cookie 也驱动不了会话；每个请求还必须指向回环主机，`-addr` 在启动时就要求是回环地址。媒体文件由同一个进程在 `/media/` 下提供，用 `os.OpenRoot` 打开，`..`、符号链接或目录联接都逃不出 `-media-root`；一次场景改动要么整体生效要么整体拒绝，非法音量不会留下半改的状态。未带令牌的请求返回 403，响应也不带 CORS 头。浏览器只允许用户点击之后出声，因此所有源一开始都是静音的。
 
 Web 端只播放一路 HLS 或 MP4 到各自的媒体元素，不参与跨源对轴，也不保留历史窗口；Seek 只落在浏览器已缓冲的范围内。`hls.js` 1.7.4 的 light 构建与 Apache-2.0 许可证放在 `web/vendor/`。
 
@@ -56,7 +56,7 @@ Web 端只播放一路 HLS 或 MP4 到各自的媒体元素，不参与跨源对
 go build -o testplace/bin/muxshift-host.exe ./extension/host
 ```
 
-把 `extension/` 以开发者模式加载进 Edge，按[扩展说明](extension/README.md)登记 `com.muxshift.bridge` 这个本机 Host，再启动 Web 会话。会话会把地址与令牌写进 `%LOCALAPPDATA%\MuxShift\bridge.json`（`-token-file` 可改），Host 用该文件里的令牌调用 `POST /api/import`，扩展本身拿不到令牌。扩展只列出页面已经加载的 `http(s)` 地址：`blob:` 地址属于页面自身，会被拒绝并说明原因；跨源地址按目标站点的 CORS 规则播放，不做代理；受保护媒体一律不碰。`activeTab`、`scripting`、`nativeMessaging` 是全部权限，没有主机权限，因此不点击就读不到任何页面。页面每两秒读取一次会话，导入的源无需刷新即可出现。
+把 `extension/` 以开发者模式加载进 Edge，按[扩展说明](extension/README.md)登记 `com.muxshift.bridge` 这个本机 Host，再启动 Web 会话。会话会把地址与桥接令牌写进 `%LOCALAPPDATA%\MuxShift\bridge.json`（`-token-file` 可改，权限 0600），Host 用该令牌以 `X-MuxShift-Bridge` 头调用 `POST /api/import`，扩展本身拿不到令牌；导入日志只写地址的 scheme、host 与路径，带签名参数的地址不会把凭据写进日志。扩展只列出页面已经加载的 `http(s)` 地址：`blob:` 地址属于页面自身，会被拒绝并说明原因；跨源地址按目标站点的 CORS 规则播放，不做代理；受保护媒体一律不碰。`activeTab`、`scripting`、`nativeMessaging` 是全部权限，没有主机权限，因此不点击就读不到任何页面。页面每两秒读取一次会话，导入的源无需刷新即可出现。
 
 ## 许可证
 

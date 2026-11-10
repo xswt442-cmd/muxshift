@@ -75,7 +75,7 @@
 
 `extension/` 是一个 Manifest V3 扩展，权限只有 `activeTab`、`scripting` 与 `nativeMessaging`，没有主机权限，因此用户不点击就读不到任何页面。用户点击后，后台脚本在被激活的标签页里执行一次只读扫描：收集 `video`、`audio`、`source` 的 `src` 与 `currentSrc`，以及看起来像媒体的资源条目；`blob:` 与 `mediasource:` 地址属于页面自身，会被拒绝并说明「页面自己持有分片、没有可导入地址」，带凭据的地址直接拒绝。
 
-用户确认其中一个地址后，扩展用 `chrome.runtime.sendNativeMessage` 调用本机 Host `com.muxshift.bridge`；Native Messaging 只传这条控制消息，不传媒体。Host 是 `extension/host/` 里的 Go 程序，它首先核对第一个参数里的调用方 origin 必须等于 `manifest.json` 中固定 `key` 推出的扩展 ID（`chrome-extension://agacmebmmcbkblmekgdkfcehehccl/`），然后读取会话写下的 `%LOCALAPPDATA%\MuxShift\bridge.json`（地址与令牌，权限 0600），用该令牌调用 `POST /api/import`。令牌始终留在本机文件与 Host 之间，扩展拿不到，页面也读不到。
+用户确认其中一个地址后，扩展用 `chrome.runtime.sendNativeMessage` 调用本机 Host `com.muxshift.bridge`；Native Messaging 只传这条控制消息，不传媒体。Host 是 `extension/host/` 里的 Go 程序，它首先核对第一个参数里的调用方 origin 必须等于 `manifest.json` 中固定 `key` 推出的扩展 ID（`chrome-extension://agacmebmmcbkblmekgdkfcehehccl/`），然后读取会话写下的 `%LOCALAPPDATA%\MuxShift\bridge.json`（地址与桥接令牌，权限 0600），用该令牌以 `X-MuxShift-Bridge` 头调用 `POST /api/import`。桥接令牌与页面令牌是两个不同的值：前者只存在于本机文件与 Host 之间，后者只到页面，因此页面即使带着自己的 cookie 也导入不了任何东西；日志只记录导入地址的 scheme、host 与路径，带签名参数的地址不会把凭据写进日志。需要说明的是，`allowed_origins` 与第一个参数里的 origin 是浏览器在扩展与 Host 之间执行的约束，不是对本机其他进程的强身份认证——那类进程可以自己启动 Host，真正拦住它的是它拿不到的桥接令牌。
 
 会话对导入地址做同样严格的检查：只接受 `http(s)`、必须有主机、拒绝带凭据的 URL、拒绝重复登记；然后走与其它源相同的 `AddSource` 与 `AddTrack`，所以扩展无法直接改时间轴或碰桌面端私有实现。页面每两秒读一次会话，导入的源无需刷新就出现；跨源地址按目标站点的 CORS 规则播放，本地服务不做代理，受保护媒体一律不碰。扩展不提供标签页采集：采集得到的是只有浏览器能解码的实时流，而本地会话接收的是可播放地址或文件，因此在弹窗里直接说明这一点而不是假装能捕获。
 

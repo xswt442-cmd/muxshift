@@ -132,6 +132,49 @@ func TestAuthorizedAcceptsOnlyTheToken(t *testing.T) {
 	}
 }
 
+// TestAuthorizedBridgeIgnoresPageCredentials checks that the credential a page
+// holds, in any of the forms the page may use, cannot reach the import endpoint:
+// only the header the native host sends is accepted.
+func TestAuthorizedBridgeIgnoresPageCredentials(t *testing.T) {
+	const page, bridge = "pagetoken", "bridgetoken"
+	cookie := httptest.NewRequest(http.MethodPost, "/api/import", nil)
+	cookie.AddCookie(&http.Cookie{Name: "muxshift_token", Value: page})
+	cookie.Header.Set("X-MuxShift-Token", page)
+	if authorizedBridge(cookie, bridge) {
+		t.Fatal("the page credential was accepted for an import")
+	}
+	query := httptest.NewRequest(http.MethodPost, "/api/import?token="+bridge, nil)
+	if authorizedBridge(query, bridge) {
+		t.Fatal("a query token was accepted for an import")
+	}
+	header := httptest.NewRequest(http.MethodPost, "/api/import", nil)
+	header.Header.Set("X-MuxShift-Bridge", bridge)
+	if !authorizedBridge(header, bridge) {
+		t.Fatal("the bridge header was refused")
+	}
+	wrong := httptest.NewRequest(http.MethodPost, "/api/import", nil)
+	wrong.Header.Set("X-MuxShift-Bridge", page)
+	if authorizedBridge(wrong, bridge) {
+		t.Fatal("a wrong bridge token was accepted")
+	}
+}
+
+// TestRedactAddressDropsQueryAndCredentials checks that a signed address is not
+// written to the log with the part that carries its credential.
+func TestRedactAddressDropsQueryAndCredentials(t *testing.T) {
+	cases := map[string]string{
+		"https://cdn.example.com/live/index.m3u8?token=secret&expires=1": "https://cdn.example.com/live/index.m3u8",
+		"https://user:pass@example.com/a/b.m3u8":                         "https://example.com/a/b.m3u8",
+		"http://127.0.0.1:8812/media/hls-vod/index.m3u8":                 "http://127.0.0.1:8812/media/hls-vod/index.m3u8",
+		"not an address": "(unparsable address)",
+	}
+	for raw, want := range cases {
+		if got := redactAddress(raw); got != want {
+			t.Fatalf("redactAddress(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}
+
 // TestListenAddressStaysOnLoopback checks that -addr cannot turn the session
 // into a network listener.
 func TestListenAddressStaysOnLoopback(t *testing.T) {

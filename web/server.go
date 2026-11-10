@@ -28,7 +28,7 @@ import (
 	"github.com/xswt442-cmd/muxshift/core"
 )
 
-//go:embed index.html app.js styles.css tokens.css vendor
+//go:embed index.html app.js styles.css tokens.css icon.svg icon.png vendor
 var assets embed.FS
 
 // mediaTypes maps the file endings the client plays to the type the browser

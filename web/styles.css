@@ -98,9 +98,14 @@ kbd {
   width: 26px;
   height: 26px;
   border-radius: 8px;
-  background: linear-gradient(140deg, var(--a), var(--b));
-  color: var(--bg);
-  font-size: 15px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.mark img {
+  display: block;
+  width: 22px;
+  height: 22px;
 }
 
 .name {

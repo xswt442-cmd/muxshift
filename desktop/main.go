@@ -351,6 +351,17 @@ func (a *appState) view(c *ui.Context) {
 		a.headerRow(c)
 		a.stage(c)
 		a.transportRow(c)
+		// P13.3: the web view sits below the native stage, in the same window,
+		// and reads the same session. It is absent unless a scenario asked for
+		// it, so an ordinary run draws the native interface alone.
+		if a.webView != nil {
+			ui.Box(c).Height(6)
+			ui.Column(c).Height(300).Children(func() {
+				// A web view takes its size from layout: the column gives it
+				// the room and the element stretches across it.
+				ui.WebView(c, a.webView).Grow(1)
+			})
+		}
 		for i, it := range a.items {
 			a.sourceCard(c, i, it)
 		}
@@ -533,18 +544,18 @@ func (a *appState) status() string {
 	for i, it := range a.items {
 		parts = append(parts, fmt.Sprintf("%d: %s", i+1, status(it)))
 	}
-	line := strings.Join(parts, "   璺?  ")
+	line := strings.Join(parts, "   ·  ")
 	if line == "" {
 		line = "no media"
 	}
 	if label := a.syncLabel(); label != "" {
-		line += "   璺?  " + label
+		line += "   ·  " + label
 	}
 	if a.syncNote != "" {
-		line += "   璺?  " + a.syncNote
+		line += "   ·  " + a.syncNote
 	}
 	if a.lastErr != nil {
-		line += "   璺?  error: " + a.lastErr.Error()
+		line += "   ·  error: " + a.lastErr.Error()
 	}
 	return line
 }
@@ -656,7 +667,7 @@ func main() {
 		log.Fatalf("muxshift-desktop: %v", err)
 	}
 	for i, it := range s.items {
-		log.Printf("source %d: %s 璺?video=%q audio=%q open=%v", i+1, it.uri, it.video, it.audio, errorString(it.openErr))
+		log.Printf("source %d: %s · video=%q audio=%q open=%v", i+1, it.uri, it.video, it.audio, errorString(it.openErr))
 	}
 	log.Printf("scene %s: %s", s.scene, s.sceneLabel())
 	// The shared event clock is wall time while the group plays and stands
@@ -686,6 +697,15 @@ func main() {
 		}()
 	}
 
+	// The P13.3 experiment registers its frontend before the app starts: the
+	// frontend is read when the run boots, not when the window appears, so a
+	// page registered inside WhenReady would never be served.
+	if *scenario == "webview" {
+		if _, err := startPanelFrontend(s); err != nil {
+			log.Fatalf("muxshift-desktop: panel frontend: %v", err)
+		}
+	}
+
 	mygo.App.WhenReady(func() {
 		title := "MuxShift"
 		if replayMode {
@@ -699,13 +719,27 @@ func main() {
 		if *scenario != "" {
 			height = 700 + 70*len(media)
 		}
+		if *scenario == "webview" {
+			// The native stage, one card per source and the page below them.
+			height = 1080 + 70*len(media)
+		}
 		window := mygo.NewWindow(mygo.WindowOptions{
 			Title:   title,
-			Width:   960,
+			Width:   1180,
 			Height:  height,
 			Content: ui.View(s.view),
 		})
 		installWindowIcon(window)
+		if *scenario == "webview" {
+			view, err := window.NewWebView(mygo.WebViewOptions{URL: "/panel.html"})
+			if err != nil {
+				log.Fatalf("muxshift-desktop: web view: %v", err)
+			}
+			s.webView = view
+			// The frames built before the view existed did not ask for it, so
+			// the window has to build one that does.
+			window.Invalidate()
+		}
 		window.OnClose(func(*mygo.CloseEvent) { s.release() })
 		if *shot != "" {
 			time.AfterFunc(*shotDelay, func() {

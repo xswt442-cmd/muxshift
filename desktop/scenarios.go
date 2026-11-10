@@ -45,6 +45,7 @@ var scenarios = map[string]scenario{
 	"align-probe":   runAlignProbe,
 	"align-async":   runAlignAsync,
 	"commands":      runCommands,
+	"webview":       runWebView,
 }
 
 // runReplayProbe narrows down why a replay player added mid-run does not start:

@@ -1,0 +1,35 @@
+/* Generated from design/tokens.json by tools/designtokens; edit the tokens, not this file.
+ */
+:root {
+  --bg: #0c0e12;
+  --bg-soft: #101319;
+  --panel: #151920;
+  --panel-2: #1b202a;
+  --line: #262c37;
+  --line-soft: #1e242e;
+  --text: #e9ecf2;
+  --text-dim: #99a2b1;
+  --dim: #6d7684;
+  --accent: #5aa9ff;
+  --sound: #ff79b0;
+  --good: #5fd39a;
+  --warn: #f5c451;
+  --bad: #ff7d7d;
+  --accent-soft: rgba(90, 169, 255, 0.16);
+  --sound-soft: rgba(255, 121, 176, 0.16);
+  --radius-sm: 9px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+  --space-xxl: 32px;
+  --text-micro: 11px;
+  --text-small: 12px;
+  --text-body: 13px;
+  --text-large: 15px;
+  --text-title: 22px;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Cascadia Mono', monospace;
+}

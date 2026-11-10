@@ -88,38 +88,53 @@ func runCommands(window *mygo.Window, a *appState, dir string) {
 		logf("commands", "this scenario needs two sources, got %d", len(a.items))
 		return
 	}
-	// The window loop is not running yet when a scenario starts; asking it for a
-	// frame before it draws interrupts the picture this scenario is about.
-	time.Sleep(2 * time.Second)
-	first := a.items[0]
-	second := a.items[1]
+	// A scenario runs on the UI goroutine, so anything slow has to move off it:
+	// sleeping here stops the window from drawing the very picture this
+	// scenario is about, and the players then report no picture at all.
+	go func() {
+		time.Sleep(2 * time.Second)
+		first := a.items[0]
+		second := a.items[1]
 
-	run := func(cmd command) commandResult {
-		var result commandResult
-		mygoRunOnMain(func() { result = a.runCommand(cmd) })
-		logf("commands", "command: %s", result.String())
-		logf("commands", "snapshot: %s", snapshotLine(a.readSnapshotOnMain()))
-		return result
-	}
+		run := func(cmd command) commandResult {
+			var result commandResult
+			mygoRunOnMain(func() { result = a.runCommand(cmd) })
+			logf("commands", "command: %s", result.String())
+			logf("commands", "snapshot: %s", snapshotLine(a.readSnapshotOnMain()))
+			return result
+		}
 
-	logf("commands", "start: %s", snapshotLine(a.readSnapshotOnMain()))
-	if !waitUntilReady(a, 30*time.Second) {
-		logf("commands", "players did not report a picture before the first command: %s", snapshotLine(a.readSnapshotOnMain()))
-	} else {
-		logf("commands", "every player reports a picture: %s", snapshotLine(a.readSnapshotOnMain()))
-	}
+		logf("commands", "start: %s", snapshotLine(a.readSnapshotOnMain()))
+		if !waitUntilReady(a, 30*time.Second) {
+			logf("commands", "players did not report a picture before the first command: %s", snapshotLine(a.readSnapshotOnMain()))
+		} else {
+			logf("commands", "every player reports a picture: %s", snapshotLine(a.readSnapshotOnMain()))
+		}
 
-	run(command{Kind: commandShow, Source: first.source.ID})
-	run(command{Kind: commandHear, Source: second.source.ID})
-	run(command{Kind: commandVolume, Source: second.source.ID, Volume: 0.4})
-	run(command{Kind: commandNudge, Source: second.source.ID, Delta: -100 * time.Millisecond})
-	run(command{Kind: commandPause})
-	run(command{Kind: commandPlay})
-	run(command{Kind: commandReload, Source: first.source.ID})
-	time.Sleep(3 * time.Second)
-	// An identifier that is not in the session must be refused, not guessed by
-	// row number.
-	run(command{Kind: commandShow, Source: "source-99"})
+		run(command{Kind: commandShow, Source: first.source.ID})
+		run(command{Kind: commandHear, Source: second.source.ID})
+		run(command{Kind: commandVolume, Source: second.source.ID, Volume: 0.4})
+		// A nudge before playback has produced any history is refused by design,
+		// so the scene runs for a moment first and the accepted nudge is the one
+		// the log keeps as evidence.
+		time.Sleep(2 * time.Second)
+		// The nudge is measured from the shared event time, which only means
+		// anything once the playhead has been anchored to a real position.
+		mygoRunOnMain(func() {
+			if err := a.anchor(0); err != nil {
+				logf("commands", "cannot anchor the event clock: %v", err)
+			}
+		})
+		run(command{Kind: commandNudge, Source: second.source.ID, Delta: -100 * time.Millisecond})
+		run(command{Kind: commandPause})
+		run(command{Kind: commandPlay})
+		run(command{Kind: commandReload, Source: first.source.ID})
+		time.Sleep(3 * time.Second)
+		// An identifier that is not in the session must be refused, not guessed by
+		// row number.
+		run(command{Kind: commandShow, Source: "source-99"})
 
-	step(window, a, dir, "commands", "1-after-commands.png", "after running every command once", nil)
+		step(window, a, dir, "commands", "1-after-commands.png", "after running every command once", nil)
+		mygoRunOnMain(func() { a.release(); mygo.App.Quit() })
+	}()
 }

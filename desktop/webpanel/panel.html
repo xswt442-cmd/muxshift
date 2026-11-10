@@ -1,0 +1,139 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="tokens.css">
+<style>
+  :root { color-scheme: dark; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    padding: var(--space-md) 120px var(--space-md) var(--space-lg);
+    background: var(--bg-soft);
+    color: var(--text);
+    font: var(--text-small)/1.45 system-ui, sans-serif;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-sm);
+    box-sizing: border-box;
+    max-width: 100vw;
+    zoom: 0.8;
+    overflow: hidden;
+  }
+  h2 {
+    margin: 0 0 var(--space-sm);
+    font: 600 var(--text-micro)/1 system-ui, sans-serif;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .sources { display: flex; flex-direction: column; gap: var(--space-xs); }
+  .source {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: var(--space-sm);
+    padding: var(--space-sm) var(--space-md);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--radius-sm);
+    background: var(--panel);
+  }
+  .source.shown { border-color: var(--accent); }
+  .source.heard { border-color: var(--sound); }
+  .name { font: 500 var(--text-small) var(--font-mono); }
+  .meta { color: var(--text-dim); font: var(--text-micro) var(--font-mono); }
+  button {
+    font: 500 var(--text-micro) system-ui, sans-serif;
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--line);
+    background: var(--panel-2);
+    color: var(--text);
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button:active { background: var(--panel); }
+  .state { color: var(--text-dim); font: var(--text-micro) var(--font-mono); white-space: pre-wrap; }
+  .note { color: var(--dim); font-size: var(--text-micro); }
+</style>
+</head>
+<body>
+  <section>
+    <h2>Sources</h2>
+    <div class="sources" id="sources"></div>
+    <p class="note" id="note">This page is a web view inside the MuxShift window. Every button below
+    calls the same Go command boundary the native controls use.</p>
+  </section>
+  <section>
+    <h2>Session</h2>
+    <div class="state" id="state">waiting for the page bridge…</div>
+  </section>
+
+<script>
+  const sources = document.getElementById('sources');
+  const state = document.getElementById('state');
+
+  function render(view) {
+    // The bridge hands a string back as it is, but a value it already parsed
+    // arrives as an object; both forms carry the same fields.
+    const text = typeof view === 'string' ? JSON.parse(view) : view;
+    if (!text || !Array.isArray(text.sources)) {
+      state.textContent = 'the page got no sources: ' + JSON.stringify(text);
+      return;
+    }
+    state.textContent = text.summary;
+    try { mygo.call('Panel.Note', 'rendered ' + text.sources.length + ' source(s), ' + document.querySelectorAll('.source button').length + ' buttons, ' + sources.children.length + ' rows'); } catch (err) {}
+    sources.replaceChildren(...text.sources.map((src) => {
+      const row = document.createElement('div');
+      row.className = 'source' + (src.shown ? ' shown' : '') + (src.heard ? ' heard' : '');
+      const left = document.createElement('div');
+      const name = document.createElement('div');
+      name.className = 'name';
+      name.textContent = src.id + ' · ' + src.name;
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      meta.textContent = (src.ready ? 'ready' : 'opening') + ' · ' + src.clock;
+      left.append(name, meta);
+      const pick = document.createElement('button');
+      pick.textContent = 'Show';
+      pick.onclick = async () => { render(await mygo.call('Panel.Show', src.id)); };
+      row.append(pick, left);
+      return row;
+    }));
+  }
+
+  async function refresh() {
+    try {
+      render(await mygo.call('Panel.State'));
+    } catch (err) {
+      state.textContent = 'bridge error: ' + err;
+    }
+  }
+
+  // The page asks Go for the state and listens for updates Go pushes.
+  mygo.on('panel-state', render);
+  refresh();
+  setInterval(refresh, 1000);
+
+  // One self test runs the same path a click runs, so a log can show that the
+  // page itself reached the command boundary. It falls back to calling Show
+  // directly, which is the same bridge call the button makes.
+  setTimeout(async () => {
+    const buttons = document.querySelectorAll('.source button');
+    if (buttons.length > 1) {
+      buttons[1].click();
+      return;
+    }
+    try {
+      const rows = (await mygo.call('Panel.State'));
+      const view = typeof rows === 'string' ? JSON.parse(rows) : rows;
+      if (view.sources && view.sources[1]) {
+        render(await mygo.call('Panel.Show', view.sources[1].id));
+      }
+    } catch (err) {
+      state.textContent = 'the self test could not call Go: ' + err;
+    }
+  }, 2500);
+</script>
+</body>
+</html>

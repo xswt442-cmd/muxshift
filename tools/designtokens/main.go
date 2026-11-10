@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -49,6 +50,7 @@ func main() {
 	source := flag.String("source", "design/tokens.json", "the token file")
 	web := flag.String("web", "web/tokens.css", "the CSS custom property sheet to write")
 	desktop := flag.String("desktop", "desktop/tokens.go", "the Go constants to write")
+	panel := flag.String("panel", "desktop/webpanel/tokens.css", "the same sheet for the web view inside the desktop window")
 	flag.Parse()
 
 	data, err := os.ReadFile(*source)
@@ -69,7 +71,15 @@ func main() {
 	if err := os.WriteFile(*desktop, []byte(golang(t, *source)), 0o644); err != nil {
 		log.Fatalf("designtokens: write %s: %v", *desktop, err)
 	}
-	log.Printf("designtokens: wrote %s and %s from %s", *web, *desktop, *source)
+	// The desktop window shows a small page; it gets the same sheet so the two
+	// clients cannot drift apart in colour or spacing.
+	if err := os.MkdirAll(filepath.Dir(*panel), 0o755); err != nil {
+		log.Fatalf("designtokens: make room for %s: %v", *panel, err)
+	}
+	if err := os.WriteFile(*panel, []byte(css(t, *source)), 0o644); err != nil {
+		log.Fatalf("designtokens: write %s: %v", *panel, err)
+	}
+	log.Printf("designtokens: wrote %s, %s and %s from %s", *web, *desktop, *panel, *source)
 }
 
 // header is the same in both files: whoever opens them should know they are

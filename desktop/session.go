@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/xswt442-cmd/muxshift/core"
 	"github.com/xswt442-cmd/muxshift/core/hls"
@@ -70,6 +71,14 @@ type appState struct {
 	// runCommand, kept so the window and a scenario can read what happened
 	// instead of parsing the status line. See controller.go.
 	lastCommand commandResult
+
+	// panel is the page the window shows below its native stage in the P13.3
+	// experiment, and webView draws it. They stay nil unless the webview
+	// scenario asks for them, so an ordinary run never starts a second engine.
+	panel *Panel
+	// panelCalls counts the page's calls, so a log can show the page is alive.
+	panelCalls int
+	webView    *mygo.WebView
 
 	// sync is the shared event clock and the per-track offsets the panel
 	// edits; see sync.go.

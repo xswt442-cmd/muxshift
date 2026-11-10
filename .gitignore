@@ -29,6 +29,8 @@ node_modules/
 *.log
 *.tmp
 *.cache
+__pycache__/
+*.pyc
 
 # Editors, tools, and OS files
 .vs/

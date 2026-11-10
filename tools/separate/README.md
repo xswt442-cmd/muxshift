@@ -31,11 +31,11 @@ The last line of standard output is one JSON object:
 ```
 {"provider":"DmlExecutionProvider","fell_back":false,"seconds":12.0,"chunks":4,
  "decode_s":0.209,"load_s":0.842,"first_chunk_s":0.529,"steady_chunk_s":0.236,
- "inference_s":1.74,"realtime_factor":6.9,"latency_s":5.92,
+ "inference_s":1.74,"realtime_factor":6.9,"chunk_window_s":5.92,
  "vocal":"...\\vocal.wav","non_vocal":"...\\non_vocal.wav"}
 ```
 
-`latency_s` is the chunk window, not a measured end-to-end delay: the model sees
+`chunk_window_s` is the chunk window, not a measured end-to-end delay: the model sees
 5.92 s of audio per call. What a listener would actually wait for also includes
 overlap-add scheduling, encoding, buffering and player startup, and none of that
 is measured here. `--overlap` (default 0.25) trades overlap for step size; it

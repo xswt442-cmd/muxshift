@@ -209,7 +209,7 @@ def main():
         "steady_chunk_s": round(float(np.mean(chunk_times[1:])), 3) if len(chunk_times) > 1 else None,
         "inference_s": round(finished - loaded, 3),
         "realtime_factor": round(seconds / max(finished - loaded, 1e-6), 2),
-        "latency_s": round(CHUNK / args.rate, 2),
+        "chunk_window_s": round(CHUNK / args.rate, 2),
         "vocal": vocal_path,
         "non_vocal": non_vocal_path,
     }

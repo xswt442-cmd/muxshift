@@ -15,6 +15,7 @@ The repository currently contains a project scaffold with a Go Core session conf
 - `web/`: web client: a loopback-only Go session service plus a page that plays HLS through hls.js and demonstrates several sources, a scene, volumes, and playback control inside one session.
 - `extension/`: browser extension and its native host, which hand one address the user confirmed to the running session.
 - `tools/separate/`: experimental vocal/non-vocal separation script that runs chunked ONNX inference on a model you supply; not wired into playback.
+- `tools/align/`: experimental content-offset probe that compares audio envelopes or frame thumbnails and reports a confidence; not wired into playback and it never moves the timeline.
 - `docs/development/`: engineering architecture documents.
 - `testplace/`: Git-ignored local experiments, drafts, and agent working material.
 
@@ -67,5 +68,13 @@ python tools\separate\separate.py --model testplace\models\Kim_Vocal_2.onnx \
 ```
 
 Model weights are not distributed with the repository and their redistribution license is unconfirmed, so the script only reads an explicit `--model` path. On this RTX 4060 Laptop, 44.1 kHz stereo with 5.92-second chunks: DirectML takes about 0.26 s per chunk (roughly 7.8x realtime, 6.2 GiB of video memory) and plain CPU takes about 5.75 s per chunk (slower than realtime). The 5.92 s figure is the length of one model input chunk, not a measured end-to-end delay: overlap-add scheduling, encoding, buffering and player startup all add to what a listener waits for, and none of that is measured. On a synthetic sample the vocal stem correlates 0.99 with the commentary source and the non-vocal stem 0.83 with the crowd source; on real recordings (a LibriVox public-domain reading mixed with public-domain applause from Wikimedia, 20 s) the vocal stem correlates 0.93 with the reading and the non-vocal stem 0.94 with the applause. Commentary inside a real stadium broadcast is still unverified, and the two WAV files are stems of one recording rather than two independent live sources. See [tools/separate/README.md](tools/separate/README.md) for details.
+
+`tools/align/` is a second experiment: it estimates the relative offset of two recordings from their content alone — `match.py` compares log-energy audio envelopes and `frame_hash.py` compares 16x16 grey frame thumbnails — and reports the best candidate, the runner-up, and how far the best stands above the median lag, refusing the match when that gap is too small. It is **not** wired into playback and it **never** moves the timeline: the desktop's manual nudge is still the only thing that changes a playback position.
+
+```sh
+python tools\align\match.py --a testplace\media\p12\ref.wav --b testplace\media\p12\shift-15.wav --max-lag 60
+```
+
+On 180-second readings, prepared offsets of 2, 15, and 45 seconds are all estimated exactly (no error), an inserted 3-second silence is measured as +3 s, and a pair with a different mix is measured as 0 s; a different recording, a looped replay, and a 1.05x speed change are all refused instead of answered confidently and wrongly. An audio pair takes about 0.1 s. The video fingerprint finds the right lag on the synthetic test pattern, but because that pattern looks similar at every lag the confidence rule refuses it, and the public-domain match footage download was blocked by HTTP 429, so the video path is implemented but unvalidated. See [tools/align/README.md](tools/align/README.md) for details.
 
 ## License

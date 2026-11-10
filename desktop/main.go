@@ -663,6 +663,8 @@ func main() {
 	flag.Int64Var(&dvrMaxBytes, "dvr-max-bytes", dvrMaxBytes, "byte limit of the replay buffer; 0 keeps only the retention limit")
 	flag.Int64Var(&dvrRecordingBytes, "dvr-recording-bytes", dvrRecordingBytes,
 		"bytes of recordings one buffer may keep; 0 means no limit and may fill the disk")
+	flag.DurationVar(&commonShift, "common-shift", commonShift,
+		"common: the timestamp shift the second fixture was built with; 0 for two identical fixtures")
 	flag.Parse()
 	if *replay != "" {
 		// A recording is played by a process of its own: this build cannot put a

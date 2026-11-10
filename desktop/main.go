@@ -649,6 +649,8 @@ func main() {
 	flag.StringVar(&dvrDir, "dvr-dir", dvrDir, "directory the replay buffer keeps its segments in")
 	flag.DurationVar(&dvrRetention, "dvr-retention", dvrRetention, "how much history the replay buffer keeps")
 	flag.Int64Var(&dvrMaxBytes, "dvr-max-bytes", dvrMaxBytes, "byte limit of the replay buffer; 0 keeps only the retention limit")
+	flag.Int64Var(&dvrRecordingBytes, "dvr-recording-bytes", dvrRecordingBytes,
+		"bytes of recordings one buffer may keep; 0 means no limit and may fill the disk")
 	flag.Parse()
 	if *replay != "" {
 		// A recording is played by a process of its own: this build cannot put a

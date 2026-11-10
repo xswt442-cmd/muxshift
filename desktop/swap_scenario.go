@@ -51,7 +51,7 @@ func swapBody(window *mygo.Window, a *appState, dir string) {
 	}
 	bufferDir := filepath.Join(dir, "segments")
 	recordingsDir := filepath.Join(dir, "recordings")
-	runner, err := startDVR(it.uri, dvrFromMedia(bufferDir, recordingsDir, 40*time.Second, 0, 0, it.source.ID))
+	runner, err := startDVR(it.uri, dvrFromMedia(bufferDir, recordingsDir, 40*time.Second, 0, dvrRecordingBytes, it.source.ID))
 	if err != nil {
 		logf(scenario, "open the buffer: %v", err)
 		return
@@ -124,23 +124,49 @@ func swapBody(window *mygo.Window, a *appState, dir string) {
 		"a timed-out switch changed the picture to %v", showing(it))
 
 	// 4. A burst of switches ends on the last one, and only its lease is open.
+	//
+	// A budget that is already full refuses a cut instead of dropping a file a
+	// player holds; the run then checks the picture and lease it kept rather
+	// than pretending the burst happened.
+	burst := true
+	last := time.Duration(0)
 	for _, offset := range []time.Duration{time.Second, 2 * time.Second, 3 * time.Second} {
 		if err := a.playRecording(it, runner, base+offset); err != nil {
-			logf(scenario, "burst switch at %s: %v", sceneClock(base+offset), err)
-			return
+			logf(scenario, "burst switch at %s refused: %v", sceneClock(base+offset), err)
+			burst = false
+			break
 		}
+		last = base + offset
 		time.Sleep(250 * time.Millisecond)
 	}
-	if !waitRecording(a, 0, base+3*time.Second, 15*time.Second) {
-		logf(scenario, "the burst did not settle on the last switch: %v", replayLine(it))
-		return
-	}
 	open, given = a.leaseStats()
-	logf(scenario, "the burst settled on %s | leases open=%d given=%d", replayLine(it), open, given)
-	check(open == 1, "the burst left %d lease(s) open", open)
-	check(showing(it) != nil && showing(it).RequestedBufferTime == base+3*time.Second,
-		"the burst settled on %v, not the last switch", showing(it))
-	step(window, a, dir, scenario, "3-burst.png", "the last switch of a burst", nil)
+	if burst {
+		if !waitRecording(a, 0, last, 15*time.Second) {
+			logf(scenario, "the burst did not settle on the last switch: %v", replayLine(it))
+			return
+		}
+		open, given = a.leaseStats()
+		logf(scenario, "the burst settled on %s | leases open=%d given=%d", replayLine(it), open, given)
+		check(open == 1, "the burst left %d lease(s) open", open)
+		check(showing(it) != nil && showing(it).RequestedBufferTime == last,
+			"the burst settled on %v, not the last switch", showing(it))
+		step(window, a, dir, scenario, "3-burst.png", "the last switch of a burst", nil)
+	} else {
+		logf(scenario, "the burst kept %s | leases open=%d given=%d", replayLine(it), open, given)
+		check(showing(it) != nil && showing(it).RequestedBufferTime == base+2*time.Second,
+			"a refused burst changed the picture to %v", showing(it))
+	}
+
+	// 4b. The recording budget drops the snapshots the item has let go of, and
+	// never the file the item is holding a lease on.
+	shown := showing(it)
+	var validErr error
+	if shown != nil {
+		validErr = shown.Valid()
+	}
+	logf(scenario, "the budget keeps %d recording(s) of %d bytes; the one on the stage is valid=%v (%v)",
+		len(runner.buffer.Recordings()), runner.buffer.RecordingBytes(), validErr == nil, validErr)
+	check(shown != nil && validErr == nil, "the recording on the stage is no longer valid: %v", validErr)
 
 	// 5. Closing the item in the middle of a switch still returns every lease.
 	handoverWait = 5 * time.Second

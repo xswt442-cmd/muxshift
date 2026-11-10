@@ -102,6 +102,22 @@ type appState struct {
 	// first thing checked so a second Add cannot start a second read.
 	importing string
 
+	// importToken tells a landing read from a cancelled one: Cancel bumps it,
+	// and a result carrying an older token is dropped without touching the
+	// session, so a slow origin cannot add a source after Cancel.
+	importToken int
+	// importSince is when the read started, for the seconds beside Reading….
+	importSince time.Time
+	// importCancel stops the probe; importDone ends the repaint ticker that
+	// keeps the elapsed seconds moving while the read is in flight.
+	importCancel context.CancelFunc
+	importDone   chan struct{}
+
+	// window is the one window this session draws into. The import ticker asks
+	// it for frames while a read is in flight; it is set once, before the view
+	// runs, and only touched on the drawing thread.
+	window *mygo.Window
+
 	// settings is what is applied and running; settingsDraft is what the
 	// Settings page edits until Apply. settingsPath is where applied values are
 	// written, and settingsSaved says this start has written that file, so the
@@ -302,19 +318,25 @@ func (a *appState) addLocal(it *item) error {
 // thread; everything that writes the session or opens a player happens back on
 // it. The outcome is reported as a command result, so the status line and the
 // log say what happened to the import that was asked for.
-func (a *appState) importSource(uri string) {
+func (a *appState) importSource(ctx context.Context, uri string, token int) {
 	var (
 		stream   hls.Stream
 		probed   bool
 		probeErr error
 	)
 	if isNetworkAddress(uri) {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		stream, probeErr = hls.Probe(ctx, uri, hls.Options{})
 		probed = probeErr == nil
-		cancel()
+		if probeErr != nil && ctx.Err() != nil {
+			probeErr = fmt.Errorf("reading %s stopped: %w", shortURI(uri), ctx.Err())
+		}
 	}
 	mygoRunOnMain(func() {
+		if token != a.importToken {
+			// Cancel already cleared the busy state and said so; this landing is
+			// from the read it stopped and must not add anything.
+			return
+		}
 		it := &item{uri: uri, volume: a.settingsSourceVolume()}
 		var err error
 		switch {
@@ -343,6 +365,7 @@ func (a *appState) importSource(uri string) {
 				a.closePendingWhenReady()
 			}
 		}
+		a.closeImportTicker()
 		a.importing = ""
 		a.importText = ""
 		result := commandResult{Command: command{Kind: commandAdd, URI: uri}, At: time.Now()}
@@ -357,6 +380,40 @@ func (a *appState) importSource(uri string) {
 		a.lastCommand = result
 		a.report(result)
 	})
+}
+
+// tickImport keeps the window repainting while a read is in flight, so the
+// elapsed seconds beside Reading… actually move. It runs off the drawing thread
+// and asks for a frame on it, which is the only thread allowed to do that.
+func (a *appState) tickImport(done chan struct{}) {
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			mygoRunOnMain(func() {
+				if a.window != nil {
+					a.window.Invalidate()
+				}
+			})
+		}
+	}
+}
+
+// closeImportTicker stops the repaint loop, if one is running. Safe to call
+// when it never started; closing the same channel twice is not, so the field is
+// cleared as it is closed.
+func (a *appState) closeImportTicker() {
+	if a.importDone != nil {
+		close(a.importDone)
+		a.importDone = nil
+	}
+	if a.importCancel != nil {
+		a.importCancel()
+		a.importCancel = nil
+	}
 }
 
 // apply maps the current scene onto the players: the video tracks in the scene

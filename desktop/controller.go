@@ -14,6 +14,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -40,6 +41,10 @@ const (
 	commandAdd     commandKind = "add-source"
 	commandRemove  commandKind = "remove-source"
 	commandRetry   commandKind = "retry"
+	// commandCancelImport stops a read that has not landed yet. It is a real
+	// command, not a disabled placeholder: the context it cancels is the one
+	// the probe is waiting on.
+	commandCancelImport commandKind = "cancel-import"
 )
 
 // UnknownSourceError names a source that is not in the session any more, which
@@ -164,10 +169,36 @@ func (a *appState) runCommand(cmd command) commandResult {
 		if a.importing != "" {
 			return finish(fmt.Errorf("%s is still being read", shortURI(a.importing)), "")
 		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		a.importToken++
+		token := a.importToken
 		a.importing = uri
 		a.importText = ""
-		go a.importSource(uri)
-		return finish(nil, fmt.Sprintf("reading %s in the background; the result is logged when it lands", shortURI(uri)))
+		a.importSince = time.Now()
+		a.importCancel = cancel
+		a.importDone = make(chan struct{})
+		go a.tickImport(a.importDone)
+		go a.importSource(ctx, uri, token)
+		return finish(nil, fmt.Sprintf("reading %s in the background; Cancel stops it", shortURI(uri)))
+
+	case commandCancelImport:
+		if a.importing == "" {
+			return finish(errors.New("nothing is being read right now"), "")
+		}
+		uri := a.importing
+		a.importToken++
+		if a.importCancel != nil {
+			a.importCancel()
+			a.importCancel = nil
+		}
+		a.closeImportTicker()
+		a.importing = ""
+		a.importText = ""
+		result.Message = fmt.Sprintf("cancelled reading %s; nothing was added", shortURI(uri))
+		a.lastCommand = result
+		a.report(result)
+		a.lastErr = nil
+		return result
 
 	case commandRemove:
 		it, index, err := a.itemBySource(cmd.Source)
@@ -203,6 +234,23 @@ func (a *appState) runCommand(cmd command) commandResult {
 	default:
 		return finish(fmt.Errorf("unknown command %q", cmd.Kind), "")
 	}
+}
+
+// shortcutCommand runs a command against the selected source, which is what the
+// Ctrl shortcuts do. It takes the same door as a click, so the log and the
+// snapshot record a key exactly as they record a press; with nothing selected it
+// says so instead of guessing which source was meant.
+func (a *appState) shortcutCommand(kind commandKind) {
+	it, _, ok := a.selectedSource()
+	if !ok {
+		a.lastErr = errors.New("no source is selected: click a row in Sources, then press the key again")
+		result := commandResult{Command: command{Kind: kind}, At: time.Now(), Err: a.lastErr, Message: "nothing selected"}
+		a.lastCommand = result
+		a.report(result)
+		return
+	}
+	result := a.runCommand(command{Kind: kind, Source: it.source.ID})
+	a.report(result)
 }
 
 // trackSnapshot is one audio track the scene plays, as copy.

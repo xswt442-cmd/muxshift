@@ -53,6 +53,8 @@ var scenarios = map[string]scenario{
 	"sources":          runSources,
 	"settings":         runSettings,
 	"settings-restart": runSettingsRestart,
+	"keys":             runKeys,
+	"narrow":           runNarrow,
 }
 
 // runReplayProbe narrows down why a replay player added mid-run does not start:

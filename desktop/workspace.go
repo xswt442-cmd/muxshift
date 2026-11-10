@@ -5,6 +5,7 @@ package main
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/xswt442-cmd/muxshift/core"
@@ -76,21 +77,35 @@ func (a *appState) importRow(c *ui.Context) {
 				Placeholder("https://… .m3u8  or  C:\\path\\file.mp4")
 			label := "Add"
 			if a.importing != "" {
-				label = "Reading…"
+				// Loading feedback with a real clock, not an animation: the
+				// seconds come from importSince and the ticker repaints.
+				label = fmt.Sprintf("Reading… %.0fs", time.Since(a.importSince).Seconds())
 			}
 			add := ui.Button(c.Key("import-add"), label).Width(96).Height(34)
 			if a.importing != "" {
-				add.Disabled(true)
+				add.Disabled(true).Tooltip("the read is in flight; Cancel stops it")
 			}
 			if add.Clicked() {
 				a.report(a.runCommand(command{Kind: commandAdd, URI: a.importText}))
+			}
+			if a.importing != "" {
+				if ui.Button(c.Key("import-cancel"), "Cancel").Width(76).Height(34).
+					Tooltip("stop reading " + shortURI(a.importing) + "; nothing is added").
+					Clicked() {
+					a.report(a.runCommand(command{Kind: commandCancelImport}))
+				}
 			}
 		})
 		failed := a.lastCommand.Command.Kind == commandAdd && a.lastCommand.Err != nil
 		if failed {
 			ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).WidthPercent(100).Children(func() {
-				ui.Text(c, fmt.Sprintf("last import failed: %v", a.lastCommand.Err)).
-					FontSize(textMicro).TextColor(colorBad).Grow(1)
+				// One line, with the whole error on the tooltip: wrapped over
+				// three lines in a narrow window it pushed Retry onto its own
+				// row, and a failure message must not move the button that
+				// retries it.
+				message := fmt.Sprintf("last import failed: %v", a.lastCommand.Err)
+				ui.Text(c, message).FontSize(textMicro).TextColor(colorBad).
+					Grow(1).SingleLine().Tooltip(message)
 				if ui.Button(c.Key("import-retry"), "Retry").Width(76).Height(26).Clicked() {
 					a.report(a.runCommand(command{Kind: commandAdd, URI: a.lastCommand.Command.URI}))
 				}

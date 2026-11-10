@@ -33,6 +33,9 @@ const (
 	inspectorAutoWidth = 1160
 	railAutoWidth      = 900
 	dockAutoHeight     = 660
+	// Below this width the product name is dropped from the bar so the source
+	// count and the three layout switches keep their whole labels.
+	brandAutoWidth = 760
 )
 
 // paneMode says whether a pane follows the window-size rule or a person's
@@ -66,14 +69,18 @@ func (m paneMode) toggled(open bool) paneMode {
 }
 
 // topBar is the global bar: what session is open, what it is doing, and the
-// three layout switches. Open and Settings are drawn disabled because this
-// build has no file picker and no settings page yet; their tooltips say so
-// instead of leaving a button that does nothing.
+// three layout switches. Open is drawn disabled because this build has no file
+// picker; its tooltip says so instead of leaving a button that does nothing.
 func (a *appState) topBar(c *ui.Context, width, height float32) {
 	a.frameWidth, a.frameHeight = width, height
 	ui.Row(c).Height(topBarHeight).WidthPercent(100).Padding(a.space(4, spaceSm), a.space(8, spaceLg)).
 		Gap(spaceSm).AlignItems(ui.Center).Background(colorBgSoft).Children(func() {
-		ui.Text(c, "MuxShift").FontSize(textTitle).TextColor(colorText).SingleLine()
+		// The name is the first thing to go: below this width the switches and
+		// the source count matter more, and a squeezed "MuxS…" tells nobody
+		// anything.
+		if width >= brandAutoWidth {
+			ui.Text(c, "MuxShift").FontSize(textTitle).TextColor(colorText).SingleLine()
+		}
 		// Below the rail threshold the chips would wrap the bar, so only the
 		// source count stays: it is the one number the stage needs.
 		if width >= railAutoWidth {
@@ -81,7 +88,12 @@ func (a *appState) topBar(c *ui.Context, width, height float32) {
 		}
 		pill(c, fmt.Sprintf("%d source%s", len(a.items), plural(len(a.items))), colorTextDim, false)
 		if a.lastErr != nil {
-			pill(c, "error", colorBad, true)
+			// A real notification: the pill opens the diagnostics page, which
+			// names the error; the status bar carries the Dismiss.
+			if ui.Button(c.Key("top-error"), "error: see diagnostics").Height(26).FontSize(textMicro).
+				TextColor(colorBad).Tooltip(a.lastErr.Error()).Clicked() {
+				a.workspace = workspaceDiagnostics
+			}
 		}
 		ui.Box(c).Grow(1)
 		if width >= 1100 {
@@ -411,6 +423,13 @@ func (a *appState) statusBar(c *ui.Context) {
 		AlignItems(ui.Center).Children(func() {
 		ui.Text(c, a.status()).FontSize(textSmall).TextColor(colorTextDim).
 			FontFeatures("tnum").SingleLine()
+		if a.lastErr != nil {
+			ui.Box(c).Grow(1)
+			if ui.Button(c.Key("status-dismiss"), "Dismiss error").Width(120).Height(22).
+				FontSize(textSmall).Tooltip("clear the last error; the log keeps its record").Clicked() {
+				a.lastErr = nil
+			}
+		}
 	})
 }
 

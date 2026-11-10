@@ -344,6 +344,16 @@ func clock(d time.Duration) string {
 func (a *appState) view(c *ui.Context) {
 	defer a.signalFrame()
 	c.SetTheme(muxshiftTheme())
+	// P15.4: window shortcuts. They are declared every pass because ui actions
+	// live one frame; each one sends the same command a button would, against
+	// whatever source is selected when the key is pressed.
+	c.OnWindowShortcut(ui.Ctrl, ui.KeyS, func() { a.shortcutCommand(commandShow) })
+	c.OnWindowShortcut(ui.Ctrl, ui.KeyH, func() { a.shortcutCommand(commandHear) })
+	c.OnWindowShortcut(ui.Ctrl, ui.KeyR, func() { a.shortcutCommand(commandRetry) })
+	c.OnWindowShortcut(ui.Ctrl, ui.Key1, func() { a.workspace = workspaceStage })
+	c.OnWindowShortcut(ui.Ctrl, ui.Key2, func() { a.workspace = workspaceSources })
+	c.OnWindowShortcut(ui.Ctrl, ui.Key3, func() { a.workspace = workspaceDiagnostics })
+	c.OnWindowShortcut(ui.Ctrl, ui.Key4, func() { a.workspace = workspaceSettings })
 	// P15.1: the workbench. The top bar and the status bar always exist; the
 	// rail, the inspector and the dock fold away by window size, and each can
 	// be switched by hand. The panes sit beside the stage, never on top of it,
@@ -475,17 +485,20 @@ func (a *appState) sourceCard(c *ui.Context, i int, it *item) {
 			ui.Text(c, status(item)).FontSize(textMicro).TextColor(colorTextDim).FontFeatures("tnum")
 		})
 		if item.video != "" {
-			if ui.Button(c.Key("show-"+itoa(i)), "Show").Width(72).Clicked() {
+			if ui.Button(c.Key("show-"+itoa(i)), "Show").Width(72).KeyShortcuts(ui.Ctrl, ui.KeyS).
+				Tooltip("put this source's picture on the stage (Ctrl+S)").Clicked() {
 				a.selectVideo(item)
 			}
 		}
 		if item.audio != "" {
-			if ui.Button(c.Key("hear-"+itoa(i)), "Hear").Width(72).Clicked() {
+			if ui.Button(c.Key("hear-"+itoa(i)), "Hear").Width(72).KeyShortcuts(ui.Ctrl, ui.KeyH).
+				Tooltip("hear this source's audio (Ctrl+H)").Clicked() {
 				a.selectAudio(item)
 			}
 		}
 		if item.openErr != nil {
-			if ui.Button(c.Key("retry-"+itoa(i)), "Retry").Width(72).Clicked() {
+			if ui.Button(c.Key("retry-"+itoa(i)), "Retry").Width(72).KeyShortcuts(ui.Ctrl, ui.KeyR).
+				Tooltip("open a new player for this source (Ctrl+R)").Clicked() {
 				a.report(a.runCommand(command{Kind: commandRetry, Source: item.source.ID}))
 			}
 		}
@@ -520,7 +533,9 @@ func pill(c *ui.Context, label string, tint ui.Color, on bool) {
 	if on {
 		textColor = tint
 	}
-	ui.Text(c, label).FontSize(textMicro).TextColor(textColor)
+	// SingleLine: in a narrow window a wrapping label turned "1 source" into a
+	// two line column and made the bar taller than its buttons.
+	ui.Text(c, label).FontSize(textMicro).TextColor(textColor).SingleLine()
 }
 
 // first is the item the buttons drive: the first one given.
@@ -744,6 +759,7 @@ func main() {
 			Content: ui.View(s.view),
 		})
 		installWindowIcon(window)
+		s.window = window
 		if *scenario == "webview" {
 			view, err := window.NewWebView(mygo.WebViewOptions{URL: "/panel.html"})
 			if err != nil {

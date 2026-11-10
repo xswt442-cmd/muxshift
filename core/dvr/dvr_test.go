@@ -326,8 +326,13 @@ func TestJoinStartsAtTheAskedSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("join later: %v", err)
 	}
-	if _, err := os.Stat(whole); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("the first recording survived the second one: %v", err)
+	// A published recording is never overwritten: the earlier file stays put for
+	// whoever already has it open, and the later cut is a separate file.
+	if whole == late {
+		t.Fatalf("the second join reused %q", whole)
+	}
+	if _, err := os.Stat(whole); err != nil {
+		t.Fatalf("the first recording did not survive the second one: %v", err)
 	}
 	lateBytes, err := os.ReadFile(late)
 	if err != nil {

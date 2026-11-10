@@ -9,36 +9,39 @@ import (
 	"github.com/xswt442-cmd/muxshift/core"
 )
 
-// Recording is one joined file and the map from a position inside it back to
-// the source's own media clock.
+// Recording is one immutable joined file and the map from a position inside it
+// back to the buffer's clock.
 //
-// A caller asks for a media time and gets a file whose first frame is not
-// necessarily that time: a transport stream segment cannot be cut, so the file
-// begins at the segment that holds the request. The three times below make that
-// difference explicit instead of leaving the caller to guess.
+// A caller asks for a time and gets a file whose first frame is not necessarily
+// that time: a transport stream segment cannot be cut, so the file begins at the
+// segment that holds the request. The times below make that difference explicit:
 //
-//	SourceMediaTime = RecordingPosition + ContentStart
+//	BufferTime = RecordingPosition + StartBufferTime
 //
 // where RecordingPosition is the position in the file (zero at its first frame).
-// RequestedMediaTime is only what was asked for; SegmentStartTime is where that
-// request's segment begins, and ContentStart is where the file really begins.
-// They are equal when the request falls on a segment boundary or inside the
-// buffered window, and they differ when the request is before the window.
+// RequestedBufferTime is only what was asked for; StartBufferTime is where the
+// file really begins.
+//
+// The buffer's clock is its own: it starts at the first segment the buffer
+// stored, so it is not the source's media clock. Reaching the source's clock and
+// then shared event time needs an Anchor that was measured for this source, and
+// a track offset whose sign follows the Core timeline (event = media - offset).
 type Recording struct {
-	// Path is the joined file. It belongs to the buffer: a later Record
-	// replaces it and Close removes it.
+	// ID names this recording and never changes: two requests in the same
+	// second get different files, and a published file is never overwritten.
+	ID string
+	// Path is the joined file. It stays in the buffer's directory and is
+	// removed when the buffer is closed.
 	Path string
 	// Source is the source the buffer was opened for, when one was named.
 	Source core.SourceID
-	// RequestedMediaTime is the media time the caller asked to start from.
-	RequestedMediaTime time.Duration
-	// SegmentStartTime is the media time where the requested segment starts.
-	SegmentStartTime time.Duration
-	// ContentStart is the media time of the file's first frame.
-	ContentStart time.Duration
-	// ContentEnd is the media time where the file's last segment ends, so the
-	// file covers ContentStart until ContentEnd.
-	ContentEnd time.Duration
+	// RequestedBufferTime is the time the caller asked to start from.
+	RequestedBufferTime time.Duration
+	// StartBufferTime is the buffer time of the file's first frame: the start
+	// of the segment that holds the request.
+	StartBufferTime time.Duration
+	// EndBufferTime is the buffer time where the file's last segment ends.
+	EndBufferTime time.Duration
 	// FirstSequence and LastSequence are the media sequence numbers in the
 	// file, for matching a recording against a playlist.
 	FirstSequence int
@@ -46,55 +49,85 @@ type Recording struct {
 	// Ranges and Gaps describe what the buffer held when the file was written.
 	Ranges []Range
 	Gaps   []Gap
-	// JoinedAt is when the file was written.
+	// JoinedAt is when the file was published.
 	JoinedAt time.Time
-	// Size is the file size at that moment, used by Valid to detect that the
-	// file was replaced or removed.
+	// Size is the file size at that moment, used by Valid to notice a file
+	// that was truncated or removed from outside.
 	Size int64
+}
+
+// Anchor ties the buffer's clock to a source's media clock. It is measured for
+// one source instance; after a reopen or a seek past a discontinuity the answer
+// changes, so the caller must confirm the anchor still describes the source it
+// is mapping.
+type Anchor struct {
+	// Source is the source the anchor was measured on.
+	Source core.SourceID
+	// BufferStart is the buffer time the anchor was measured at.
+	BufferStart time.Duration
+	// MediaStart is the source media time observed at BufferStart.
+	MediaStart time.Duration
 }
 
 // Duration is how much media the file holds.
 func (r Recording) Duration() time.Duration {
-	if r.ContentEnd <= r.ContentStart {
+	if r.EndBufferTime <= r.StartBufferTime {
 		return 0
 	}
-	return r.ContentEnd - r.ContentStart
+	return r.EndBufferTime - r.StartBufferTime
 }
 
-// SourceMediaTime maps a position inside the file to the source's media clock.
-// The position is zero at the file's first frame and is bounded by Duration.
-func (r Recording) SourceMediaTime(position time.Duration) (time.Duration, error) {
+// BufferTime maps a position inside the file to the buffer's clock. This
+// relation is exact: the file is the segment run itself.
+func (r Recording) BufferTime(position time.Duration) (time.Duration, error) {
 	if position < 0 || position > r.Duration() {
 		return 0, fmt.Errorf("%w: position %s in %s is outside a recording of %s",
 			ErrNoRange, position.Round(time.Millisecond), r.name(), r.Duration().Round(time.Millisecond))
 	}
-	return r.ContentStart + position, nil
+	return r.StartBufferTime + position, nil
 }
 
-// Position maps a media time back to a position inside the file.
+// Position maps a buffer time back to a position inside the file.
 func (r Recording) Position(at time.Duration) (time.Duration, error) {
-	if at < r.ContentStart || at > r.ContentEnd {
+	if at < r.StartBufferTime || at > r.EndBufferTime {
 		return 0, fmt.Errorf("%w: %s in %s is outside a recording of %s..%s",
 			ErrNoRange, at.Round(time.Millisecond), r.name(),
-			r.ContentStart.Round(time.Millisecond), r.ContentEnd.Round(time.Millisecond))
+			r.StartBufferTime.Round(time.Millisecond), r.EndBufferTime.Round(time.Millisecond))
 	}
-	return at - r.ContentStart, nil
+	return at - r.StartBufferTime, nil
 }
 
-// EventTime maps a position inside the file to the shared event clock. The
-// offset is the source's confirmed track offset, so the caller passes the value
-// it already applied to live playback rather than a second guess.
-func (r Recording) EventTime(position, offset time.Duration) (time.Duration, error) {
-	at, err := r.SourceMediaTime(position)
+// SourceMediaTime maps a position inside the file to the source's media clock.
+// It refuses without a measured anchor for this very source: assuming the
+// buffer starts at zero would silently shift a live buffer that began mid-stream.
+func (r Recording) SourceMediaTime(position time.Duration, anchor Anchor) (time.Duration, error) {
+	at, err := r.BufferTime(position)
 	if err != nil {
 		return 0, err
 	}
-	return at + offset, nil
+	if anchor.Source == "" || r.Source == "" {
+		return 0, fmt.Errorf("%w: %s has no anchor that ties its buffer clock to a source",
+			ErrNoAnchor, r.name())
+	}
+	if anchor.Source != r.Source {
+		return 0, fmt.Errorf("%w: the anchor belongs to %s, not %s", ErrNoAnchor, anchor.Source, r.Source)
+	}
+	return anchor.MediaStart + (at - anchor.BufferStart), nil
 }
 
-// Valid reports whether the file still matches the recording. A buffer keeps one
-// recording at a time and removes it on Close, so a stale Recording is a real
-// case and not a defensive check.
+// EventTime maps a position inside the file to shared event time. The Core
+// timeline fixes media = event + offset, so this subtracts the confirmed track
+// offset instead of inventing the other sign.
+func (r Recording) EventTime(position time.Duration, anchor Anchor, offset time.Duration) (time.Duration, error) {
+	at, err := r.SourceMediaTime(position, anchor)
+	if err != nil {
+		return 0, err
+	}
+	return at - offset, nil
+}
+
+// Valid reports whether the file still matches the recording. It detects a file
+// that was removed or truncated from outside; it never licenses overwriting one.
 func (r Recording) Valid() error {
 	if r.Path == "" {
 		return fmt.Errorf("%w: the recording has no file", ErrNoRange)
@@ -104,7 +137,7 @@ func (r Recording) Valid() error {
 		return fmt.Errorf("%w: %s is gone: %v", ErrNoRange, r.name(), err)
 	}
 	if info.Size() != r.Size {
-		return fmt.Errorf("%w: %s was replaced: %d bytes on disk, %d bytes when written",
+		return fmt.Errorf("%w: %s changed on disk: %d bytes, %d when written",
 			ErrNoRange, r.name(), info.Size(), r.Size)
 	}
 	return nil
@@ -125,11 +158,11 @@ func (r Recording) String() string {
 	if source == "" {
 		source = "source"
 	}
-	return fmt.Sprintf("recording %s %s · asked %s · segment starts %s · file %s..%s",
+	return fmt.Sprintf("recording %s %s · asked %s · file starts %s · covers %s..%s",
 		source, r.FileName(),
-		r.RequestedMediaTime.Round(time.Millisecond),
-		r.SegmentStartTime.Round(time.Millisecond),
-		r.ContentStart.Round(time.Millisecond), r.ContentEnd.Round(time.Millisecond))
+		r.RequestedBufferTime.Round(time.Millisecond),
+		r.StartBufferTime.Round(time.Millisecond),
+		r.StartBufferTime.Round(time.Millisecond), r.EndBufferTime.Round(time.Millisecond))
 }
 
 // name is what messages call the file.

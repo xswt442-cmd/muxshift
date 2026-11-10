@@ -160,10 +160,12 @@ func (r *dvrRunner) state() string {
 }
 
 // replay writes the buffered window that starts at from into the cache
-// directory as one transport stream and returns the recording, which states
-// where the file really starts and how a position inside it maps back to the
-// source's media clock. A start the buffer does not hold is refused by the
-// buffer, so a replay never begins at a time that was never stored.
+// directory as one new transport stream file and returns the recording, which
+// states where the file really starts on the buffer's clock and how a position
+// inside it maps back. Each call publishes its own file: a recording a player
+// already has open is never replaced. A start the buffer does not hold is
+// refused by the buffer, so a replay never begins at a time that was never
+// stored.
 func (r *dvrRunner) replay(from time.Duration) (dvr.Recording, error) {
 	recording, err := r.buffer.Record(from)
 	if err != nil {

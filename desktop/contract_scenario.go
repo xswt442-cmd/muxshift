@@ -54,6 +54,14 @@ func runContract(window *mygo.Window, a *appState, dir string) {
 	logf(scenario, "window %s", runner.state())
 	logf(scenario, "range %s picked for the cut", chosen)
 
+	// The buffer's clock is its own. This fixture's playlist begins at media
+	// zero and the buffer stored its first segment, so buffer zero is media zero
+	// here; the burnt-in timecode is what confirms the claim afterwards. A live
+	// buffer that joined mid-stream must measure its anchor instead.
+	anchor := dvr.Anchor{Source: it.source.ID, BufferStart: 0, MediaStart: 0}
+	logf(scenario, "anchor for %s: buffer %s is media %s", anchor.Source,
+		anchor.BufferStart, anchor.MediaStart)
+
 	// The request falls inside a segment, so the file cannot start there: a
 	// transport stream segment cannot be cut. The recording has to say both the
 	// requested time and the first frame it actually holds.
@@ -69,20 +77,35 @@ func runContract(window *mygo.Window, a *appState, dir string) {
 		logf(scenario, "position of the request: %v", err)
 		return
 	}
-	at, err := mid.SourceMediaTime(inside)
+	at, err := mid.SourceMediaTime(inside, anchor)
 	if err != nil {
 		logf(scenario, "media time at file position %s: %v", inside, err)
 		return
 	}
-	event, err := mid.EventTime(inside, 0)
+	event, err := mid.EventTime(inside, anchor, 0)
 	if err != nil {
 		logf(scenario, "event time at file position %s: %v", inside, err)
 		return
 	}
 	logf(scenario, "mid-segment: asked %s · file starts %s · request sits at %s · media time %s · event time %s (offset 0)",
-		mid.RequestedMediaTime, mid.ContentStart, inside, at, event)
+		mid.RequestedBufferTime, mid.StartBufferTime, inside, at, event)
 	if at != request || event != request {
 		logf(scenario, "mid-segment: the mapping disagrees with the request (%s, %s vs %s)", at, event, request)
+	}
+	// Core fixes media = event + offset, so a positive offset pulls event time
+	// back: 3s of media at +0.5s is 2.5s on the shared clock.
+	for _, offset := range []time.Duration{500 * time.Millisecond, -2 * time.Second} {
+		shifted, err := mid.EventTime(inside, anchor, offset)
+		if err != nil {
+			logf(scenario, "event time with offset %s: %v", offset, err)
+			continue
+		}
+		logf(scenario, "offset %+dms: media %s -> event %s", offset.Milliseconds(), at, shifted)
+	}
+	if _, err := mid.SourceMediaTime(0, dvr.Anchor{}); err == nil {
+		logf(scenario, "a recording without an anchor was mapped anyway, which it must not be")
+	} else {
+		logf(scenario, "no anchor: %v (ErrNoAnchor=%v)", err, errors.Is(err, dvr.ErrNoAnchor))
 	}
 	keptMid := filepath.Join(dir, "contract-mid.ts")
 	if err := copyFile(mid.Path, keptMid); err != nil {
@@ -109,7 +132,9 @@ func runContract(window *mygo.Window, a *appState, dir string) {
 		} else {
 			logf(scenario, "boundary: %s", edge)
 			logf(scenario, "boundary: asks %s and starts %s, coincide=%v",
-				edge.RequestedMediaTime, edge.ContentStart, edge.RequestedMediaTime == edge.ContentStart)
+				edge.RequestedBufferTime, edge.StartBufferTime,
+				edge.RequestedBufferTime == edge.StartBufferTime)
+			logf(scenario, "boundary: a second cut published %s beside %s", edge.ID, mid.ID)
 			keptEdge := filepath.Join(dir, "contract-edge.ts")
 			if err := copyFile(edge.Path, keptEdge); err != nil {
 				logf(scenario, "keep the boundary recording: %v", err)
@@ -117,9 +142,9 @@ func runContract(window *mygo.Window, a *appState, dir string) {
 				logf(scenario, "kept the boundary recording at %s", keptEdge)
 			}
 		}
-		// Cutting the boundary recording replaced the mid-segment file, so the
-		// earlier recording no longer describes anything on disk.
-		logf(scenario, "the replaced mid recording: %v", mid.Valid())
+		// A published recording is immutable: the second cut must leave the
+		// first one intact for whoever already has it open.
+		logf(scenario, "the earlier mid recording after a second cut: %v", mid.Valid())
 	}
 
 	// A time the buffer does not hold is refused instead of being clamped.

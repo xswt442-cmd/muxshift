@@ -46,6 +46,9 @@ var (
 	ErrNoRange = errors.New("media time is not in a buffered range")
 	// ErrNoSpace reports a buffer whose directory cannot hold another segment.
 	ErrNoSpace = errors.New("buffer directory is not writable")
+	// ErrNoAnchor reports a recording that cannot be placed on a source's media
+	// clock because no measured anchor ties the buffer clock to it.
+	ErrNoAnchor = errors.New("buffer clock has no anchor for this source")
 )
 
 const (
@@ -155,7 +158,10 @@ type Buffer struct {
 	pending  *Gap
 	closed   bool
 	dirOwned bool
-	join     string
+	// cuts counts recordings so two cuts in the same nanosecond still get
+	// different names; recordings lists the published files Close removes.
+	cuts       int
+	recordings []string
 }
 
 // New creates the buffer's directory and returns it empty. The directory is
@@ -386,13 +392,14 @@ func (b *Buffer) Locate(at time.Duration) (Segment, error) {
 	return Segment{}, fmt.Errorf("%w: %s is outside %s", ErrNoRange, at.Round(time.Millisecond), b.describeLocked())
 }
 
-// Join writes the continuous range that holds from into one transport stream
+// Join writes the continuous range that holds from into a new transport stream
 // file and returns its path. It is Record without the timing metadata; a caller
-// that has to place the file on the shared timeline uses Record instead.
+// that has to place the file on the buffer clock, or on shared event time, uses
+// Record instead.
 //
-// The recording belongs to the buffer: a second call replaces the first file,
-// and Close removes it with the segments. That keeps one open recording from
-// growing the directory beyond what Retention and MaxBytes bound.
+// Each call publishes a new file: a published recording is never overwritten, so
+// a player that has one open keeps reading the bytes it was given. Close removes
+// every recording the buffer published.
 func (b *Buffer) Join(from time.Duration) (string, error) {
 	recording, err := b.Record(from)
 	if err != nil {
@@ -401,14 +408,19 @@ func (b *Buffer) Join(from time.Duration) (string, error) {
 	return recording.Path, nil
 }
 
-// Record writes the continuous range that holds from into one transport stream
-// file and reports what the file contains and where it sits on the source's
-// media clock.
+// Record writes the continuous range that holds from into a new transport stream
+// file and reports what the file contains and where it sits on the buffer's
+// clock.
 //
 // A start inside a segment begins at that segment's first frame, because a
 // transport stream segment cannot be cut, so the file's first frame is at the
 // chosen segment's start and not at from. Recording carries both times rather
 // than letting a caller mistake one for the other.
+//
+// Every recording gets its own name: two requests in the same second do not
+// collide, and a published file is never overwritten. The bytes go to a
+// temporary name first and are renamed only after they are all written and
+// closed, so a failed cut leaves no half file and cannot damage an earlier one.
 func (b *Buffer) Record(from time.Duration) (Recording, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -419,20 +431,29 @@ func (b *Buffer) Record(from time.Duration) (Recording, error) {
 	if err != nil {
 		return Recording{}, err
 	}
-	name := fmt.Sprintf("replay-%d.ts", int64(from.Seconds()))
+	b.cuts++
+	id := fmt.Sprintf("rec-%d-%d", time.Now().UnixNano(), b.cuts)
+	name := id + ".ts"
 	path := filepath.Join(b.opts.Dir, name)
-	out, err := os.Create(path)
+	temporary := filepath.Join(b.opts.Dir, "."+id+".part")
+	out, err := os.OpenFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
 		return Recording{}, fmt.Errorf("%w: create %s: %v", ErrNoSpace, name, err)
 	}
+	// A failed cut removes its own temporary file; nothing else is touched.
+	failed := func(err error) (Recording, error) {
+		out.Close()
+		os.Remove(temporary)
+		return Recording{}, err
+	}
 	recording := Recording{
-		Path:               path,
-		Source:             b.opts.Source,
-		RequestedMediaTime: from,
-		SegmentStartTime:   chosen.Segments[0].Start,
-		JoinedAt:           time.Now(),
-		Ranges:             b.ranges(),
-		Gaps:               append([]Gap(nil), b.gaps...),
+		ID:                  id,
+		Path:                path,
+		Source:              b.opts.Source,
+		RequestedBufferTime: from,
+		JoinedAt:            time.Now(),
+		Ranges:              b.ranges(),
+		Gaps:                append([]Gap(nil), b.gaps...),
 	}
 	var written int64
 	first := true
@@ -442,35 +463,32 @@ func (b *Buffer) Record(from time.Duration) (Recording, error) {
 		}
 		data, err := os.ReadFile(segment.Path)
 		if err != nil {
-			out.Close()
-			return Recording{}, fmt.Errorf("%w: read %s: %v", ErrNotPlayable, filepath.Base(segment.Path), err)
+			return failed(fmt.Errorf("%w: read %s: %v", ErrNotPlayable, filepath.Base(segment.Path), err))
 		}
 		if _, err := out.Write(data); err != nil {
-			out.Close()
-			return Recording{}, fmt.Errorf("%w: write %s: %v", ErrNoSpace, name, err)
+			return failed(fmt.Errorf("%w: write %s: %v", ErrNoSpace, name, err))
 		}
 		written += int64(len(data))
 		if first {
 			// The file begins at this segment's first frame, which is why the
 			// requested time alone cannot be used as the file's start.
-			recording.ContentStart = segment.Start
-			recording.SegmentStartTime = segment.Start
+			recording.StartBufferTime = segment.Start
 			recording.FirstSequence = segment.Sequence
 			first = false
 		}
-		recording.ContentEnd = segment.End
+		recording.EndBufferTime = segment.End
 		recording.LastSequence = segment.Sequence
 	}
 	if err := out.Close(); err != nil {
+		os.Remove(temporary)
 		return Recording{}, fmt.Errorf("%w: close %s: %v", ErrNoSpace, name, err)
 	}
-	recording.Size = written
-	if b.join != "" && b.join != path {
-		if err := os.Remove(b.join); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return Recording{}, fmt.Errorf("%w: remove the previous recording: %v", ErrNoSpace, err)
-		}
+	if err := os.Rename(temporary, path); err != nil {
+		os.Remove(temporary)
+		return Recording{}, fmt.Errorf("%w: publish %s: %v", ErrNoSpace, name, err)
 	}
-	b.join = path
+	recording.Size = written
+	b.recordings = append(b.recordings, path)
 	return recording, nil
 }
 
@@ -571,12 +589,15 @@ func (b *Buffer) Close() error {
 	}
 	b.closed = true
 	var first error
-	if b.join != "" {
-		if err := os.Remove(b.join); err != nil && !errors.Is(err, os.ErrNotExist) && first == nil {
+	// Recordings are immutable and never overwritten, so each one is removed by
+	// name here; the lease stage will hold this back while a player still has a
+	// file open.
+	for _, path := range b.recordings {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) && first == nil {
 			first = err
 		}
-		b.join = ""
 	}
+	b.recordings = nil
 	for _, segment := range b.segments {
 		if err := os.Remove(segment.Path); err != nil && !errors.Is(err, os.ErrNotExist) && first == nil {
 			first = err

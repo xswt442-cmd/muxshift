@@ -355,6 +355,12 @@ func clock(d time.Duration) string {
 // once the video was a direct child.
 func (a *appState) view(c *ui.Context) {
 	defer a.signalFrame()
+	// P15.5: the display-scale walk. A zoom lays the view out in a window 1/z
+	// its size and draws it z times larger, which is what a larger display scale
+	// does to the same window pixels; 0 leaves the scale alone.
+	if a.zoom > 0 {
+		c.SetZoom(a.zoom)
+	}
 	c.SetTheme(muxshiftTheme())
 	// P15.4: window shortcuts. They are declared every pass because ui actions
 	// live one frame; each one sends the same command a button would, against
@@ -371,6 +377,7 @@ func (a *appState) view(c *ui.Context) {
 	// be switched by hand. The panes sit beside the stage, never on top of it,
 	// so the picture is never covered.
 	width, height := c.Size()
+	a.lastWidth, a.lastHeight = width, height
 	ui.Column(c).Fill().Background(colorBg).Children(func() {
 		a.topBar(c, width, height)
 		ui.Row(c).WidthPercent(100).Grow(1).Gap(a.space(6, spaceMd)).Padding(a.space(6, spaceMd)).AlignItems(ui.Stretch).Children(func() {

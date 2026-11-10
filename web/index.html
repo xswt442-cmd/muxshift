@@ -3,61 +3,132 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MuxShift web client</title>
+<title>MuxShift</title>
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<header>
-  <h1>MuxShift web client</h1>
-  <p class="note" id="session-line">connecting…</p>
+<header class="topbar">
+  <div class="brand">
+    <span class="mark" aria-hidden="true">◧</span>
+    <span class="name">MuxShift</span>
+    <span class="tag">web</span>
+  </div>
+  <div class="chips">
+    <span class="chip" id="chip-session">connecting…</span>
+    <span class="chip warn" id="chip-connection" hidden>offline</span>
+  </div>
 </header>
 
-<main>
-  <section class="stage-column">
-    <div id="stage" class="stage">
-      <p class="placeholder" id="stage-placeholder">no source is shown yet</p>
+<main class="workspace">
+  <section class="viewer">
+    <div class="stage" id="stage">
+      <div class="stage-video" id="stage-video"></div>
+
+      <div class="inset" id="inset" hidden>
+        <div class="inset-bar" id="inset-bar">
+          <span class="inset-label" id="inset-label">peek</span>
+          <button class="inset-close" id="inset-close" type="button" aria-label="Close the comparison window">×</button>
+        </div>
+        <div class="inset-video" id="inset-video"></div>
+      </div>
+
+      <div class="tutorial" id="tutorial">
+        <h2>Nothing is on the picture yet</h2>
+        <ol>
+          <li><span>1</span><div><strong>Pick a picture</strong><p>Show a source on the right; the Go session keeps that choice.</p></div></li>
+          <li><span>2</span><div><strong>Pick the sound separately</strong><p>Hear another source at its own level, or mute the one on the picture.</p></div></li>
+          <li><span>3</span><div><strong>Compare two pictures</strong><p>Open <em>peek</em> to float another source over the stage and drag it where you need it.</p></div></li>
+        </ol>
+      </div>
+
+      <div class="stage-top">
+        <span class="live-chip" id="live-chip" hidden>live</span>
+        <span class="stage-source" id="stage-source" hidden></span>
+      </div>
+
+      <div class="stage-bottom">
+        <div class="scrub" id="scrub" aria-hidden="true">
+          <div class="scrub-buffer" id="scrub-buffer"></div>
+          <div class="scrub-played" id="scrub-played"></div>
+        </div>
+        <input class="scrub-input" id="seek" type="range" min="0" max="1" step="0.1" value="0" aria-label="Position in the shown source">
+        <div class="transport">
+          <button class="icon-btn play" id="toggle" type="button" aria-label="Play or pause">▶</button>
+          <button class="icon-btn" id="back" type="button" title="Back 10 seconds (left arrow)">−10</button>
+          <button class="icon-btn" id="fwd" type="button" title="Forward 10 seconds (right arrow)">+10</button>
+          <span class="clock"><span id="position">—</span><span class="dim">/</span><span id="duration">—</span></span>
+          <span class="spacer"></span>
+          <button class="icon-btn" id="peek-toggle" type="button" title="Float another source over the picture">peek</button>
+          <button class="icon-btn" id="mute" type="button" title="Mute the heard source (M)">mute</button>
+          <label class="volume" title="Volume of the heard source">
+            <input id="volume" type="range" min="0" max="1" step="0.05" value="1" aria-label="Volume of the heard source">
+            <output id="volume-out">1.00</output>
+          </label>
+          <button class="icon-btn" id="fullscreen" type="button" title="Full screen">⛶</button>
+        </div>
+      </div>
     </div>
-    <div class="controls">
-      <button id="play-all" type="button">Play all</button>
-      <button id="pause-all" type="button">Pause all</button>
-      <label class="inline">volume
-        <input id="volume" type="range" min="0" max="1" step="0.05" value="1">
-      </label>
-      <button id="mute" type="button">Mute heard source</button>
-      <button id="fit" type="button">Fit window</button>
-    </div>
-    <div class="seek-row">
-      <input id="seek" type="range" min="0" max="1" step="0.05" value="0">
-      <span id="time-line" class="note">—</span>
+
+    <div class="below-stage">
+      <p class="status" id="status" role="status" aria-live="polite">waiting for the session</p>
+      <div class="peek-row" id="peek-row" hidden>
+        <span class="peek-title">peek</span>
+        <label class="peek-opacity">opacity
+          <input id="peek-opacity" type="range" min="0.15" max="1" step="0.05" value="0.6" aria-label="Opacity of the peek window">
+          <output id="peek-opacity-out">0.60</output>
+        </label>
+        <span class="hint">drag the inset bar to move it, <kbd>P</kbd> toggles it</span>
+      </div>
+      <p class="hint"><kbd>space</kbd> play/pause · <kbd>←</kbd><kbd>→</kbd> ten seconds · <kbd>M</kbd> mute · <kbd>P</kbd> peek · <kbd>1</kbd>–<kbd>9</kbd> pick a picture</p>
     </div>
   </section>
 
-  <aside class="side">
-    <h2>Sources</h2>
-    <p class="note">Picking a picture and a sound updates the Go session through <code>POST /api/scene</code>.</p>
-    <ul id="sources" class="sources"></ul>
+  <aside class="panel">
+    <div class="panel-head">
+      <h2>Sources</h2>
+      <button class="ghost" id="refresh" type="button">refresh</button>
+    </div>
+    <p class="note">Picture and sound are chosen separately; every choice is written to the Go session through <code>POST /api/scene</code>.</p>
+    <ul class="cards" id="sources"></ul>
 
     <h2>Scene</h2>
-    <p class="note" id="scene-line">—</p>
+    <div class="slots">
+      <div class="slot">
+        <span class="slot-label">picture</span>
+        <span class="slot-value" id="slot-picture">none</span>
+      </div>
+      <div class="slot">
+        <span class="slot-label">sound</span>
+        <span class="slot-value" id="slot-sound">none</span>
+      </div>
+    </div>
 
-    <h2>What this build supports</h2>
-    <ul class="limits">
-      <li>Playback of one HLS or MP4 source per element, through hls.js and Media Source Extensions.</li>
-      <li>Picture from one source and sound from another, at independent volumes.</li>
-      <li>No cross-source timing: the web client does not align two live sources, and it does not buffer or replay history.</li>
-      <li>Seek only inside what the browser has buffered; live HLS starts at the live edge.</li>
-      <li>Browsers refuse to start sound without a click, so every source starts muted.</li>
-    </ul>
+    <details class="help">
+      <summary>What this build supports</summary>
+      <ul class="limits">
+        <li>One HLS or MP4 source per media element, through hls.js and Media Source Extensions.</li>
+        <li>Picture from one source and sound from another, at independent volumes.</li>
+        <li>No cross-source timing: two live sources are not aligned here, and nothing is buffered or replayed.</li>
+        <li>Peek only floats a second picture for comparing by eye; it changes nothing in the session.</li>
+        <li>Seeking stays inside what the browser has buffered; live HLS starts at the live edge.</li>
+        <li>Browsers refuse sound before a click, so every source starts muted.</li>
+      </ul>
+    </details>
 
-    <h2>Environment</h2>
-    <ul id="environment" class="limits"></ul>
+    <details class="help">
+      <summary>Environment</summary>
+      <ul class="limits" id="environment"></ul>
+    </details>
   </aside>
-</main>
 
-<section class="log">
-  <h2>Events</h2>
-  <ol id="log"></ol>
-</section>
+  <section class="log">
+    <div class="log-head">
+      <h2>Events</h2>
+      <button class="ghost" id="clear-log" type="button">clear</button>
+    </div>
+    <ol id="log"></ol>
+  </section>
+</main>
 
 <script src="vendor/hls.light.min.js"></script>
 <script src="app.js"></script>

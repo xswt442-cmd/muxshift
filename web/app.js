@@ -1,55 +1,95 @@
 // The web client: it asks the Go session what to show, keeps one media element
-// per source, and reports what the browser really does with the stream.
+// per source, floats a second picture for comparing by eye, and reports what the
+// browser really does with each stream.
 "use strict";
 
 const params = new URLSearchParams(window.location.search);
-const token = params.get("token") || "";
+const bootstrapToken = params.get("token") || "";
 // The bootstrap address carries the token once. Everything after that rides on
 // the HttpOnly cookie the server set while serving this page, so the token does
 // not stay in the address bar, the history, or every request URL.
-if (token) {
+if (bootstrapToken) {
   params.delete("token");
   const cleaned = window.location.pathname + (params.toString() ? `?${params}` : "");
   window.history.replaceState(null, "", cleaned);
 }
 
-const elements = {
-  sessionLine: document.getElementById("session-line"),
+const el = {
+  chipSession: document.getElementById("chip-session"),
+  chipConnection: document.getElementById("chip-connection"),
   stage: document.getElementById("stage"),
-  placeholder: document.getElementById("stage-placeholder"),
-  sources: document.getElementById("sources"),
-  sceneLine: document.getElementById("scene-line"),
-  environment: document.getElementById("environment"),
-  log: document.getElementById("log"),
+  stageVideo: document.getElementById("stage-video"),
+  stageSource: document.getElementById("stage-source"),
+  liveChip: document.getElementById("live-chip"),
+  tutorial: document.getElementById("tutorial"),
+  inset: document.getElementById("inset"),
+  insetBar: document.getElementById("inset-bar"),
+  insetLabel: document.getElementById("inset-label"),
+  insetClose: document.getElementById("inset-close"),
+  insetVideo: document.getElementById("inset-video"),
+  toggle: document.getElementById("toggle"),
+  back: document.getElementById("back"),
+  fwd: document.getElementById("fwd"),
+  position: document.getElementById("position"),
+  duration: document.getElementById("duration"),
+  scrub: document.getElementById("scrub"),
+  scrubBuffer: document.getElementById("scrub-buffer"),
+  scrubPlayed: document.getElementById("scrub-played"),
   seek: document.getElementById("seek"),
-  timeLine: document.getElementById("time-line"),
-  volume: document.getElementById("volume"),
+  peekToggle: document.getElementById("peek-toggle"),
   mute: document.getElementById("mute"),
+  volume: document.getElementById("volume"),
+  volumeOut: document.getElementById("volume-out"),
+  fullscreen: document.getElementById("fullscreen"),
+  status: document.getElementById("status"),
+  peekRow: document.getElementById("peek-row"),
+  peekOpacity: document.getElementById("peek-opacity"),
+  peekOpacityOut: document.getElementById("peek-opacity-out"),
+  sources: document.getElementById("sources"),
+  slotPicture: document.getElementById("slot-picture"),
+  slotSound: document.getElementById("slot-sound"),
+  refresh: document.getElementById("refresh"),
+  environment: document.getElementById("environment"),
+  clearLog: document.getElementById("clear-log"),
+  log: document.getElementById("log"),
 };
 
-/** players holds one media element and one hls.js instance per source id. */
 const players = new Map();
-let session = null;
-let heard = "";
-let muted = false;
-let volume = 1;
-let interacted = false;
+const state = {
+  session: null,
+  heard: "",
+  muted: false,
+  volume: 1,
+  interacted: false,
+  dragging: false,
+  peek: "",
+  peekOpacity: 0.6,
+  offline: false,
+  lastShown: "",
+};
 
-// Browsers only allow sound after the page has been clicked or tapped; until
-// then every element stays muted so playback can still start.
-document.addEventListener("pointerdown", () => {
-  interacted = true;
-  applyScene();
-}, { once: true });
+document.addEventListener(
+  "pointerdown",
+  () => {
+    state.interacted = true;
+    applyScene();
+  },
+  { once: true },
+);
 
 function log(message, kind = "info") {
   const item = document.createElement("li");
   item.className = kind;
-  const stamp = new Date().toLocaleTimeString();
-  item.textContent = `${stamp} ${message}`;
-  elements.log.prepend(item);
-  while (elements.log.children.length > 60) {
-    elements.log.lastChild.remove();
+  const stamp = document.createElement("span");
+  stamp.className = "stamp";
+  stamp.textContent = new Date().toLocaleTimeString([], { hour12: false });
+  const text = document.createElement("span");
+  text.className = "text";
+  text.textContent = message;
+  item.append(stamp, text);
+  el.log.prepend(item);
+  while (el.log.children.length > 80) {
+    el.log.lastChild.remove();
   }
 }
 
@@ -67,21 +107,51 @@ async function api(path, options = {}) {
   return response.json();
 }
 
+function format(value) {
+  if (!Number.isFinite(value) || value < 0) {
+    return "—";
+  }
+  const total = Math.floor(value);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  const pad = (n) => String(n).padStart(2, "0");
+  return hours > 0 ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${minutes}:${pad(seconds)}`;
+}
+
+function shortURI(uri) {
+  try {
+    const parsed = new URL(uri, window.location.origin);
+    return parsed.pathname;
+  } catch {
+    return uri;
+  }
+}
+
+function readyLabel(video) {
+  if (video.readyState >= 4) return "ready";
+  if (video.readyState >= 3) return "buffered";
+  if (video.readyState >= 2) return "loading";
+  if (video.readyState >= 1) return "metadata";
+  return "idle";
+}
+
 function describeEnvironment() {
-  const rows = [];
   const canPlay = (type) => {
     const probe = document.createElement("video");
     return probe.canPlayType(type) || "no";
   };
-  rows.push(`MSE: ${window.MediaSource ? "available" : "missing"}`);
-  rows.push(`hls.js: ${window.Hls ? window.Hls.version : "not loaded"}`);
-  rows.push(`native HLS: ${canPlay("application/vnd.apple.mpegurl")}`);
-  rows.push(`MP4 H.264/AAC: ${canPlay('video/mp4; codecs="avc1.42E01E,mp4a.40.2"')}`);
-  rows.push(`user agent: ${navigator.userAgent}`);
+  const rows = [
+    `MSE: ${window.MediaSource ? "available" : "missing"}`,
+    `hls.js: ${window.Hls ? window.Hls.version : "not loaded"}`,
+    `native HLS: ${canPlay("application/vnd.apple.mpegurl")}`,
+    `MP4 H.264/AAC: ${canPlay('video/mp4; codecs="avc1.42E01E,mp4a.40.2"')}`,
+    `user agent: ${navigator.userAgent}`,
+  ];
   for (const row of rows) {
     const item = document.createElement("li");
     item.textContent = row;
-    elements.environment.append(item);
+    el.environment.append(item);
   }
 }
 
@@ -93,279 +163,670 @@ function buildPlayer(source) {
   video.preload = "auto";
   video.dataset.source = source.id;
   video.className = "player hidden";
-  elements.stage.append(video);
+  el.stageVideo.append(video);
 
-  const state = { source, video, hls: null, lastError: "" };
+  const player = { source, video, hls: null, lastError: "" };
   video.addEventListener("error", () => {
     const code = video.error ? `${video.error.code} ${video.error.message}` : "unknown";
-    state.lastError = `media element error ${code}`;
-    log(`${source.id}: ${state.lastError}`, "error");
+    player.lastError = `media element error ${code}`;
+    log(`${source.id}: ${player.lastError}`, "error");
+    updateCards();
   });
   video.addEventListener("waiting", () => {
-    if (source.shown) {
-      log(`${source.id}: waiting for data`);
+    if (player.source && player.source.shown) {
+      log(`${source.id}: waiting for data`, "warn");
     }
   });
-  video.addEventListener("playing", () => {
-    log(`${source.id}: playing`);
+  video.addEventListener("playing", () => log(`${source.id}: playing`));
+  video.addEventListener("ended", () => {
+    if (player.source && player.source.shown) {
+      log(`${source.id}: reached its end`);
+    }
   });
 
+  attachStream(player);
+  players.set(source.id, player);
+  makeCard(player);
+  return player;
+}
+
+function attachStream(player) {
+  const source = player.source;
+  player.lastError = "";
+  if (player.hls) {
+    player.hls.destroy();
+    player.hls = null;
+  }
   const isHls = /\.m3u8(\?|$)/i.test(source.url);
   if (isHls) {
     if (!window.Hls) {
-      state.lastError = "hls.js did not load, HLS cannot play in this browser";
-      log(`${source.id}: ${state.lastError}`, "error");
-    } else if (window.Hls.isSupported()) {
-      const hls = new window.Hls({ enableWorker: true, lowLatencyMode: false });
-      hls.loadSource(source.url);
-      hls.attachMedia(video);
-      hls.on(window.Hls.Events.ERROR, (_event, data) => {
-        if (!data.fatal) {
-          return;
-        }
-        state.lastError = `hls.js ${data.type}/${data.details} (${data.reason || "no reason"})`;
-        log(`${source.id}: ${state.lastError}`, "error");
-        if (data.type === window.Hls.ErrorTypes.NETWORK_ERROR) {
-          hls.startLoad();
-        } else if (data.type === window.Hls.ErrorTypes.MEDIA_ERROR) {
-          hls.recoverMediaError();
-        }
-      });
-      state.hls = hls;
-      log(`${source.id}: hls.js attached to ${source.url}`);
-    } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
-      video.src = source.url;
-      log(`${source.id}: using the browser's own HLS support`);
-    } else {
-      state.lastError = "this browser can play neither MSE HLS nor native HLS";
-      log(`${source.id}: ${state.lastError}`, "error");
+      player.lastError = "hls.js did not load, HLS cannot play in this browser";
+      log(`${source.id}: ${player.lastError}`, "error");
+      return;
     }
-  } else {
-    video.src = source.url;
-    log(`${source.id}: media element opens ${source.url}`);
+    if (!window.Hls.isSupported()) {
+      if (player.video.canPlayType("application/vnd.apple.mpegurl")) {
+        player.video.src = source.url;
+        log(`${source.id}: using the browser's own HLS support`);
+      } else {
+        player.lastError = "this browser can play neither MSE HLS nor native HLS";
+        log(`${source.id}: ${player.lastError}`, "error");
+      }
+      return;
+    }
+    const hls = new window.Hls({ enableWorker: true, lowLatencyMode: false });
+    hls.loadSource(source.url);
+    hls.attachMedia(player.video);
+    hls.on(window.Hls.Events.ERROR, (_event, data) => {
+      if (!data.fatal) {
+        return;
+      }
+      player.lastError = `hls.js ${data.type}/${data.details} (${data.reason || "no reason"})`;
+      log(`${source.id}: ${player.lastError}`, "error");
+      updateCards();
+      if (data.type === window.Hls.ErrorTypes.NETWORK_ERROR) {
+        hls.startLoad();
+      } else if (data.type === window.Hls.ErrorTypes.MEDIA_ERROR) {
+        hls.recoverMediaError();
+      }
+    });
+    player.hls = hls;
+    log(`${source.id}: hls.js attached to ${shortURI(source.url)}`);
+    return;
   }
-  players.set(source.id, state);
-  return state;
+  player.video.src = source.url;
+  log(`${source.id}: media element opens ${shortURI(source.url)}`);
 }
 
-function renderSources() {
-  elements.sources.textContent = "";
-  for (const source of session.sources) {
+function retry(player) {
+  player.video.removeAttribute("src");
+  player.video.load();
+  attachStream(player);
+  updateCards();
+  player.video.play().catch((error) => log(`${player.source.id}: play() refused: ${error.message}`, "error"));
+}
+
+function makeCard(player) {
+  const source = player.source;
+  const root = document.createElement("li");
+  root.className = "card";
+
+  const thumb = document.createElement("canvas");
+  thumb.className = "thumb";
+  thumb.width = 192;
+  thumb.height = 108;
+
+  const body = document.createElement("div");
+  body.className = "card-body";
+
+  const head = document.createElement("div");
+  head.className = "card-head";
+  const dot = document.createElement("span");
+  dot.className = "dot";
+  const id = document.createElement("span");
+  id.className = "card-id";
+  id.textContent = source.id;
+  const badges = document.createElement("span");
+  badges.className = "badges";
+  const picture = document.createElement("span");
+  picture.className = "badge picture";
+  picture.textContent = "picture";
+  const sound = document.createElement("span");
+  sound.className = "badge sound";
+  sound.textContent = "sound";
+  badges.append(picture, sound);
+  head.append(dot, id, badges);
+
+  const uri = document.createElement("p");
+  uri.className = "card-uri";
+  uri.textContent = shortURI(source.url);
+  uri.title = source.url;
+
+  const stats = document.createElement("p");
+  stats.className = "card-stats";
+  stats.textContent = "—";
+
+  const actions = document.createElement("div");
+  actions.className = "card-actions";
+  const show = document.createElement("button");
+  show.type = "button";
+  show.textContent = "Show";
+  show.addEventListener("click", () => {
+    requestScene(source.id, state.heard || source.id).catch((error) => log(error.message, "error"));
+  });
+  const hear = document.createElement("button");
+  hear.type = "button";
+  hear.textContent = "Hear";
+  hear.addEventListener("click", () => {
+    requestScene(shownID() || source.id, source.id).catch((error) => log(error.message, "error"));
+  });
+  const peek = document.createElement("button");
+  peek.type = "button";
+  peek.textContent = "Peek";
+  peek.addEventListener("click", () => openPeek(source.id));
+  const again = document.createElement("button");
+  again.type = "button";
+  again.textContent = "Retry";
+  again.hidden = true;
+  again.addEventListener("click", () => retry(player));
+  actions.append(show, hear, peek, again);
+
+  const problem = document.createElement("p");
+  problem.className = "card-error";
+  problem.hidden = true;
+
+  body.append(head, uri, stats, actions, problem);
+  root.append(thumb, body);
+  el.sources.append(root);
+  player.card = { root, thumb, dot, picture, sound, stats, show, hear, peek, again, problem };
+}
+
+function captureThumb(player) {
+  const video = player.video;
+  if (!player.card || video.readyState < 2 || video.videoWidth === 0) {
+    return;
+  }
+  const context = player.card.thumb.getContext("2d");
+  if (!context) {
+    return;
+  }
+  try {
+    context.drawImage(video, 0, 0, player.card.thumb.width, player.card.thumb.height);
+  } catch (error) {
+    log(`${player.source.id}: the browser refused to draw the thumbnail (${error.message})`, "warn");
+  }
+}
+
+function updateCards() {
+  if (!state.session) {
+    return;
+  }
+  for (const source of state.session.sources) {
     const player = players.get(source.id);
-    const item = document.createElement("li");
-    item.className = source.shown ? "source shown" : "source";
-
-    const title = document.createElement("p");
-    title.className = "source-title";
-    title.textContent = `${source.id} — ${source.uri}`;
-    item.append(title);
-
-    const picture = document.createElement("button");
-    picture.type = "button";
-    picture.textContent = source.shown ? "shown" : "show this picture";
-    picture.disabled = source.shown;
-    picture.addEventListener("click", () => {
-      requestScene(source.id, heardSource() || source.id).catch((error) => log(error.message, "error"));
-    });
-    item.append(picture);
-
-    const sound = document.createElement("button");
-    sound.type = "button";
-    sound.textContent = heard === source.id ? "heard" : "hear this source";
-    sound.disabled = heard === source.id;
-    sound.addEventListener("click", () => {
-      requestScene(shownSource() || source.id, source.id).catch((error) => log(error.message, "error"));
-    });
-    item.append(sound);
-
-    const state = document.createElement("p");
-    state.className = "note";
-    if (player) {
-      const video = player.video;
-      state.textContent = `ready ${video.readyState}/4 · ${format(video.currentTime)} of ${format(video.duration)} · leveled ${format(bufferedFor(video))}`;
+    if (!player || !player.card) {
+      continue;
     }
-    item.append(state);
-    elements.sources.append(item);
+    const c = player.card;
+    c.root.classList.toggle("shown", Boolean(source.shown));
+    c.root.classList.toggle("peeking", state.peek === source.id);
+    c.picture.classList.toggle("on", Boolean(source.shown));
+    c.sound.classList.toggle("on", source.id === state.heard);
+    c.show.disabled = Boolean(source.shown);
+    c.hear.disabled = source.id === state.heard;
+    c.peek.disabled = Boolean(source.shown) || state.peek === source.id;
+    c.again.hidden = !player.lastError;
+    c.problem.hidden = !player.lastError;
+    c.problem.textContent = player.lastError;
+    const ready = readyLabel(player.video);
+    c.dot.className = `dot ${player.lastError ? "bad" : ready === "ready" || ready === "buffered" ? "ready" : ready === "idle" ? "" : "busy"}`;
+    c.stats.textContent = `${ready} · ${format(player.video.currentTime)} / ${format(player.video.duration)}`;
   }
 }
 
-function shownSource() {
-  const shown = session.sources.find((source) => source.shown);
+function shownID() {
+  if (!state.session) {
+    return "";
+  }
+  const shown = state.session.sources.find((source) => source.shown);
   return shown ? shown.id : "";
 }
 
-function heardSource() {
-  return heard;
+function shownPlayer() {
+  return players.get(shownID());
 }
 
-function format(value) {
-  if (!Number.isFinite(value)) {
-    return "—";
+function openPeek(id) {
+  if (!id || id === shownID()) {
+    return;
   }
-  const minutes = Math.floor(value / 60);
-  const seconds = Math.floor(value % 60);
-  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+  state.peek = id;
+  const player = players.get(id);
+  if (!player) {
+    return;
+  }
+  el.insetVideo.append(player.video);
+  player.video.classList.remove("hidden");
+  el.inset.hidden = false;
+  el.peekRow.hidden = false;
+  el.insetLabel.textContent = `peek · ${id}`;
+  el.inset.style.opacity = String(state.peekOpacity);
+  el.peekOpacity.value = String(state.peekOpacity);
+  el.peekOpacityOut.textContent = state.peekOpacity.toFixed(2);
+  el.peekToggle.classList.add("on");
+  log(`peek: ${id} floats over the picture; it changes nothing in the session`);
+  clipInset();
+  applyScene();
 }
 
-function bufferedFor(video) {
-  if (!video.buffered || video.buffered.length === 0) {
-    return 0;
+function closePeek() {
+  if (!state.peek) {
+    return;
   }
-  return video.buffered.end(video.buffered.length - 1) - video.buffered.start(0);
+  const player = players.get(state.peek);
+  const id = state.peek;
+  state.peek = "";
+  if (player) {
+    el.stageVideo.append(player.video);
+    player.video.classList.add("hidden");
+  }
+  el.inset.hidden = true;
+  el.peekRow.hidden = true;
+  el.peekToggle.classList.remove("on");
+  log(`peek: closed ${id}`);
+  applyScene();
+}
+
+// clipInset keeps the floating window inside the stage after a resize.
+function clipInset() {
+  if (el.inset.hidden) {
+    return;
+  }
+  const stage = el.stage.getBoundingClientRect();
+  const rect = el.inset.getBoundingClientRect();
+  const maxLeft = Math.max(0, stage.width - rect.width - 8);
+  const maxTop = Math.max(0, stage.height - rect.height - 8);
+  el.inset.style.left = `${Math.min(Math.max(0, rect.left - stage.left), maxLeft)}px`;
+  el.inset.style.top = `${Math.min(Math.max(0, rect.top - stage.top), maxTop)}px`;
 }
 
 function applyScene() {
-  for (const source of session.sources) {
+  if (!state.session) {
+    return;
+  }
+  const shown = shownID();
+  for (const source of state.session.sources) {
     const player = players.get(source.id);
     if (!player) {
       continue;
     }
     player.source = source;
-    player.video.classList.toggle("hidden", !source.shown);
-    const audible = !muted && interacted && source.id === heard;
-    player.video.muted = source.muted || !audible;
-    player.video.volume = Math.max(0, Math.min(1, source.id === heard ? volume : source.volume));
+    const isShown = source.id === shown;
+    const isPeek = source.id === state.peek;
+    if (!isPeek) {
+      player.video.className = isShown ? "player" : "player hidden";
+    }
+    const audible = state.interacted && !state.muted && source.id === state.heard;
+    player.video.muted = !audible;
+    player.video.volume = Math.max(0, Math.min(1, source.id === state.heard ? state.volume : source.volume));
   }
-  const shownPlayer = players.get(shownSource());
-  const failed = shownPlayer && shownPlayer.lastError && shownPlayer.video.readyState === 0;
-  elements.placeholder.textContent = failed
-    ? `this picture cannot play: ${shownPlayer.lastError}`
-    : "no source is shown yet";
-  elements.placeholder.classList.toggle("hidden", Boolean(shownSource()) && !failed);
-  elements.sceneLine.textContent = `picture ${shownSource() || "none"} · sound ${heard || "none"} at ${volume.toFixed(2)}${muted ? " (muted)" : ""}`;
-  const shown = players.get(shownSource());
-  elements.seek.disabled = !shown;
+
+  if (state.peek && state.peek === shown) {
+    closePeek();
+  }
+
+  const player = shownPlayer();
+  el.tutorial.hidden = Boolean(shown) || Boolean(player && player.lastError);
+  el.stageSource.hidden = !shown;
   if (shown) {
-    const duration = Number.isFinite(shown.video.duration) ? shown.video.duration : 0;
-    elements.seek.max = String(duration || 1);
-    elements.seek.value = String(shown.video.currentTime || 0);
-    elements.timeLine.textContent = `${format(shown.video.currentTime)} of ${format(shown.video.duration)} · buffered ${format(bufferedFor(shown.video))}`;
-  } else {
-    elements.timeLine.textContent = "—";
+    el.stageSource.textContent = `${shown} · ${shortURI(player.source.url)}`;
   }
-  renderSources();
+  el.liveChip.hidden = true;
+
+  el.slotPicture.textContent = shown || "none";
+  el.slotSound.textContent = state.heard || "none";
+  el.chipSession.textContent = `${state.session.sources.length} source${state.session.sources.length === 1 ? "" : "s"} · scene ${state.session.scene}`;
+  el.mute.textContent = state.muted ? "unmute" : "mute";
+  el.mute.classList.toggle("on", state.muted);
+  el.volume.value = String(state.volume);
+  el.volumeOut.textContent = state.volume.toFixed(2);
+  el.seek.disabled = !shown;
+
+  updateTransport();
+  updateCards();
+  if (state.lastShown !== shown) {
+    state.lastShown = shown;
+    if (shown) {
+      log(`picture is now ${shown}`);
+    }
+  }
+}
+
+function updateTransport() {
+  const player = shownPlayer();
+  if (!player) {
+    el.position.textContent = "—";
+    el.duration.textContent = "—";
+    el.toggle.disabled = true;
+    el.back.disabled = true;
+    el.fwd.disabled = true;
+    el.scrubPlayed.style.width = "0%";
+    el.scrubBuffer.style.width = "0%";
+    el.status.textContent = "no source is on the picture; pick one from the list";
+    el.status.classList.remove("bad");
+    el.liveChip.hidden = true;
+    return;
+  }
+  const video = player.video;
+  const duration = Number.isFinite(video.duration) ? video.duration : NaN;
+  el.position.textContent = format(video.currentTime);
+  el.duration.textContent = Number.isFinite(duration) ? format(duration) : "live";
+  el.liveChip.hidden = Number.isFinite(duration);
+  el.toggle.disabled = false;
+  el.toggle.textContent = video.paused ? "▶" : "⏸";
+  el.toggle.setAttribute("aria-label", video.paused ? "Play" : "Pause");
+  el.back.disabled = !Number.isFinite(duration);
+  el.fwd.disabled = !Number.isFinite(duration);
+
+  if (Number.isFinite(duration) && duration > 0) {
+    el.seek.max = String(duration);
+    if (!state.dragging) {
+      el.seek.value = String(video.currentTime);
+    }
+    const start = video.buffered.length ? video.buffered.start(0) : 0;
+    const end = video.buffered.length ? video.buffered.end(video.buffered.length - 1) : 0;
+    el.scrubBuffer.style.left = `${(start / duration) * 100}%`;
+    el.scrubBuffer.style.width = `${Math.max(0, ((end - start) / duration) * 100)}%`;
+    el.scrubPlayed.style.width = `${Math.max(0, (video.currentTime / duration) * 100)}%`;
+  } else {
+    el.seek.max = "1";
+    el.seek.value = "0";
+    el.scrubPlayed.style.width = "0%";
+    el.scrubBuffer.style.width = "0%";
+  }
+
+  const soundSource = state.session.sources.find((source) => source.id === state.heard);
+  el.status.classList.toggle("bad", Boolean(player.lastError));
+  if (player.lastError) {
+    el.status.textContent = `${player.source.id} cannot play this stream: ${player.lastError}`;
+  } else {
+    const parts = [`${player.source.id} shows ${format(video.currentTime)} of ${Number.isFinite(duration) ? format(duration) : "a live stream"}`];
+    if (soundSource) {
+      parts.push(`sound comes from ${soundSource.id}${state.muted ? " (muted)" : ""}`);
+    }
+    if (!state.interacted) {
+      parts.push("click the page once to let the browser play sound");
+    }
+    if (state.peek) {
+      parts.push(`peeking at ${state.peek}`);
+    }
+    el.status.textContent = parts.join(" · ");
+  }
+}
+
+function nudge(seconds) {
+  const player = shownPlayer();
+  if (!player) {
+    return;
+  }
+  const duration = Number.isFinite(player.video.duration) ? player.video.duration : 0;
+  if (!duration) {
+    log("this source has no known duration, it cannot be moved by hand", "error");
+    return;
+  }
+  const target = Math.min(duration - 0.1, Math.max(0, player.video.currentTime + seconds));
+  player.video.currentTime = target;
+  log(`seek asked for ${format(target)} of ${format(duration)}`);
 }
 
 async function requestScene(videoID, audioID) {
-  const payload = { video: videoID, audio: audioID, volume, muted };
+  const payload = { video: videoID, audio: audioID, volume: state.volume, muted: state.muted };
   const updated = await api("/api/scene", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  session = updated;
-  heard = audioID;
+  state.session = updated;
+  state.heard = audioID;
   log(`scene: video ${videoID}, audio ${audioID}`);
   applyScene();
+}
+
+function adoptedScene(fresh) {
+  const shown = fresh.sources.find((source) => source.shown);
+  const heard = fresh.sources.find((source) => !source.muted) || fresh.sources[0];
+  return {
+    video: shown ? shown.id : "",
+    audio: heard ? heard.id : "",
+    volume: heard ? heard.volume : state.volume,
+    muted: heard ? heard.muted : state.muted,
+  };
+}
+
+async function refreshSession(force = false) {
+  let fresh;
+  try {
+    fresh = await api("/api/session");
+  } catch (error) {
+    if (!state.offline) {
+      state.offline = true;
+      el.chipConnection.hidden = false;
+      log(`the session could not be read: ${error.message}`, "error");
+    }
+    return;
+  }
+  if (state.offline) {
+    state.offline = false;
+    el.chipConnection.hidden = true;
+  }
+  const known = new Set(players.keys());
+  const added = fresh.sources.filter((source) => !known.has(source.id));
+  const scene = adoptedScene(fresh);
+  const changed =
+    force || added.length > 0 || scene.video !== shownID() || scene.audio !== state.heard || scene.volume !== state.volume || scene.muted !== state.muted;
+  state.session = fresh;
+  if (!changed) {
+    return;
+  }
+  for (const source of added) {
+    const player = buildPlayer(source);
+    player.video.play().catch((error) => log(`${source.id}: play() refused: ${error.message}`, "error"));
+  }
+  state.heard = scene.audio;
+  state.volume = scene.volume;
+  state.muted = scene.muted;
+  if (added.length) {
+    log(`session now lists ${added.map((source) => source.id).join(", ")}`);
+  }
+  applyScene();
+}
+
+function startPlayback() {
+  for (const player of players.values()) {
+    const result = player.video.play();
+    if (result && typeof result.catch === "function") {
+      result.catch((error) => log(`${player.source.id}: play() refused: ${error.message}`, "error"));
+    }
+  }
 }
 
 async function start() {
   describeEnvironment();
   try {
-    session = await api("/api/session");
+    state.session = await api("/api/session");
   } catch (error) {
     log(`the session could not be read: ${error.message}`, "error");
     log("open the address printed at startup, which carries the token once", "error");
+    el.status.textContent = "the session is not reachable; open the address printed at startup";
+    el.status.classList.add("bad");
     return;
   }
-  elements.sessionLine.textContent = `session ${session.session} · scene ${session.scene} · ${session.sources.length} sources`;
-  heard = (session.sources.find((source) => !source.muted) || session.sources[0] || {}).id || "";
-  for (const source of session.sources) {
+  const scene = adoptedScene(state.session);
+  state.heard = scene.audio;
+  state.volume = scene.volume;
+  state.muted = scene.muted;
+  for (const source of state.session.sources) {
     buildPlayer(source);
   }
-  renderSources();
   applyScene();
-  for (const state of players.values()) {
-    const result = state.video.play();
-    if (result && typeof result.catch === "function") {
-      result.catch((error) => log(`${state.source.id}: play() refused: ${error.message}`, "error"));
+  startPlayback();
+  setInterval(updateTransport, 250);
+  setInterval(updateCards, 1000);
+  setInterval(() => {
+    for (const player of players.values()) {
+      captureThumb(player);
     }
-  }
-  setInterval(applyScene, 500);
-  setInterval(refreshSession, 2000);
+  }, 4000);
+  setInterval(() => refreshSession(false), 2000);
 }
 
-// refreshSession picks up changes another client made, which is how a source
-// imported through the browser extension appears without a reload. It adopts a
-// new source only when the session really lists one the page has no player
-// for, and takes the scene only when it differs from what is shown here.
-async function refreshSession() {
-  let fresh;
-  try {
-    fresh = await api("/api/session");
-  } catch (error) {
+/* ---------- controls ---------- */
+
+el.toggle.addEventListener("click", () => {
+  const player = shownPlayer();
+  if (!player) {
     return;
   }
-  const known = new Set(players.keys());
-  const added = fresh.sources.filter((source) => !known.has(source.id));
-  const shownNow = fresh.sources.find((source) => source.shown)?.id || "";
-  const heardNow = fresh.sources.find((source) => !source.muted)?.id || "";
-  const changed =
-    added.length > 0 ||
-    shownNow !== (session.sources.find((source) => source.shown)?.id || "") ||
-    heardNow !== heard;
-  session = fresh;
-  if (!changed) return;
-  for (const source of added) {
-    const state = buildPlayer(source);
-    state.video.play().catch((error) => log(`${source.id}: play() refused: ${error.message}`, "error"));
+  if (player.video.ended) {
+    player.video.currentTime = 0;
   }
-  heard = heardNow || heard;
-  elements.sessionLine.textContent = `session ${session.session} · scene ${session.scene} · ${session.sources.length} sources`;
-  renderSources();
-  applyScene();
-  if (added.length) {
-    log(`session now lists ${added.map((source) => source.id).join(", ")}`, "info");
+  if (player.video.paused) {
+    player.video.play().catch((error) => log(`play() refused: ${error.message}`, "error"));
+    log("played the picture");
+  } else {
+    player.video.pause();
+    log("paused the picture");
   }
-}
+});
 
-document.getElementById("play-all").addEventListener("click", () => {
-  for (const state of players.values()) {
-    const result = state.video.play();
-    if (result && typeof result.catch === "function") {
-      result.catch((error) => log(`${state.source.id}: play() refused: ${error.message}`, "error"));
+el.back.addEventListener("click", () => nudge(-10));
+el.fwd.addEventListener("click", () => nudge(10));
+
+el.mute.addEventListener("click", () => {
+  state.muted = !state.muted;
+  applyScene();
+  const video = shownID() || state.session.sources[0]?.id || "";
+  requestScene(video, state.heard || video).catch((error) => log(error.message, "error"));
+});
+
+el.volume.addEventListener("input", () => {
+  state.volume = Number(el.volume.value);
+  el.volumeOut.textContent = state.volume.toFixed(2);
+  applyScene();
+});
+
+el.volume.addEventListener("change", () => {
+  const video = shownID() || state.session.sources[0]?.id || "";
+  requestScene(video, state.heard || video).catch((error) => log(error.message, "error"));
+});
+
+el.seek.addEventListener("pointerdown", () => {
+  state.dragging = true;
+});
+el.seek.addEventListener("pointerup", () => {
+  state.dragging = false;
+});
+el.seek.addEventListener("input", () => {
+  const player = shownPlayer();
+  if (!player) {
+    return;
+  }
+  const duration = Number.isFinite(player.video.duration) ? player.video.duration : 0;
+  if (!duration) {
+    return;
+  }
+  player.video.currentTime = Number(el.seek.value);
+  el.position.textContent = format(player.video.currentTime);
+});
+el.seek.addEventListener("change", () => {
+  state.dragging = false;
+  const player = shownPlayer();
+  if (player) {
+    log(`seek asked for ${format(player.video.currentTime)} of ${format(player.video.duration)}`);
+  }
+});
+
+el.peekToggle.addEventListener("click", () => {
+  if (state.peek) {
+    closePeek();
+    return;
+  }
+  const candidate = state.session.sources.find((source) => !source.shown);
+  if (!candidate) {
+    log("there is no other picture to peek at", "warn");
+    return;
+  }
+  openPeek(candidate.id);
+});
+
+el.insetClose.addEventListener("click", closePeek);
+
+el.peekOpacity.addEventListener("input", () => {
+  state.peekOpacity = Number(el.peekOpacity.value);
+  el.peekOpacityOut.textContent = state.peekOpacity.toFixed(2);
+  el.inset.style.opacity = String(state.peekOpacity);
+});
+
+el.fullscreen.addEventListener("click", () => {
+  if (document.fullscreenElement) {
+    document.exitFullscreen().catch((error) => log(error.message, "warn"));
+    return;
+  }
+  el.stage.requestFullscreen().catch((error) => log(`full screen was refused: ${error.message}`, "warn"));
+});
+
+el.refresh.addEventListener("click", () => {
+  refreshSession(true).catch((error) => log(error.message, "error"));
+});
+
+el.clearLog.addEventListener("click", () => {
+  el.log.textContent = "";
+});
+
+/* ---------- peek dragging ---------- */
+
+let drag = null;
+el.insetBar.addEventListener("pointerdown", (event) => {
+  if (event.target === el.insetClose) {
+    return;
+  }
+  const stage = el.stage.getBoundingClientRect();
+  const rect = el.inset.getBoundingClientRect();
+  drag = { x: event.clientX, y: event.clientY, left: rect.left - stage.left, top: rect.top - stage.top };
+  el.insetBar.setPointerCapture(event.pointerId);
+});
+el.insetBar.addEventListener("pointermove", (event) => {
+  if (!drag) {
+    return;
+  }
+  const stage = el.stage.getBoundingClientRect();
+  const rect = el.inset.getBoundingClientRect();
+  const left = Math.min(Math.max(0, drag.left + event.clientX - drag.x), Math.max(0, stage.width - rect.width));
+  const top = Math.min(Math.max(0, drag.top + event.clientY - drag.y), Math.max(0, stage.height - rect.height));
+  el.inset.style.left = `${left}px`;
+  el.inset.style.top = `${top}px`;
+});
+el.insetBar.addEventListener("pointerup", () => {
+  drag = null;
+});
+
+window.addEventListener("resize", clipInset);
+
+/* ---------- keyboard ---------- */
+
+document.addEventListener("keydown", (event) => {
+  const tag = (event.target && event.target.tagName) || "";
+  if (tag === "INPUT" || tag === "TEXTAREA") {
+    return;
+  }
+  if (event.key === " ") {
+    event.preventDefault();
+    el.toggle.click();
+    return;
+  }
+  if (event.key === "ArrowLeft") {
+    event.preventDefault();
+    nudge(-10);
+    return;
+  }
+  if (event.key === "ArrowRight") {
+    event.preventDefault();
+    nudge(10);
+    return;
+  }
+  if (event.key === "m" || event.key === "M") {
+    el.mute.click();
+    return;
+  }
+  if (event.key === "p" || event.key === "P") {
+    el.peekToggle.click();
+    return;
+  }
+  if (/^[1-9]$/.test(event.key) && state.session) {
+    const source = state.session.sources[Number(event.key) - 1];
+    if (source) {
+      requestScene(source.id, state.heard || source.id).catch((error) => log(error.message, "error"));
     }
   }
-  log("asked every source to play");
-});
-
-document.getElementById("pause-all").addEventListener("click", () => {
-  for (const state of players.values()) {
-    state.video.pause();
-  }
-  log("paused every source");
-});
-
-document.getElementById("mute").addEventListener("click", () => {
-  muted = !muted;
-  elements.mute.textContent = muted ? "Unmute heard source" : "Mute heard source";
-  applyScene();
-});
-
-document.getElementById("fit").addEventListener("click", () => {
-  const shown = players.get(shownSource());
-  if (shown) {
-    shown.video.scrollIntoView({ block: "nearest" });
-  }
-});
-
-elements.volume.addEventListener("input", () => {
-  volume = Number(elements.volume.value);
-  applyScene();
-});
-
-elements.seek.addEventListener("input", () => {
-  const shown = players.get(shownSource());
-  if (!shown) {
-    return;
-  }
-  const duration = Number.isFinite(shown.video.duration) ? shown.video.duration : 0;
-  if (duration === 0) {
-    log("this source has no known duration, it cannot be moved by hand", "error");
-    return;
-  }
-  shown.video.currentTime = Number(elements.seek.value);
-  log(`seek asked for ${format(shown.video.currentTime)} of ${format(duration)}`);
 });
 
 start().catch((error) => log(error.message, "error"));

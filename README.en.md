@@ -12,7 +12,7 @@ The repository currently contains a project scaffold with a Go Core session conf
 - `core/hls/`: reads HLS playlists, tracks, and first sample times; no transcoding and no serving.
 - `core/dvr/`: keeps one live source's segments in a bounded directory, reports the ranges that can really be replayed, and joins one contiguous range into a playable recording file.
 - `desktop/`: MyGo desktop experiment that registers several local files or http(s) addresses into one Core session, selects picture and sound per scene, owns the player lifecycle, and keeps a bounded replay window for live sources.
-- `web/`: web client: a loopback-only Go session service plus a page that plays HLS through hls.js and demonstrates several sources, a scene, volumes, and playback control inside one session.
+- `web/`: web client: a loopback-only Go session service plus a page that plays HLS through hls.js and demonstrates several sources, a scene, volumes, playback control, a draggable comparison window, and an event log inside one session.
 - `extension/`: browser extension and its native host, which hand one address the user confirmed to the running session.
 - `tools/separate/`: experimental vocal/non-vocal separation script that runs chunked ONNX inference on a model you supply; not wired into playback.
 - `tools/align/`: experimental content-offset probe that compares audio envelopes or frame thumbnails and reports a confidence; not wired into playback and it never moves the timeline.

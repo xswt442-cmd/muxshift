@@ -39,6 +39,21 @@ vendored build are recorded in `vendor/README.md`. Browsers require a click
 before sound, so all sources start muted and the first click unmutes the source
 the session says is heard.
 
+The page keeps the stage and the session side by side:
+
+- the stage holds the picture of the source the scene selects, with a transport
+  that plays, pauses, steps ten seconds, scrubs inside the buffered range, and
+  shows the buffer on the progress bar;
+- each source is a card with a live thumbnail, a state dot, `PICTURE`/`SOUND`
+  badges, and Show, Hear, Peek, and Retry buttons;
+- `peek` floats another source over the stage as a small window that can be
+  dragged and made more or less transparent; it moves the video element, so the
+  player keeps running, and it changes nothing in the session;
+- the scene slots under the cards name the picture and the sound the Go session
+  currently holds;
+- an events list records what the page did, and the keyboard drives the same
+  transport (`space`, `←`/`→`, `M`, `P`, `1`–`9`).
+
 What this client does not do, and does not pretend to do:
 
 - it does not align two live sources on a shared timeline;

@@ -4,6 +4,14 @@
 
 const params = new URLSearchParams(window.location.search);
 const token = params.get("token") || "";
+// The bootstrap address carries the token once. Everything after that rides on
+// the HttpOnly cookie the server set while serving this page, so the token does
+// not stay in the address bar, the history, or every request URL.
+if (token) {
+  params.delete("token");
+  const cleaned = window.location.pathname + (params.toString() ? `?${params}` : "");
+  window.history.replaceState(null, "", cleaned);
+}
 
 const elements = {
   sessionLine: document.getElementById("session-line"),
@@ -46,9 +54,13 @@ function log(message, kind = "info") {
 }
 
 async function api(path, options = {}) {
-  const url = new URL(path, window.location.origin);
-  url.searchParams.set("token", token);
-  const response = await fetch(url, options);
+  // No token in the URL: the session cookie set on load authorizes these calls,
+  // and a cross-site page cannot read or write this session because the server
+  // checks the Origin and Host of every mutation.
+  const response = await fetch(new URL(path, window.location.origin), {
+    credentials: "same-origin",
+    ...options,
+  });
   if (!response.ok) {
     throw new Error(`${options.method || "GET"} ${path} failed: ${response.status} ${await response.text()}`);
   }
@@ -249,11 +261,13 @@ async function requestScene(videoID, audioID) {
 
 async function start() {
   describeEnvironment();
-  if (!token) {
-    log("the page was opened without a token, the session cannot be read", "error");
+  try {
+    session = await api("/api/session");
+  } catch (error) {
+    log(`the session could not be read: ${error.message}`, "error");
+    log("open the address printed at startup, which carries the token once", "error");
     return;
   }
-  session = await api("/api/session");
   elements.sessionLine.textContent = `session ${session.session} · scene ${session.scene} · ${session.sources.length} sources`;
   heard = (session.sources.find((source) => !source.muted) || session.sources[0] || {}).id || "";
   for (const source of session.sources) {
@@ -276,7 +290,6 @@ async function start() {
 // new source only when the session really lists one the page has no player
 // for, and takes the scene only when it differs from what is shown here.
 async function refreshSession() {
-  if (!token) return;
   let fresh;
   try {
     fresh = await api("/api/session");

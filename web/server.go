@@ -165,6 +165,9 @@ type changeScene struct {
 func (s *sessionState) change(request changeScene) (view, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if request.Volume < 0 || request.Volume > 1 {
+		return view{}, fmt.Errorf("%w: volume %v is outside 0..1", core.ErrInvalid, request.Volume)
+	}
 	var video, audio *source
 	for i := range s.sources {
 		if string(s.sources[i].ID) == request.Video {
@@ -177,24 +180,59 @@ func (s *sessionState) change(request changeScene) (view, error) {
 	if video == nil || audio == nil {
 		return view{}, fmt.Errorf("unknown source in the request")
 	}
-	if _, err := s.session.SetSceneVideo(s.scene, video.Video); err != nil {
-		return view{}, err
-	}
-	current, err := s.session.Scene(s.scene)
+	// The whole request is applied or none of it: a scene that half-changed
+	// because the last audio track was invalid would be worse than a refusal.
+	previous, err := s.session.Scene(s.scene)
 	if err != nil {
 		return view{}, err
 	}
-	for _, level := range current.Audio {
-		if level.Track != audio.Audio {
-			if _, err := s.session.RemoveSceneAudio(s.scene, level.Track); err != nil {
-				return view{}, err
-			}
-		}
-	}
-	if _, err := s.session.SetSceneAudio(s.scene, audio.Audio, request.Volume, request.Muted); err != nil {
+	if err := s.applySceneLocked(video.Video, audio.Audio, request.Volume, request.Muted); err != nil {
+		s.restoreSceneLocked(previous)
 		return view{}, err
 	}
 	return s.snapshotLocked()
+}
+
+func (s *sessionState) applySceneLocked(video, audio core.TrackID, volume float64, muted bool) error {
+	if _, err := s.session.SetSceneVideo(s.scene, video); err != nil {
+		return err
+	}
+	current, err := s.session.Scene(s.scene)
+	if err != nil {
+		return err
+	}
+	for _, level := range current.Audio {
+		if level.Track != audio {
+			if _, err := s.session.RemoveSceneAudio(s.scene, level.Track); err != nil {
+				return err
+			}
+		}
+	}
+	_, err = s.session.SetSceneAudio(s.scene, audio, volume, muted)
+	return err
+}
+
+// restoreSceneLocked puts back the scene that was in force before a failed
+// change, so a rejected request leaves no partial state behind.
+func (s *sessionState) restoreSceneLocked(previous core.Scene) {
+	if _, err := s.session.SetSceneVideo(s.scene, previous.Video...); err != nil {
+		log.Printf("web: restore video: %v", err)
+	}
+	current, err := s.session.Scene(s.scene)
+	if err != nil {
+		log.Printf("web: restore scene: %v", err)
+		return
+	}
+	for _, level := range current.Audio {
+		if _, err := s.session.RemoveSceneAudio(s.scene, level.Track); err != nil {
+			log.Printf("web: restore audio removal: %v", err)
+		}
+	}
+	for _, level := range previous.Audio {
+		if _, err := s.session.SetSceneAudio(s.scene, level.Track, level.Volume, level.Muted); err != nil {
+			log.Printf("web: restore audio: %v", err)
+		}
+	}
 }
 
 // add registers one more media address in the session. The browser extension
@@ -310,6 +348,9 @@ func main() {
 	if *mediaRoot == "" || len(media) == 0 {
 		log.Fatal("muxshift-web: -media-root and at least one -media are required")
 	}
+	if err := checkListenAddress(*addr); err != nil {
+		log.Fatalf("muxshift-web: %v", err)
+	}
 	root, err := filepath.Abs(*mediaRoot)
 	if err != nil {
 		log.Fatalf("muxshift-web: %v", err)
@@ -317,6 +358,14 @@ func main() {
 	if _, err := os.Stat(root); err != nil {
 		log.Fatalf("muxshift-web: %v", err)
 	}
+	// A root handle is what keeps /media/ inside the directory even when a
+	// symlink or a junction inside it points somewhere else; a string prefix
+	// check cannot see that.
+	mediaRootHandle, err := os.OpenRoot(root)
+	if err != nil {
+		log.Fatalf("muxshift-web: %v", err)
+	}
+	defer mediaRootHandle.Close()
 	state, err := newSessionState(media)
 	if err != nil {
 		log.Fatalf("muxshift-web: %v", err)
@@ -375,8 +424,7 @@ func main() {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		if !guardMutation(w, r) {
 			return
 		}
 		var request changeScene
@@ -399,8 +447,15 @@ func main() {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
+		// The native host is not a browser and sends no Origin, so the check
+		// here is the token plus a JSON body; a web page still cannot reach it
+		// without both.
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !strings.HasPrefix(strings.ToLower(r.Header.Get("Content-Type")), "application/json") {
+			http.Error(w, "a JSON body is required", http.StatusUnsupportedMediaType)
 			return
 		}
 		var request importSource
@@ -422,9 +477,17 @@ func main() {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
-		serveMedia(w, r, root)
+		serveMedia(w, r, mediaRootHandle)
 	})
-	server := &http.Server{Handler: mux}
+	// Every request must name a loopback host, so a name that resolves to this
+	// machine (DNS rebinding) cannot reach the session through a browser.
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !loopbackHost(r.Host) {
+			http.Error(w, "unexpected host", http.StatusForbidden)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})}
 	log.Printf("web: listening on http://%s/?token=%s", listener.Addr().String(), tokenValue)
 	// The native host looks for this file under LOCALAPPDATA by default, so the
 	// browser extension can reach the running session without the user copying
@@ -470,30 +533,81 @@ func authorized(r *http.Request, token string) bool {
 	return subtle.ConstantTimeCompare([]byte(got), []byte(token)) == 1
 }
 
-// serveMedia serves one file under the media root and refuses anything that
-// resolves outside it, so the client cannot ask this process for other files.
-func serveMedia(w http.ResponseWriter, r *http.Request, root string) {
+// guardMutation rejects a state change that did not come from this page. A
+// cookie travels with cross-site requests that a browser decides to send, so
+// the token alone is not enough: the Origin must be this very host, and the body
+// must be JSON, which a plain HTML form cannot produce.
+func guardMutation(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return false
+	}
+	if !strings.HasPrefix(strings.ToLower(r.Header.Get("Content-Type")), "application/json") {
+		http.Error(w, "a JSON body is required", http.StatusUnsupportedMediaType)
+		return false
+	}
+	if origin := r.Header.Get("Origin"); origin != "" {
+		parsed, err := url.Parse(origin)
+		if err != nil || !strings.EqualFold(parsed.Host, r.Host) {
+			http.Error(w, "the request comes from another origin", http.StatusForbidden)
+			return false
+		}
+	}
+	return true
+}
+
+// checkListenAddress keeps -addr from turning the loopback default into an
+// accidental network listener.
+func checkListenAddress(addr string) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("invalid address %q: %v", addr, err)
+	}
+	if host == "" || !loopbackHost(host) {
+		return fmt.Errorf("address %q is not a loopback address; the session must stay local", addr)
+	}
+	return nil
+}
+
+// loopbackHost reports whether a host string names this machine.
+func loopbackHost(host string) bool {
+	name := host
+	if split, _, err := net.SplitHostPort(host); err == nil {
+		name = split
+	}
+	if strings.EqualFold(name, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(name)
+	return ip != nil && ip.IsLoopback()
+}
+
+// serveMedia serves one file under the media root. The root handle refuses any
+// name that leaves the directory, including one that only leaves it through a
+// symbolic link or a junction inside the tree.
+func serveMedia(w http.ResponseWriter, r *http.Request, root *os.Root) {
 	name := strings.TrimPrefix(r.URL.Path, "/media/")
 	cleaned := filepath.Clean(filepath.FromSlash(name))
 	if cleaned == "." || strings.HasPrefix(cleaned, "..") || filepath.IsAbs(cleaned) {
 		http.NotFound(w, r)
 		return
 	}
-	full := filepath.Join(root, cleaned)
-	if !strings.HasPrefix(full, root+string(os.PathSeparator)) {
+	file, err := root.Open(cleaned)
+	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
-	info, err := os.Stat(full)
+	defer file.Close()
+	info, err := file.Stat()
 	if err != nil || info.IsDir() {
 		http.NotFound(w, r)
 		return
 	}
-	if kind, ok := mediaTypes[strings.ToLower(filepath.Ext(full))]; ok {
+	if kind, ok := mediaTypes[strings.ToLower(filepath.Ext(cleaned))]; ok {
 		w.Header().Set("Content-Type", kind)
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	http.ServeFile(w, r, full)
+	http.ServeContent(w, r, "", info.ModTime(), file)
 }
 
 func writeJSON(w http.ResponseWriter, value any) {

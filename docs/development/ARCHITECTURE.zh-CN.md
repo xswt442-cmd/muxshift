@@ -65,7 +65,7 @@
 
 ## Web 客户端
 
-`web/` 是一个 Go 包（`package main`）加三份静态文件。同一个进程做三件事：把页面嵌入二进制并对外提供，把一次 Core 会话以 JSON 暴露给页面，以及在 `/media/` 下提供测试媒体。它只绑定 `127.0.0.1`，启动时打印带令牌的地址；`/api/` 与 `/media/` 都要求令牌，令牌可以来自查询参数、`X-MuxShift-Token` 头，或页面加载时设置的 cookie。cookie 是必要的，因为媒体元素与 hls.js 无法给每个播放列表与分片加请求头。响应不带 CORS 头，所以别的源读不到这个会话，也不能借它控制本机播放；媒体路径先按 `-media-root` 做绝对化与前缀校验，越界请求返回 404。
+`web/` 是一个 Go 包（`package main`）加三份静态文件。同一个进程做三件事：把页面嵌入二进制并对外提供，把一次 Core 会话以 JSON 暴露给页面，以及在 `/media/` 下提供测试媒体。它只绑定回环地址（`-addr` 不是回环地址时直接退出），启动时打印带令牌的地址；令牌只在引导地址里出现一次，随后由 HttpOnly、`SameSite=Strict` 的 cookie 承担，页面立即把它从地址栏移除，本机 Host 用 `X-MuxShift-Token` 头，`/api/` 与 `/media/` 都要求令牌。改状态的请求还要通过两道检查：请求体必须是 JSON（纯 HTML 表单发不出来），`Origin` 必须与请求主机一致；每个请求的 `Host` 也必须是回环主机，这样即使某个域名解析到本机也进不来。响应不带 CORS 头。媒体用 `os.OpenRoot` 打开，`..`、符号链接与目录联接都无法逃出 `-media-root`；一次场景改动要么整体生效要么整体回滚，非法音量不会留下半改的状态。
 
 页面用 hls.js（`web/vendor/` 里的 1.7.4 light 构建，Apache-2.0）叠加 Media Source Extensions 播放 HLS，MP4 直接交给媒体元素。`GET /api/session` 给出源、轨与当前场景，`POST /api/scene` 用 `SetSceneVideo` 与 `SetSceneAudio` 改场景，和桌面端共享同一套 Core 语义：画面来自一路、声音可以来自另一路、音量与静音各自独立，未选中的音轨被移除并静音。
 

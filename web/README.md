@@ -18,16 +18,26 @@ The service prints `http://127.0.0.1:<port>/?token=<token>` and offers:
 - `/media/...` — the addresses given with `-media`, read from `-media-root` and
   refused outside it.
 
-Every request needs the token, as `?token=`, as the `X-MuxShift-Token` header,
-or as the cookie the page sets. The service binds to `127.0.0.1` and its
-responses carry no CORS header, so a page from another origin cannot read or
-drive it.
+Every request needs the token. The page's bootstrap address carries it once as
+`?token=`, the server turns it into an HttpOnly `SameSite=Strict` cookie, and the
+page strips it from the address bar immediately; after that the cookie
+authorizes the page, and the `X-MuxShift-Token` header is what the native host
+uses. Changing the scene additionally requires a JSON body and an `Origin` that
+equals the request host, so a form post or a page on another origin cannot drive
+the session with the cookie the browser happens to hold. Every request must also
+name a loopback `Host`, which keeps a name that resolves to this machine from
+reaching the session. `-addr` is checked at startup and refused unless it is a
+loopback address. The media path is opened through `os.OpenRoot`, so neither
+`..` nor a symbolic link or junction inside `-media-root` can escape it. A scene
+change is applied in full or rejected in full, and a rejected volume leaves the
+previous scene in place.
 
 Playback uses [hls.js](https://github.com/video-dev/hls.js) (Apache-2.0, light
 build 1.7.4, vendored in `vendor/`) on top of Media Source Extensions; MP4 files
-go straight into a media element. Browsers require a click before sound, so all
-sources start muted and the first click unmutes the source the session says is
-heard.
+go straight into a media element. The exact source, size, and SHA-256 of the
+vendored build are recorded in `vendor/README.md`. Browsers require a click
+before sound, so all sources start muted and the first click unmutes the source
+the session says is heard.
 
 What this client does not do, and does not pretend to do:
 

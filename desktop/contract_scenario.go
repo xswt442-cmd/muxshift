@@ -28,7 +28,7 @@ func runContract(window *mygo.Window, a *appState, dir string) {
 	}
 	step(window, a, dir, scenario, "1-live.png", "the live source before the buffer is cut", nil)
 
-	bufferDir := filepath.Join(dvrDir, "contract")
+	bufferDir := a.dvrDirFor("contract")
 	runner, err := startDVR(it.uri, dvrFromMedia(bufferDir, dvrRetention, dvrMaxBytes, dvrRecordingBytes, it.source.ID))
 	if err != nil {
 		logf(scenario, "open the buffer: %v", err)

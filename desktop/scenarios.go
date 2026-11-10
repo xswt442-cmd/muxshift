@@ -60,6 +60,7 @@ var scenarios = map[string]scenario{
 	"hidden":           runHidden,
 	"contract":         runContract,
 	"lease":            runLease,
+	"sweep":            runSweep,
 }
 
 // runReplayProbe narrows down why a replay player added mid-run does not start:
@@ -1109,7 +1110,7 @@ func runDVR(window *mygo.Window, a *appState, dir string) {
 	sources := make([]replaySource, 0, liveCount)
 	bufferDirs := make([]string, 0, liveCount)
 	for index := 0; index < liveCount; index++ {
-		bufferDir := filepath.Join(dvrDir, fmt.Sprintf("source-%d", index+1))
+		bufferDir := a.dvrDirFor(fmt.Sprintf("source-%d", index+1))
 		runner, err := startDVR(uris[index], dvrFromMedia(bufferDir, dvrRetention, dvrMaxBytes, dvrRecordingBytes, a.items[index].source.ID))
 		if err != nil {
 			logf(scenario, "source %d: open replay buffer: %v", index+1, err)

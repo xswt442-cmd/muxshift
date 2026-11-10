@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/xswt442-cmd/muxshift/core"
+	"github.com/xswt442-cmd/muxshift/core/dvr"
 	"github.com/xswt442-cmd/muxshift/core/hls"
 )
 
@@ -62,6 +64,13 @@ type appState struct {
 	output  core.OutputID
 	items   []*item
 	lastErr error
+
+	// dvrRoot is the cache root the DVR directories live under, and dvrSession
+	// is this run's own directory in it. The session holds a lock for as long as
+	// the process runs, so a later run can tell this one's leftovers from a live
+	// one's and only collect the former.
+	dvrRoot    string
+	dvrSession *dvr.Session
 
 	// syncNote is the outcome of the last sync command, so a refused seek stays
 	// visible in the window instead of only in the log.
@@ -776,6 +785,21 @@ func (a *appState) release() {
 	if a.session != nil && !a.session.Closed() {
 		a.lastErr = a.session.Close()
 	}
+	if a.dvrSession != nil {
+		if err := a.dvrSession.Close(); err != nil && a.lastErr == nil {
+			a.lastErr = err
+		}
+		a.dvrSession = nil
+	}
+}
+
+// dvrDirFor names one buffer directory inside this run's session, so every
+// segment and recording this process writes carries the session's identity.
+func (a *appState) dvrDirFor(name string) string {
+	if a.dvrSession != nil {
+		return filepath.Join(a.dvrSession.SegmentsDir(), name)
+	}
+	return filepath.Join(a.dvrRoot, name)
 }
 
 // sceneLabel describes the scene by source number, which is what the cards and

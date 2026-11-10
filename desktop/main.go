@@ -31,6 +31,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/video"
+	"github.com/xswt442-cmd/muxshift/core/dvr"
 )
 
 // mygoRunOnMain runs fn on the thread that draws the window and waits for it.
@@ -685,6 +686,25 @@ func main() {
 	if err != nil {
 		log.Fatalf("muxshift-desktop: %v", err)
 	}
+	// The DVR cache root belongs to this process: a sweep collects only the
+	// directories of runs that are gone, and the session opened right after keeps
+	// this run's own cache distinguishable while it lives.
+	s.dvrRoot = dvrDir
+	if sweep, err := dvr.SweepSessions(s.dvrRoot); err != nil {
+		log.Printf("dvr: sweep %s: %v", s.dvrRoot, err)
+	} else {
+		log.Printf("dvr: sweep %s: removed %d stale, %d live, %d kept",
+			s.dvrRoot, len(sweep.Removed), len(sweep.Live), len(sweep.Kept))
+		for _, kept := range sweep.Kept {
+			log.Printf("dvr: kept %s: %s", kept.Path, kept.Reason)
+		}
+	}
+	session, err := dvr.OpenSession(s.dvrRoot)
+	if err != nil {
+		log.Fatalf("muxshift-desktop: %v", err)
+	}
+	s.dvrSession = session
+	log.Printf("dvr: session %s under %s", session.ID, s.dvrRoot)
 	// Settings are read before anything is drawn, so the start page and the
 	// default volume are in force from the first frame. A file that does not
 	// validate is reported and the defaults stay in memory; the file is left

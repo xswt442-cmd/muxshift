@@ -90,6 +90,10 @@ type appState struct {
 	// window opened without a scenario looks exactly as it did before the rail.
 	workspace workspace
 
+	// stageMode is the P16.0 experiment: whether the picture stays in the tree
+	// while another page is open. It is swap unless -stage-mode says otherwise.
+	stageMode stageMode
+
 	// selected is the source the inspector follows. The empty ID means nothing
 	// is selected, and the inspector shows the session summary instead.
 	selected core.SourceID

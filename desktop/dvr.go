@@ -32,12 +32,21 @@ type dvrRunner struct {
 	started bool
 	lastErr error
 	polls   int
+	// budget is the byte limit the recordings may take, kept for reporting.
+	budget int64
 	// rec is the last recording this runner cut. It carries the media-time
 	// contract that ties a position in the file to the source's clock.
 	rec dvr.Recording
+	// lease keeps the recording a player is reading from being dropped. The
+	// player takes it when it opens the file and gives it back when it closes.
+	lease *dvr.Lease
 
 	stop chan struct{}
 	done chan struct{}
+	// closeOnce makes Close idempotent: the runner is closed both when a scenario
+	// finishes the buffer early and when the session shuts down.
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // startDVR opens a buffer for one source and starts polling its playlist.
@@ -50,6 +59,7 @@ func startDVR(uri string, opts dvr.Options) (*dvrRunner, error) {
 		uri:    uri,
 		buffer: buffer,
 		client: &http.Client{Timeout: 10 * time.Second},
+		budget: opts.RecordingBytes,
 		stop:   make(chan struct{}),
 		done:   make(chan struct{}),
 	}
@@ -187,16 +197,71 @@ func (r *dvrRunner) lastRecording() (dvr.Recording, bool) {
 	return r.rec, true
 }
 
-// Close stops polling and removes the cache directory.
+// hold leases the recording with this id so the buffer keeps its bytes while a
+// player reads it. A second call releases the lease it replaces.
+func (r *dvrRunner) hold(id string) (dvr.Recording, error) {
+	lease, err := r.buffer.Lease(id)
+	if err != nil {
+		return dvr.Recording{}, err
+	}
+	r.mu.Lock()
+	old := r.lease
+	r.lease = lease
+	r.mu.Unlock()
+	if old != nil {
+		_ = old.Release()
+	}
+	return lease.Recording(), nil
+}
+
+// releaseHold gives the recording back and reports what the buffer still has to
+// clean up, so a file Windows would not release is visible instead of assumed
+// deleted.
+func (r *dvrRunner) releaseHold() ([]string, error) {
+	r.mu.Lock()
+	lease := r.lease
+	r.lease = nil
+	r.mu.Unlock()
+	var err error
+	if lease != nil {
+		err = lease.Release()
+	}
+	return r.buffer.PendingCleanup(), err
+}
+
+// budgetLine states how much of the recording budget is in use and by how many
+// snapshots, so a run can show what a new cut had to drop.
+func (r *dvrRunner) budgetLine() string {
+	limit := "unbounded"
+	if r.budget > 0 {
+		limit = fmt.Sprintf("%d bytes", r.budget)
+	}
+	return fmt.Sprintf("%d recording(s) taking %d bytes of %s",
+		len(r.buffer.Recordings()), r.buffer.RecordingBytes(), limit)
+}
+
+// Close stops polling and removes the cache directory. A recording a lease holds
+// stays on disk; its release removes it. Closing twice is harmless: a scenario
+// that closes the buffer itself and then releases the session closes it again.
 func (r *dvrRunner) Close() error {
-	close(r.stop)
-	<-r.done
-	return r.buffer.Close()
+	r.closeOnce.Do(func() {
+		close(r.stop)
+		<-r.done
+		r.closeErr = r.buffer.Close()
+	})
+	return r.closeErr
 }
 
 // dvrFromMedia builds the buffer options from the flags that configure it. The
 // source names the owner of the media times the buffer records, so every
-// recording says which source its clock belongs to.
-func dvrFromMedia(dir string, retention time.Duration, maxBytes int64, source core.SourceID) dvr.Options {
-	return dvr.Options{Dir: dir, Retention: retention, MaxBytes: maxBytes, Source: source}
+// recording says which source its clock belongs to; the budget bounds the disk
+// the recordings may take, and zero leaves them unbounded.
+func dvrFromMedia(dir string, retention time.Duration, maxBytes, recordingBytes int64, source core.SourceID) dvr.Options {
+	return dvr.Options{
+		Dir:            dir,
+		Retention:      retention,
+		MaxBytes:       maxBytes,
+		RecordingBytes: recordingBytes,
+		Source:         source,
+	}
 }

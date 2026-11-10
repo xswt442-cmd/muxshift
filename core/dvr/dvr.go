@@ -44,8 +44,10 @@ var (
 	// ErrNoRange reports a request for a media time the buffer holds no
 	// contiguous run for.
 	ErrNoRange = errors.New("media time is not in a buffered range")
-	// ErrNoSpace reports a buffer whose directory cannot hold another segment.
-	ErrNoSpace = errors.New("buffer directory is not writable")
+	// ErrNoSpace reports a buffer that has no room for what was asked: a segment
+	// the disk refused, or a recording the directory or the recording budget
+	// cannot hold.
+	ErrNoSpace = errors.New("the buffer has no room for this")
 	// ErrNoAnchor reports a recording that cannot be placed on a source's media
 	// clock because no measured anchor ties the buffer clock to it.
 	ErrNoAnchor = errors.New("buffer clock has no anchor for this source")
@@ -142,6 +144,18 @@ type Options struct {
 	// It is copied into every Recording so a saved file can be attributed
 	// without a second lookup; an empty value is allowed for a bare buffer.
 	Source core.SourceID
+	// RecordingBytes bounds the disk the published recordings may take. Zero
+	// leaves them unbounded. When a new cut does not fit, the oldest recordings
+	// nobody holds are removed first; if it still does not fit, the cut is
+	// refused instead of deleting a file a player is reading.
+	RecordingBytes int64
+}
+
+// recorded is one published recording and how many players hold it.
+type recorded struct {
+	Recording
+	refs int
+	gone bool
 }
 
 // Buffer is one source's rolling window.
@@ -159,9 +173,13 @@ type Buffer struct {
 	closed   bool
 	dirOwned bool
 	// cuts counts recordings so two cuts in the same nanosecond still get
-	// different names; recordings lists the published files Close removes.
-	cuts       int
-	recordings []string
+	// different names; recordings lists the published files, which Close keeps
+	// while a lease holds them.
+	cuts           int
+	recordings     []recorded
+	recordingBytes int64
+	pendingCleanup []string
+	lastRemoveErr  error
 }
 
 // New creates the buffer's directory and returns it empty. The directory is
@@ -431,6 +449,25 @@ func (b *Buffer) Record(from time.Duration) (Recording, error) {
 	if err != nil {
 		return Recording{}, err
 	}
+	// The cut needs room under the recording budget. Unleased older recordings
+	// are dropped first; a recording a player holds is never dropped, so a cut
+	// that cannot fit beside them is refused instead.
+	need := int64(0)
+	for _, segment := range chosen.Segments {
+		if segment.End > from {
+			need += segment.Bytes
+		}
+	}
+	if b.opts.RecordingBytes > 0 && need > b.opts.RecordingBytes {
+		return Recording{}, fmt.Errorf("%w: one recording needs %d bytes, the budget is %d",
+			ErrNoSpace, need, b.opts.RecordingBytes)
+	}
+	for b.opts.RecordingBytes > 0 && b.recordingBytes+need > b.opts.RecordingBytes {
+		if !b.dropOldestRecordingLocked() {
+			return Recording{}, fmt.Errorf("%w: the recording budget of %d bytes is held by files a player is using",
+				ErrNoSpace, b.opts.RecordingBytes)
+		}
+	}
 	b.cuts++
 	id := fmt.Sprintf("rec-%d-%d", time.Now().UnixNano(), b.cuts)
 	name := id + ".ts"
@@ -488,7 +525,8 @@ func (b *Buffer) Record(from time.Duration) (Recording, error) {
 		return Recording{}, fmt.Errorf("%w: publish %s: %v", ErrNoSpace, name, err)
 	}
 	recording.Size = written
-	b.recordings = append(b.recordings, path)
+	b.recordings = append(b.recordings, recorded{Recording: recording})
+	b.recordingBytes += written
 	return recording, nil
 }
 
@@ -580,7 +618,10 @@ func (b *Buffer) over() bool {
 }
 
 // Close removes the stored segments and, when the buffer created it, the
-// directory. It is safe to call twice.
+// directory. A recording a player still holds stays on disk until the last lease
+// is released, so closing a session cannot pull a file out from under a player;
+// the directory is left in place while such a file remains. It is safe to call
+// twice.
 func (b *Buffer) Close() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -589,15 +630,17 @@ func (b *Buffer) Close() error {
 	}
 	b.closed = true
 	var first error
-	// Recordings are immutable and never overwritten, so each one is removed by
-	// name here; the lease stage will hold this back while a player still has a
-	// file open.
-	for _, path := range b.recordings {
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) && first == nil {
-			first = err
+	// Recordings are immutable and never overwritten. Each one is removed by
+	// name, and a leased one is kept: its lease removes it on release.
+	for i := range b.recordings {
+		if b.recordings[i].refs > 0 || b.recordings[i].gone {
+			continue
+		}
+		b.removeRecordingLocked(i)
+		if b.lastRemoveErr != nil && first == nil {
+			first = b.lastRemoveErr
 		}
 	}
-	b.recordings = nil
 	for _, segment := range b.segments {
 		if err := os.Remove(segment.Path); err != nil && !errors.Is(err, os.ErrNotExist) && first == nil {
 			first = err
@@ -605,7 +648,7 @@ func (b *Buffer) Close() error {
 	}
 	b.segments = nil
 	b.bytes = 0
-	if b.dirOwned {
+	if b.dirOwned && b.emptyLocked() {
 		if err := os.RemoveAll(b.opts.Dir); err != nil && first == nil {
 			first = err
 		}
@@ -614,6 +657,20 @@ func (b *Buffer) Close() error {
 		return fmt.Errorf("close buffer: %v", first)
 	}
 	return nil
+}
+
+// emptyLocked reports whether no file the buffer owns is still on disk, so only
+// then may its directory be removed. The caller holds the lock.
+func (b *Buffer) emptyLocked() bool {
+	if len(b.pendingCleanup) > 0 {
+		return false
+	}
+	for _, rec := range b.recordings {
+		if !rec.gone {
+			return false
+		}
+	}
+	return true
 }
 
 // checkSegmentURI keeps the download to plain HTTP(S) and refuses credentials in

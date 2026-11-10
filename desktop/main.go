@@ -118,11 +118,15 @@ func (a *appState) releasePlayer(player *ui.VideoPlayer) {
 var handoverWait = 10 * time.Second
 
 // The replay buffer's defaults: a minute of history in the user's temporary
-// directory, which the buffer removes again when the session ends.
+// directory, which the buffer removes again when the session ends. The recording
+// budget bounds the snapshots a player may hold, separately from the segments:
+// a recording the buffer would have to drop to make room is refused, never the
+// one a player is reading.
 var (
-	dvrDir       = filepath.Join(os.TempDir(), "muxshift-dvr")
-	dvrRetention = 60 * time.Second
-	dvrMaxBytes  int64
+	dvrDir            = filepath.Join(os.TempDir(), "muxshift-dvr")
+	dvrRetention      = 60 * time.Second
+	dvrMaxBytes       int64
+	dvrRecordingBytes = int64(256 << 20)
 )
 
 // handOver waits for the replacement player of a reopen to show a picture, then

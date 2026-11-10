@@ -31,6 +31,9 @@ const (
 	// deleting its files. A directory in that state is one its owner already
 	// gave up on, so a half-finished removal can be retried without guessing.
 	markerRemoving = "removing"
+	// markerApp names the application that wrote a marker, so a sweep never
+	// deletes a directory another program left in the same cache root.
+	markerApp = "muxshift"
 	// sessionPrefix marks the directories this package creates. Anything else
 	// in the cache root belongs to someone else and is left alone.
 	sessionPrefix = "session-"
@@ -45,7 +48,11 @@ var errNoLock = errors.New("the session has no lock file")
 // the directory name: a directory whose marker describes another session is
 // treated as damaged rather than deleted.
 type marker struct {
-	Version   int       `json:"version"`
+	Version int `json:"version"`
+	// App names the program that wrote the marker. A marker written by
+	// something else is never swept away. Markers from before this field
+	// existed leave it empty and are still recognised as this application's.
+	App       string    `json:"app,omitempty"`
 	ID        string    `json:"id"`
 	PID       int       `json:"pid"`
 	StartedAt time.Time `json:"started_at"`
@@ -101,7 +108,7 @@ func OpenSession(root string) (*Session, error) {
 		cleanup()
 		return nil, fmt.Errorf("%w: session lock: %v", ErrNoSpace, err)
 	}
-	record := marker{Version: markerVersion, ID: id, PID: os.Getpid(), StartedAt: time.Now().UTC()}
+	record := marker{Version: markerVersion, App: markerApp, ID: id, PID: os.Getpid(), StartedAt: time.Now().UTC()}
 	if err := writeMarker(filepath.Join(dir, MarkerName), record); err != nil {
 		lock.release()
 		cleanup()
@@ -284,13 +291,25 @@ func SweepSessions(root string) (SweepResult, error) {
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
 		if len(entry.Name()) < len(sessionPrefix) || entry.Name()[:len(sessionPrefix)] != sessionPrefix {
 			continue // not ours
 		}
 		dir := filepath.Join(root, entry.Name())
+		// A link is not a directory this package made. Following one would let
+		// a sweep delete the tree it points at, so it is reported and left
+		// alone even though its name looks like a session.
+		info, err := os.Lstat(dir)
+		if err != nil {
+			result.Kept = append(result.Kept, KeptDirectory{Path: dir, Reason: "the entry cannot be inspected: " + err.Error()})
+			continue
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			result.Kept = append(result.Kept, KeptDirectory{Path: dir, Reason: "the entry is a link, not a session directory"})
+			continue
+		}
+		if !info.IsDir() {
+			continue // a stray file with our prefix belongs to nobody
+		}
 		reason, live, err := sweepOne(dir)
 		if err != nil {
 			return result, err
@@ -396,6 +415,9 @@ func readMarker(path string) (marker, error) {
 	}
 	if record.Version != markerVersion {
 		return record, fmt.Errorf("the marker version %d is not understood", record.Version)
+	}
+	if record.App != "" && record.App != markerApp {
+		return record, fmt.Errorf("the marker belongs to %q, not %q", record.App, markerApp)
 	}
 	if record.ID == "" {
 		return record, errors.New("the marker has no session id")

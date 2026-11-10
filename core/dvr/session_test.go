@@ -297,3 +297,67 @@ func TestCloseLeavesTheSessionIdentifiableWhenContentIsHeld(t *testing.T) {
 		t.Fatalf("the directory survived the retry: %v", err)
 	}
 }
+
+// A marker another program wrote is not this application's cache, even when it
+// sits under the same root with an unlocked lock file.
+func TestSweepKeepsAMarkerFromAnotherApplication(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "cache")
+	dir := filepath.Join(root, sessionPrefix+"feedfacefeedface")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("make the directory: %v", err)
+	}
+	foreign := marker{Version: markerVersion, App: "some-other-app", ID: "feedfacefeedface"}
+	if err := writeMarker(filepath.Join(dir, MarkerName), foreign); err != nil {
+		t.Fatalf("write the marker: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, lockName), nil, 0o600); err != nil {
+		t.Fatalf("make the lock file: %v", err)
+	}
+
+	result, err := SweepSessions(root)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if len(result.Removed) != 0 {
+		t.Fatalf("removed %v, want nothing", result.Removed)
+	}
+	if len(result.Kept) != 1 || !strings.Contains(result.Kept[0].Reason, "some-other-app") {
+		t.Fatalf("kept = %v, want one entry naming the other application", result.Kept)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("the foreign directory was removed: %v", err)
+	}
+}
+
+// A link in the cache root may point anywhere; a sweep must not follow it.
+func TestSweepDoesNotFollowALink(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "elsewhere")
+	inner, err := OpenSession(outside)
+	if err != nil {
+		t.Fatalf("open the session being pointed at: %v", err)
+	}
+	defer inner.Close()
+
+	root := filepath.Join(t.TempDir(), "cache")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatalf("make the root: %v", err)
+	}
+	link := filepath.Join(root, sessionPrefix+inner.ID)
+	if err := os.Symlink(inner.Dir, link); err != nil {
+		t.Skipf("this machine cannot create a symlink: %v", err)
+	}
+
+	result, err := SweepSessions(root)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if len(result.Removed) != 0 {
+		t.Fatalf("removed %v, want nothing", result.Removed)
+	}
+	if len(result.Kept) != 1 || !strings.Contains(result.Kept[0].Reason, "link") {
+		t.Fatalf("kept = %v, want one entry naming the link", result.Kept)
+	}
+	if _, err := os.Stat(inner.Dir); err != nil {
+		t.Fatalf("the sweep followed the link and removed its target: %v", err)
+	}
+}

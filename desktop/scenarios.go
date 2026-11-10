@@ -48,6 +48,7 @@ var scenarios = map[string]scenario{
 	"webview":       runWebView,
 	"workspaces":    runWorkspaces,
 	"matrix":        runMatrix,
+	"lifecycle":     runLifecycle,
 }
 
 // runReplayProbe narrows down why a replay player added mid-run does not start:

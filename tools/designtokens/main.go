@@ -10,9 +10,9 @@ package main
 
 import (
 	"encoding/json"
-	"go/format"
 	"flag"
 	"fmt"
+	"go/format"
 	"log"
 	"os"
 	"path/filepath"

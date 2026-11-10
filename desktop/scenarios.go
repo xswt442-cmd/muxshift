@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -30,6 +29,7 @@ var scenarios = map[string]scenario{
 	"handover-fail": runHandoverFail,
 	"reload-rapid":  runReloadRapid,
 	"pair":          runPair,
+	"replay-swap":   runReplaySwap,
 	"switch":        runSwitch,
 	"rapid":         runRapid,
 	"retry":         runRetry,
@@ -1064,8 +1064,13 @@ func runDVR(window *mygo.Window, a *appState, dir string) {
 		logf(scenario, "needs two network sources, got %d", len(a.items))
 		return
 	}
-	uris := make([]string, len(a.items))
-	for i, it := range a.items {
+	// The last card is the spare the recording takes over: a video element
+	// added while the window draws freezes its repaint, so the card exists from
+	// startup and the replay reopens it in place.
+	liveCount := len(a.items) - 1
+	uris := make([]string, liveCount)
+	for i := 0; i < liveCount; i++ {
+		it := a.items[i]
 		if !isNetworkAddress(it.uri) {
 			logf(scenario, "source %d is not a network address; the window needs live playlists", i+1)
 			return
@@ -1076,8 +1081,12 @@ func runDVR(window *mygo.Window, a *appState, dir string) {
 		}
 		uris[i] = it.uri
 	}
+	spare := a.items[liveCount]
+	if spare.player == nil {
+		logf(scenario, "the spare card did not open: %s", errorString(spare.openErr))
+		return
+	}
 
-	liveCount := len(a.items)
 	sources := make([]replaySource, 0, liveCount)
 	bufferDirs := make([]string, 0, liveCount)
 	for index := 0; index < liveCount; index++ {
@@ -1168,14 +1177,18 @@ func runDVR(window *mygo.Window, a *appState, dir string) {
 		logf(scenario, "common window on the shared event clock: %s..%s", start, end)
 	}
 
-	// The recording is opened in a window of its own: a player added to a window
-	// that already presents other sources never draws a frame in this build of
-	// MyGo, which is what every earlier P8 run measured. One player in one fresh
-	// window is the same arrangement that does play a recording.
-	var replayWindow *mygo.Window
-	var replayView *replayPane
-	var replayPlayer *ui.VideoPlayer
-	step(window, a, dir, scenario, "", "open the recording in its own window", func(a *appState) {
+	// The buffer proved it keeps growing while the output is paused; the group
+	// The buffer proved it keeps growing while the output is paused, and the
+	// recording now takes the picture in the session's own window: a player
+	// created on the drawing thread can be shown at any time, which is what the
+	// earlier runs of this scenario measured as "never ready".
+	step(window, a, dir, scenario, "", "resume the group before opening the recording", func(a *appState) {
+		logGroup(scenario, "resume", a.playAll())
+	})
+	time.Sleep(2 * time.Second)
+
+	replayIndex := -1
+	step(window, a, dir, scenario, "", "open the recording in the session window", func(a *appState) {
 		source := sources[0]
 		it, err := a.at(source.index)
 		if err != nil {
@@ -1192,61 +1205,43 @@ func runDVR(window *mygo.Window, a *appState, dir string) {
 			logf(scenario, "source 1: replay from %s: %v", media, err)
 			return
 		}
-		// The window exists before the player does, the way the main window does
-		// for its own sources: a player created before any view draws it never
-		// delivered a picture here, and the player is created on the drawing
-		// thread for the same reason.
-		replayView = &replayPane{}
-		var paneWindow *mygo.Window
-		mygoRunOnMain(func() {
-			paneWindow = mygo.NewWindow(mygo.WindowOptions{
-				Title:   "MuxShift replay",
-				Width:   640,
-				Height:  360,
-				Content: ui.View(replayView.render),
-			})
-		})
-		replayWindow = paneWindow
-		player, err := openPlayerOnMain(path)
-		if err != nil {
-			logf(scenario, "source 1: open %s: %v", shortURI(path), err)
+		// The card that will hold the recording exists from startup: a video
+		// element added while the window is drawing freezes its repaint, and a
+		// reopened player keeps the element where it already is.
+		replayed := a.items[len(a.items)-1]
+		if replayed.player == nil {
+			logf(scenario, "source %d did not open, so there is no card to replay in", len(a.items))
 			return
 		}
-		replayPlayer = player
-		replayView.set(player)
-		logf(scenario, "source 1: replay %s from %s in a window of its own", shortURI(path), media)
-		// The recording is kept beside the run so a later run can open it as the
-		// only source, which is the arrangement in which a recording does play in
-		// this build; the buffer removes its own directory when it closes.
+		replayed.uri = path
+		a.reopenPlayer(replayed)
+		replayIndex = len(a.items) - 1
+		if err := a.showVideo(replayIndex); err != nil {
+			logf(scenario, "show the recording: %v", err)
+		}
+		logf(scenario, "source 1: replay %s from %s in the session window", shortURI(path), media)
+		// The recording is kept beside the run so a later run can open it on its
+		// own; the buffer removes its own directory when it closes.
 		kept := filepath.Join(dir, "replay-kept.ts")
 		if err := copyFile(path, kept); err != nil {
 			logf(scenario, "keep the recording: %v", err)
 		} else {
 			logf(scenario, "kept the recording at %s", kept)
 		}
-		// The recording is a transport stream on this machine, and such a file
-		// shows its first frame but stops there until it is nudged, which is the
-		// same first-frame limit the network sources are woken for.
-		wakeNetworkPlayer(path, player, func() bool { return true })
 	})
-	if replayWindow == nil {
+	if replayIndex < 0 {
 		return
 	}
-	defer mygoRunOnMain(func() {
-		if replayView != nil {
-			replayView.set(nil)
-		}
-		if replayPlayer != nil {
-			replayPlayer.Close()
-		}
-		replayWindow.Close()
-	})
-	if !waitPlayerReady(scenario, replayPlayer, 30*time.Second) {
+	replayed, err := a.at(replayIndex)
+	if err != nil {
+		logf(scenario, "%v", err)
+		return
+	}
+	if !waitPlayerReady(scenario, replayed.player, 30*time.Second) {
 		logf(scenario, "the replay did not report itself ready within 30s")
 	}
 	// Three captures five seconds apart show whether the recording advances at
-	// the speed it was recorded, which its reported position cannot tell: the
-	// player keeps reporting position 0 while the picture moves.
+	// the speed it was recorded.
 	for _, sample := range []struct {
 		name string
 		wait time.Duration
@@ -1256,54 +1251,17 @@ func runDVR(window *mygo.Window, a *appState, dir string) {
 		{"3c-replay-plus10.png", 5 * time.Second},
 	} {
 		time.Sleep(sample.wait)
-		step(window, a, dir, scenario, "", "record the replay window", func(a *appState) {
-			if err := capture(replayWindow, filepath.Join(dir, sample.name)); err != nil {
-				logf(scenario, "capture the replay: %v", err)
-			}
-		})
+		step(window, a, dir, scenario, sample.name, "record the replay picture", nil)
 	}
 
-	// Jumping inside the window is a seek into buffered media, not a new stream.
-	step(window, a, dir, scenario, "", "jump six seconds into the buffered window", func(a *appState) {
-		if replayPlayer == nil {
-			logf(scenario, "the replay player is gone")
-			return
-		}
-		target := replayPlayer.Position() + 6*time.Second
-		replayPlayer.Seek(target)
-		logf(scenario, "seek replay to %s (asked %s)", replayPlayer.Position(), target)
+	// Jumping inside the recording is a seek into buffered media, not a new stream.
+	step(window, a, dir, scenario, "", "jump six seconds into the recording", func(a *appState) {
+		target := replayed.player.Position() + 6*time.Second
+		replayed.player.Seek(target)
+		logf(scenario, "seek replay to %s (asked %s)", replayed.player.Position(), target)
 	})
 	time.Sleep(3 * time.Second)
-	step(window, a, dir, scenario, "", "record the replay window after the jump", func(a *appState) {
-		if err := capture(replayWindow, filepath.Join(dir, "5-replay-later.png")); err != nil {
-			logf(scenario, "capture the replay: %v", err)
-		}
-	})
-}
-
-// replayPane holds the player a replay window draws. The window is built before
-// the recording is opened, so the pane keeps the player in a field the view can
-// read on every frame instead of rebuilding its elements.
-type replayPane struct {
-	mu     sync.Mutex
-	player *ui.VideoPlayer
-}
-
-func (p *replayPane) set(player *ui.VideoPlayer) {
-	p.mu.Lock()
-	p.player = player
-	p.mu.Unlock()
-}
-
-func (p *replayPane) render(c *ui.Context) {
-	p.mu.Lock()
-	player := p.player
-	p.mu.Unlock()
-	if player == nil {
-		ui.Text(c, "no recording").Center()
-		return
-	}
-	ui.Video(c, player).Fill()
+	step(window, a, dir, scenario, "5-replay-later.png", "record the replay picture after the jump", nil)
 }
 
 // waitPlayerReady waits for one player to present its first picture, logging its
@@ -1338,6 +1296,50 @@ func waitPlayerReady(scenario string, player *ui.VideoPlayer, timeout time.Durat
 		}
 	}
 	return false
+}
+
+// runReplaySwap swaps the picture of the session to a recording that was
+// registered as an ordinary source. It answers one question: with the player
+// created on the drawing thread, can a recording be shown in the session's own
+// window, which is where a person would want to watch it.
+func runReplaySwap(window *mygo.Window, a *appState, dir string) {
+	go func() {
+		time.Sleep(2 * time.Second)
+		step(window, a, dir, "replay-swap", "", "open with the live picture", nil)
+		index := len(a.items) - 1
+		step(window, a, dir, "replay-swap", "1-live.png", "show the recording in the session window", func(a *appState) {
+			if err := a.showVideo(index); err != nil {
+				logf("replay-swap", "%v", err)
+				return
+			}
+			it, err := a.at(index)
+			if err != nil {
+				logf("replay-swap", "%v", err)
+				return
+			}
+			logGroup("replay-swap", "scene", nil)
+			logf("replay-swap", "showing %s (open=%v)", shortURI(it.uri), errorString(it.openErr))
+		})
+		it, err := a.at(index)
+		if err != nil {
+			logf("replay-swap", "%v", err)
+			mygoRunOnMain(func() { mygo.App.Quit() })
+			return
+		}
+		if !waitPlayerReady("replay-swap", it.player, 30*time.Second) {
+			logf("replay-swap", "the recording did not start within 30s")
+		}
+		time.Sleep(time.Second)
+		step(window, a, dir, "replay-swap", "2-recording.png", "capture the recording picture", nil)
+		step(window, a, dir, "replay-swap", "", "jump into the recording", func(a *appState) {
+			target := it.player.Position() + 5*time.Second
+			it.player.Seek(target)
+			logf("replay-swap", "seek to %s (asked %s)", it.player.Position(), target)
+		})
+		time.Sleep(2 * time.Second)
+		step(window, a, dir, "replay-swap", "3-recording-later.png", "capture after the jump", nil)
+		mygoRunOnMain(func() { mygo.App.Quit() })
+	}()
 }
 
 // copyFile copies one file to another, which is how a recording leaves the

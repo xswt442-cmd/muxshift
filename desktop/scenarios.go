@@ -58,6 +58,7 @@ var scenarios = map[string]scenario{
 	"sizes":            runSizes,
 	"sizes-empty":      runSizesEmpty,
 	"hidden":           runHidden,
+	"contract":         runContract,
 }
 
 // runReplayProbe narrows down why a replay player added mid-run does not start:
@@ -1108,7 +1109,7 @@ func runDVR(window *mygo.Window, a *appState, dir string) {
 	bufferDirs := make([]string, 0, liveCount)
 	for index := 0; index < liveCount; index++ {
 		bufferDir := filepath.Join(dvrDir, fmt.Sprintf("source-%d", index+1))
-		runner, err := startDVR(uris[index], dvrFromMedia(bufferDir, dvrRetention, dvrMaxBytes))
+		runner, err := startDVR(uris[index], dvrFromMedia(bufferDir, dvrRetention, dvrMaxBytes, a.items[index].source.ID))
 		if err != nil {
 			logf(scenario, "source %d: open replay buffer: %v", index+1, err)
 			return
@@ -1217,11 +1218,15 @@ func runDVR(window *mygo.Window, a *appState, dir string) {
 			shift, _ = a.sync.timeline.Shift(it.video)
 		}
 		media := start + shift.Offset
-		path, err := source.runner.replayPath(media)
+		recording, err := source.runner.replay(media)
 		if err != nil {
 			logf(scenario, "source 1: replay from %s: %v", media, err)
 			return
 		}
+		path := recording.Path
+		// The contract says where the file really starts: a request inside a
+		// segment begins at that segment's first frame, not at the request.
+		logf(scenario, "source 1: %s", recording)
 		// The card that will hold the recording exists from startup: a video
 		// element added while the window is drawing freezes its repaint, and a
 		// reopened player keeps the element where it already is.

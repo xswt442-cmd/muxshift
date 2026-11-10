@@ -135,6 +135,10 @@ type Options struct {
 	// MaxBytes is how many bytes of segments to keep. Zero means the byte limit
 	// is not enforced.
 	MaxBytes int64
+	// Source names the source whose media clock the buffer's times belong to.
+	// It is copied into every Recording so a saved file can be attributed
+	// without a second lookup; an empty value is allowed for a bare buffer.
+	Source core.SourceID
 }
 
 // Buffer is one source's rolling window.
@@ -383,31 +387,55 @@ func (b *Buffer) Locate(at time.Duration) (Segment, error) {
 }
 
 // Join writes the continuous range that holds from into one transport stream
-// file and returns its path. The segments of a range follow each other in the
-// stream, so joining them yields one recording that a player can open as a file;
-// a range never crosses a gap, so the recording never splices two moments
-// together. A start inside a segment begins at that segment's first frame,
-// because a transport stream segment cannot be cut.
+// file and returns its path. It is Record without the timing metadata; a caller
+// that has to place the file on the shared timeline uses Record instead.
 //
 // The recording belongs to the buffer: a second call replaces the first file,
 // and Close removes it with the segments. That keeps one open recording from
 // growing the directory beyond what Retention and MaxBytes bound.
 func (b *Buffer) Join(from time.Duration) (string, error) {
+	recording, err := b.Record(from)
+	if err != nil {
+		return "", err
+	}
+	return recording.Path, nil
+}
+
+// Record writes the continuous range that holds from into one transport stream
+// file and reports what the file contains and where it sits on the source's
+// media clock.
+//
+// A start inside a segment begins at that segment's first frame, because a
+// transport stream segment cannot be cut, so the file's first frame is at the
+// chosen segment's start and not at from. Recording carries both times rather
+// than letting a caller mistake one for the other.
+func (b *Buffer) Record(from time.Duration) (Recording, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.closed {
-		return "", core.ErrClosed
+		return Recording{}, core.ErrClosed
 	}
 	chosen, err := b.rangeAtLocked(from)
 	if err != nil {
-		return "", err
+		return Recording{}, err
 	}
 	name := fmt.Sprintf("replay-%d.ts", int64(from.Seconds()))
 	path := filepath.Join(b.opts.Dir, name)
 	out, err := os.Create(path)
 	if err != nil {
-		return "", fmt.Errorf("%w: create %s: %v", ErrNoSpace, name, err)
+		return Recording{}, fmt.Errorf("%w: create %s: %v", ErrNoSpace, name, err)
 	}
+	recording := Recording{
+		Path:               path,
+		Source:             b.opts.Source,
+		RequestedMediaTime: from,
+		SegmentStartTime:   chosen.Segments[0].Start,
+		JoinedAt:           time.Now(),
+		Ranges:             b.ranges(),
+		Gaps:               append([]Gap(nil), b.gaps...),
+	}
+	var written int64
+	first := true
 	for _, segment := range chosen.Segments {
 		if segment.End <= from {
 			continue
@@ -415,23 +443,35 @@ func (b *Buffer) Join(from time.Duration) (string, error) {
 		data, err := os.ReadFile(segment.Path)
 		if err != nil {
 			out.Close()
-			return "", fmt.Errorf("%w: read %s: %v", ErrNotPlayable, filepath.Base(segment.Path), err)
+			return Recording{}, fmt.Errorf("%w: read %s: %v", ErrNotPlayable, filepath.Base(segment.Path), err)
 		}
 		if _, err := out.Write(data); err != nil {
 			out.Close()
-			return "", fmt.Errorf("%w: write %s: %v", ErrNoSpace, name, err)
+			return Recording{}, fmt.Errorf("%w: write %s: %v", ErrNoSpace, name, err)
 		}
+		written += int64(len(data))
+		if first {
+			// The file begins at this segment's first frame, which is why the
+			// requested time alone cannot be used as the file's start.
+			recording.ContentStart = segment.Start
+			recording.SegmentStartTime = segment.Start
+			recording.FirstSequence = segment.Sequence
+			first = false
+		}
+		recording.ContentEnd = segment.End
+		recording.LastSequence = segment.Sequence
 	}
 	if err := out.Close(); err != nil {
-		return "", fmt.Errorf("%w: close %s: %v", ErrNoSpace, name, err)
+		return Recording{}, fmt.Errorf("%w: close %s: %v", ErrNoSpace, name, err)
 	}
+	recording.Size = written
 	if b.join != "" && b.join != path {
 		if err := os.Remove(b.join); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return "", fmt.Errorf("%w: remove the previous recording: %v", ErrNoSpace, err)
+			return Recording{}, fmt.Errorf("%w: remove the previous recording: %v", ErrNoSpace, err)
 		}
 	}
 	b.join = path
-	return path, nil
+	return recording, nil
 }
 
 // rangeAtLocked returns the contiguous range that covers at, or the first one

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xswt442-cmd/muxshift/core"
 	"github.com/xswt442-cmd/muxshift/core/dvr"
 	"github.com/xswt442-cmd/muxshift/core/hls"
 )
@@ -31,6 +32,9 @@ type dvrRunner struct {
 	started bool
 	lastErr error
 	polls   int
+	// rec is the last recording this runner cut. It carries the media-time
+	// contract that ties a position in the file to the source's clock.
+	rec dvr.Recording
 
 	stop chan struct{}
 	done chan struct{}
@@ -155,12 +159,30 @@ func (r *dvrRunner) state() string {
 	return state
 }
 
-// replayPath writes the buffered window that starts at from into the cache
-// directory as one transport stream and returns its path. A start the buffer
-// does not hold is refused by the buffer, so a replay never begins at a time
-// that was never stored.
-func (r *dvrRunner) replayPath(from time.Duration) (string, error) {
-	return r.buffer.Join(from)
+// replay writes the buffered window that starts at from into the cache
+// directory as one transport stream and returns the recording, which states
+// where the file really starts and how a position inside it maps back to the
+// source's media clock. A start the buffer does not hold is refused by the
+// buffer, so a replay never begins at a time that was never stored.
+func (r *dvrRunner) replay(from time.Duration) (dvr.Recording, error) {
+	recording, err := r.buffer.Record(from)
+	if err != nil {
+		return dvr.Recording{}, err
+	}
+	r.mu.Lock()
+	r.rec = recording
+	r.mu.Unlock()
+	return recording, nil
+}
+
+// lastRecording is the most recent recording this runner cut, if any.
+func (r *dvrRunner) lastRecording() (dvr.Recording, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.rec.Path == "" {
+		return dvr.Recording{}, false
+	}
+	return r.rec, true
 }
 
 // Close stops polling and removes the cache directory.
@@ -170,7 +192,9 @@ func (r *dvrRunner) Close() error {
 	return r.buffer.Close()
 }
 
-// dvrFromMedia builds the buffer options from the flags that configure it.
-func dvrFromMedia(dir string, retention time.Duration, maxBytes int64) dvr.Options {
-	return dvr.Options{Dir: dir, Retention: retention, MaxBytes: maxBytes}
+// dvrFromMedia builds the buffer options from the flags that configure it. The
+// source names the owner of the media times the buffer records, so every
+// recording says which source its clock belongs to.
+func dvrFromMedia(dir string, retention time.Duration, maxBytes int64, source core.SourceID) dvr.Options {
+	return dvr.Options{Dir: dir, Retention: retention, MaxBytes: maxBytes, Source: source}
 }

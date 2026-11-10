@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -25,6 +26,12 @@ type replaySwap struct {
 	lease      *dvr.Lease
 	player     *ui.VideoPlayer
 	generation int
+
+	// finished makes the player and its lease be closed and given back by
+	// exactly one path: a rollback, or a close of the item while the attempt was
+	// still waiting. Whichever runs first owns them; the other finds the work
+	// done and does not touch the lease counters again.
+	finished sync.Once
 }
 
 // playRecording cuts the buffer at from and starts a replacement player on the
@@ -38,6 +45,9 @@ type replaySwap struct {
 func (a *appState) playRecording(it *item, runner *dvrRunner, from time.Duration) error {
 	if runner == nil {
 		return fmt.Errorf("there is no replay buffer to cut from")
+	}
+	if it.source.ID != runner.source {
+		return fmt.Errorf("the buffer belongs to %s, not to %s", runner.source, it.source.ID)
 	}
 	recording, lease, err := runner.recordAndHold(from)
 	if err != nil {
@@ -145,12 +155,22 @@ func (a *appState) abandonReplay(swap *replaySwap, why string) {
 			it.swap = nil
 		}
 	})
-	a.releasePlayer(swap.player)
-	if err := swap.lease.Release(); err != nil {
-		logf("replay", "release the lease of %s: %v", swap.recording.FileName(), err)
-	}
-	a.leftLease()
+	a.finishSwap(swap)
 	logf("replay", "rolled back the switch to %s: %s", swap.recording.FileName(), why)
+}
+
+// finishSwap closes the replacement player and gives its lease back once. A
+// close of the item and a rollback can both end the same attempt; the lease
+// counters must still move exactly once.
+func (a *appState) finishSwap(swap *replaySwap) {
+	swap.finished.Do(func() {
+		a.releasePlayer(swap.player)
+		if err := swap.lease.Release(); err != nil {
+			logf("replay", "release the lease of %s: %v", swap.recording.FileName(), err)
+		}
+		a.leftLease()
+		logf("replay", "finished %s: the replacement player and its lease went back once", swap.recording.FileName())
+	})
 }
 
 // openReplayFile opens the file a recording published. The scenario seam exists

@@ -26,6 +26,9 @@ type dvrRunner struct {
 	uri    string
 	buffer *dvr.Buffer
 	client *http.Client
+	// source is the Core source this buffer belongs to: a recording cut here may
+	// only be put on the stage of that source.
+	source core.SourceID
 
 	mu      sync.Mutex
 	next    int
@@ -62,6 +65,7 @@ func startDVR(uri string, opts dvr.Options) (*dvrRunner, error) {
 		uri:    uri,
 		buffer: buffer,
 		client: &http.Client{Timeout: 10 * time.Second},
+		source: opts.Source,
 		budget: opts.RecordingBytes,
 		stop:   make(chan struct{}),
 		done:   make(chan struct{}),

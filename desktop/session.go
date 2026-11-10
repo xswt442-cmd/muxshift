@@ -215,9 +215,11 @@ type appState struct {
 	lastProbe    alignSuggestion
 
 	// pending holds players that were removed while no other player was alive.
-	// See close for why they cannot be released at that moment.
+	// See close for why they cannot be released at that moment. A player that
+	// was showing a recording carries the lease that keeps its file alive until
+	// the player is really closed.
 	pendingMu sync.Mutex
-	pending   []*ui.VideoPlayer
+	pending   []pendingClose
 }
 
 // newAppState builds a session with one scene per given source set, opens a
@@ -705,22 +707,10 @@ func (a *appState) close(it *item) {
 	})
 	if swap != nil {
 		// The replacement never became the item's player, so this close is the
-		// only owner of it and of the lease on the file it was handed.
-		a.releasePlayer(swap.player)
-		if err := swap.lease.Release(); err != nil {
-			logf("replay", "release the lease of %s on close: %v", swap.recording.FileName(), err)
-		}
-		a.leftLease()
-	}
-	if lease != nil {
-		// The player that was showing the recording is closed below; the lease
-		// goes with it, in that order.
-		defer func() {
-			if err := lease.Release(); err != nil {
-				logf("replay", "release the lease of the recording on close: %v", err)
-			}
-			a.leftLease()
-		}()
+		// only owner of it and of the lease on the file it was handed. A
+		// rollback that is still waiting finds the work done and reports its
+		// own reason without touching the lease counters again.
+		a.finishSwap(swap)
 	}
 	switch {
 	case kept != nil:
@@ -731,6 +721,9 @@ func (a *appState) close(it *item) {
 		a.releasePlayer(previous)
 	}
 	if it.player == nil {
+		if lease != nil {
+			a.releaseLease(lease, "of the recording on close")
+		}
 		return
 	}
 	var player *ui.VideoPlayer
@@ -743,13 +736,36 @@ func (a *appState) close(it *item) {
 	a.waitFrames(3)
 	if a.livePlayers() > 0 {
 		mygoRunOnMain(func() { player.Close() })
+		if lease != nil {
+			a.releaseLease(lease, "of the recording on close")
+		}
 		return
 	}
 	mygoRunOnMain(func() { player.Pause() })
 	a.pendingMu.Lock()
-	a.pending = append(a.pending, player)
+	a.pending = append(a.pending, pendingClose{player: player, lease: lease})
 	a.pendingMu.Unlock()
 	a.closePendingWhenReady()
+}
+
+// pendingClose is a player that was paused because it was the last live one,
+// together with the lease on the recording it was reading. The lease is given
+// back after the player is really closed, not when the item is removed: the file
+// has to stay readable for as long as the player holds it open.
+type pendingClose struct {
+	player *ui.VideoPlayer
+	lease  *dvr.Lease
+}
+
+// releaseLease gives a recording lease back and counts it done.
+func (a *appState) releaseLease(lease *dvr.Lease, where string) {
+	if lease == nil {
+		return
+	}
+	if err := lease.Release(); err != nil {
+		logf("replay", "release the lease %s: %v", where, err)
+	}
+	a.leftLease()
 }
 
 // livePlayers counts players still open for a source in this session.
@@ -797,10 +813,13 @@ func (a *appState) closePendingWhenReady() {
 			return
 		}
 		mygoRunOnMain(func() {
-			for _, player := range wait {
-				player.Close()
+			for _, close := range wait {
+				close.player.Close()
 			}
 		})
+		for _, close := range wait {
+			a.releaseLease(close.lease, "of a player that was closed late")
+		}
 	}()
 }
 
@@ -855,10 +874,13 @@ func (a *appState) shutdown() {
 	a.pendingMu.Unlock()
 	if len(wait) > 0 {
 		mygoRunOnMain(func() {
-			for _, player := range wait {
-				player.Close()
+			for _, close := range wait {
+				close.player.Close()
 			}
 		})
+		for _, close := range wait {
+			a.releaseLease(close.lease, "left open at shutdown")
+		}
 	}
 	if pending := a.releaseLeases(); len(pending) > 0 {
 		log.Printf("shutdown: the system still holds %s", strings.Join(pending, ", "))

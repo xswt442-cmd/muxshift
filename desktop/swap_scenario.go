@@ -168,7 +168,13 @@ func swapBody(window *mygo.Window, a *appState, dir string) {
 		len(runner.buffer.Recordings()), runner.buffer.RecordingBytes(), validErr == nil, validErr)
 	check(shown != nil && validErr == nil, "the recording on the stage is no longer valid: %v", validErr)
 
-	// 5. Closing the item in the middle of a switch still returns every lease.
+	// 5. Closing the item in the middle of a switch still returns every lease
+	// exactly once. The player that was showing the recording is paused until
+	// another one can take over, so its lease stays open: the file has to remain
+	// readable for as long as the player holds it. The replacement, which never
+	// became the item's player, is closed and given back by this close alone; a
+	// rollback that is still waiting finds that work done.
+	held := showing(it)
 	handoverWait = 5 * time.Second
 	a.replayStarted = func(*ui.VideoPlayer) bool { return false }
 	if err := a.playRecording(it, runner, base+8*time.Second); err != nil {
@@ -180,23 +186,56 @@ func swapBody(window *mygo.Window, a *appState, dir string) {
 	a.replayStarted = nil
 	handoverWait = oldWait
 	open, given = a.leaseStats()
-	logf(scenario, "closed in the middle of a switch: leases open=%d given=%d", open, given)
-	check(open == 0, "closing in the middle of a switch left %d lease(s) open", open)
-
-	// 6. With every lease returned the buffer can remove its files; anything
-	// left would be a lease the run never gave back.
-	if err := runner.Close(); err != nil {
-		logf(scenario, "close the buffer: %v", err)
+	var heldErr error
+	if held != nil {
+		heldErr = held.Valid()
 	}
+	logf(scenario, "closed in the middle of a switch: leases open=%d given=%d players=%d; the file the paused player reads is valid=%v (%v)",
+		open, given, openPlayers(a), heldErr == nil, heldErr)
+	check(open == 1, "a close during a switch left %d lease(s) open before the player was really closed", open)
+	check(held != nil && heldErr == nil, "the recording of the paused player is no longer valid: %v", heldErr)
+	check(openPlayers(a) == 1, "a close during a switch left %d player(s), not the paused one", openPlayers(a))
+
+	// 6. The paused player is closed when nobody else is left, and only then is
+	// its lease given back. A lease count of zero and a closed player are two
+	// different facts, so both are asserted.
+	mygoRunOnMain(func() { a.release() })
+	open, given = a.leaseStats()
+	logf(scenario, "after shutdown: leases open=%d given=%d players=%d", open, given, openPlayers(a))
+	check(open == 0, "the run ended with %d lease(s) open", open)
+	check(openPlayers(a) == 0, "the run ended with %d player(s) open", openPlayers(a))
 	left := runner.buffer.PendingCleanup()
 	recordings := len(runner.buffer.Recordings())
 	logf(scenario, "after closing the buffer: pending cleanup=%v recordings=%d", left, recordings)
-	open, given = a.leaseStats()
-	logf(scenario, "final: leases open=%d given=%d", open, given)
-	check(open == 0, "the run ended with %d lease(s) open", open)
 	check(len(left) == 0, "the buffer could not remove %v", left)
 	check(recordings == 0, "the closed buffer still owns %d recording(s)", recordings)
 	logf(scenario, "checks failed: %d", failures)
+}
+
+// openPlayers counts the players the run still holds open, wherever they live:
+// on an item, kept drawn by a handover, or paused while nothing else was left.
+func openPlayers(a *appState) int {
+	open := 0
+	mygoRunOnMain(func() {
+		for _, it := range a.items {
+			if it.player != nil {
+				open++
+			}
+			if it.previous != nil {
+				open++
+			}
+			if it.handover != nil && it.handover.open() {
+				open++
+			}
+			if it.swap != nil && it.swap.player != nil {
+				open++
+			}
+		}
+		a.pendingMu.Lock()
+		open += len(a.pending)
+		a.pendingMu.Unlock()
+	})
+	return open
 }
 
 // showing returns the recording the item has on the stage, or nil when it shows

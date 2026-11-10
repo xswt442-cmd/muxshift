@@ -105,6 +105,13 @@ func (h *handover) take() *ui.VideoPlayer {
 	return player
 }
 
+// open reports whether the handover still owns a player, without taking it.
+func (h *handover) open() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return !h.released && h.previous != nil
+}
+
 // releasePlayer closes a player that no frame draws any more.
 func (a *appState) releasePlayer(player *ui.VideoPlayer) {
 	if player == nil {
@@ -408,7 +415,12 @@ func (a *appState) stage(c *ui.Context) {
 			// picture the item already shows, so a viewer sees the old one
 			// until the switch commits and never a black stage.
 			if it.swap != nil {
-				ui.Video(c, it.swap.player).Fill()
+				// The replacement follows the source's visibility: a switch of a
+				// source that is not in the scene must not take over the stage
+				// while it is still waiting. The element stays in the tree
+				// either way, because adding and removing video elements while
+				// the window runs stops it repainting.
+				ui.Video(c, it.swap.player).Fill().Hidden(!it.shown)
 			}
 			if it.previous != nil {
 				ui.Video(c, rawPlayer(it.previous)).Fill()

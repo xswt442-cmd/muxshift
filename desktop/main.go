@@ -59,7 +59,7 @@ func (a *appState) reopenPlayer(it *item) {
 	it.openErr = nil
 	var kept *handover
 	if previous != nil {
-		kept = &handover{previous: previous}
+		kept = &handover{previous: rawPlayer(previous)}
 		it.previous = previous
 	}
 	// The handover that was still waiting for an older replacement owns the
@@ -182,7 +182,7 @@ func (a *appState) handOver(it *item, generation int, kept *handover, older *han
 		if it.generation != generation {
 			return
 		}
-		replacement = it.player
+		replacement = rawPlayer(it.player)
 		it.player = kept.previous
 		kept.previous = nil
 		kept.released = true
@@ -409,10 +409,10 @@ func (a *appState) stage(c *ui.Context) {
 				continue
 			}
 			if it.previous != nil {
-				ui.Video(c, it.previous).Fill()
+				ui.Video(c, rawPlayer(it.previous)).Fill()
 				shown++
 			}
-			ui.Video(c, it.player).Fill().Hidden(!it.shown)
+			ui.Video(c, rawPlayer(it.player)).Fill().Hidden(!it.shown)
 			if it.shown {
 				shown++
 			}
@@ -447,7 +447,7 @@ func (a *appState) transportRow(c *ui.Context) {
 			}
 		}
 		if main := a.first(); main != nil && main.player != nil {
-			if ui.Button(c.Key("mute"), muteLabel(main.player)).Width(88).Clicked() {
+			if ui.Button(c.Key("mute"), muteLabel(rawPlayer(main.player))).Width(88).Clicked() {
 				main.player.SetMuted(!main.player.Muted())
 			}
 		}

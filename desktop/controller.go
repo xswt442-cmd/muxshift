@@ -233,7 +233,7 @@ func (a *appState) snapshot() sessionSnapshot {
 			}
 		}
 		if it.player != nil {
-			state := readPlayer(it.player)
+			state := readPlayer(rawPlayer(it.player))
 			entry.Player = true
 			entry.Ready = state.Ready
 			entry.Playing = state.Playing

@@ -29,12 +29,12 @@ type item struct {
 	video  core.TrackID
 	audio  core.TrackID
 
-	player  *ui.VideoPlayer
+	player  desktopPlayer
 	openErr error
 
 	// previous is the player this item opened before the current one, kept
 	// alive and drawn until the current one has a picture. See reopenPlayer.
-	previous *ui.VideoPlayer
+	previous desktopPlayer
 
 	// handover owns previous while a task waits for the replacement's picture.
 	// It moves to the newer task on a reload, so a burst of reloads releases
@@ -176,7 +176,7 @@ func (a *appState) add(uri string) (*item, error) {
 	}
 	it.player = player
 	it.generation++
-	wakeNetworkPlayer(it.uri, player, a.generationIs(it, it.generation))
+	wakeNetworkPlayer(it.uri, rawPlayer(player), a.generationIs(it, it.generation))
 	a.closePendingWhenReady()
 	return it, nil
 }
@@ -317,7 +317,7 @@ func (a *appState) wakeShown(it *item) {
 	if it.player.Ready() || it.player.Err() != nil {
 		return
 	}
-	wakeNetworkPlayer(it.uri, it.player, a.generationIs(it, it.generation))
+	wakeNetworkPlayer(it.uri, rawPlayer(it.player), a.generationIs(it, it.generation))
 }
 
 // hearAudio makes the scene play one source's audio at the given level and mute
@@ -447,7 +447,7 @@ func (a *appState) close(it *item) {
 	var previous *ui.VideoPlayer
 	mygoRunOnMain(func() {
 		kept = it.handover
-		previous = it.previous
+		previous = rawPlayer(it.previous)
 		it.handover = nil
 		it.previous = nil
 	})
@@ -466,7 +466,7 @@ func (a *appState) close(it *item) {
 	mygoRunOnMain(func() {
 		it.shown = false
 		it.generation++
-		player = it.player
+		player = rawPlayer(it.player)
 		it.player = nil
 	})
 	a.waitFrames(3)

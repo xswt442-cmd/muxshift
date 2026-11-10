@@ -44,7 +44,7 @@ func (a *appState) sampleOnMain(index int, since time.Time) readySample {
 			sample.Err = "no player"
 			return
 		}
-		state := readPlayer(it.player)
+		state := readPlayer(rawPlayer(it.player))
 		sample.Ready = state.Ready
 		sample.Playing = state.Playing
 		sample.Buf = state.Buf

@@ -1241,7 +1241,7 @@ func runDVR(window *mygo.Window, a *appState, dir string) {
 		logf(scenario, "%v", err)
 		return
 	}
-	if !waitPlayerReady(scenario, replayed.player, 30*time.Second) {
+	if !waitPlayerReady(scenario, rawPlayer(replayed.player), 30*time.Second) {
 		logf(scenario, "the replay did not report itself ready within 30s")
 	}
 	// Three captures five seconds apart show whether the recording advances at
@@ -1330,7 +1330,7 @@ func runReplaySwap(window *mygo.Window, a *appState, dir string) {
 			mygoRunOnMain(func() { mygo.App.Quit() })
 			return
 		}
-		if !waitPlayerReady("replay-swap", it.player, 30*time.Second) {
+		if !waitPlayerReady("replay-swap", rawPlayer(it.player), 30*time.Second) {
 			logf("replay-swap", "the recording did not start within 30s")
 		}
 		time.Sleep(time.Second)

@@ -368,9 +368,9 @@ func (a *appState) view(c *ui.Context) {
 					a.center(c, width, height)
 					return
 				}
-				// P16.0: every other page can keep the picture in the tree, in
-				// the shape -stage-mode asks for, before the page draws.
-				a.parkedStage(c, width, height)
+				// P16.0: another page keeps the picture mounted and hidden, so
+				// the media keeps running and the stage comes back current.
+				a.parkedStage(c)
 				switch a.workspace {
 				case workspaceSources:
 					a.sourcesPage(c)
@@ -633,7 +633,6 @@ func main() {
 	flag.StringVar(&wakeMode, "wake", wakeMode, "nudge a network player once for its first frame, or none to record what happens without it")
 	flag.DurationVar(&handoverWait, "handover", handoverWait, "how long a reopened player may take to show a picture before the previous one is kept")
 	settingsFile := flag.String("settings", "", "settings file to read and write; empty uses the per-user configuration directory")
-	stageModeFlag := flag.String("stage-mode", string(stageSwap), "P16.0: how the picture is kept while another page is open: swap, split, dim, tiny or hidden")
 	flag.DurationVar(&syncAt, "at", 10*time.Second, "syncmap: the shared event time to measure")
 	flag.DurationVar(&syncOffset, "offset", 0, "syncmap: the offset applied to the measured source")
 	flag.StringVar(&dvrDir, "dvr-dir", dvrDir, "directory the replay buffer keeps its segments in")
@@ -682,12 +681,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("muxshift-desktop: %v", err)
 	}
-	mode, err := parseStageMode(*stageModeFlag)
-	if err != nil {
-		log.Fatalf("muxshift-desktop: %v", err)
-	}
-	s.stageMode = mode
-	log.Printf("stage mode %q", mode)
 	// Settings are read before anything is drawn, so the start page and the
 	// default volume are in force from the first frame. A file that does not
 	// validate is reported and the defaults stay in memory; the file is left

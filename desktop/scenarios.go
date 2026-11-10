@@ -57,7 +57,7 @@ var scenarios = map[string]scenario{
 	"narrow":           runNarrow,
 	"sizes":            runSizes,
 	"sizes-empty":      runSizesEmpty,
-	"continuity":       runContinuity,
+	"hidden":           runHidden,
 }
 
 // runReplayProbe narrows down why a replay player added mid-run does not start:

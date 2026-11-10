@@ -197,6 +197,50 @@ func TestRecordingBudgetDropsOnlyUnleasedSnapshots(t *testing.T) {
 }
 
 func TestRecordingBudgetRefusesWhenEverythingIsLeased(t *testing.T) {
+	probe, err := New(Options{Dir: filepath.Join(t.TempDir(), "probe")})
+	if err != nil {
+		t.Fatalf("new probe buffer: %v", err)
+	}
+	addFixture(t, probe)
+	sample, err := probe.Record(0)
+	if err != nil {
+		t.Fatalf("probe record: %v", err)
+	}
+	if err := probe.Close(); err != nil {
+		t.Fatalf("close the probe buffer: %v", err)
+	}
+
+	// The first cut exactly fills the budget and a player takes it. A second cut
+	// then has nothing it is allowed to delete, so it must be refused rather than
+	// pulling the file out from under the player.
+	buffer, err := New(Options{Dir: filepath.Join(t.TempDir(), "buffer"), RecordingBytes: sample.Size})
+	if err != nil {
+		t.Fatalf("new buffer: %v", err)
+	}
+	addFixture(t, buffer)
+	first, err := buffer.Record(0)
+	if err != nil {
+		t.Fatalf("first record: %v", err)
+	}
+	lease, err := buffer.Lease(first.ID)
+	if err != nil {
+		t.Fatalf("lease: %v", err)
+	}
+	if _, err := buffer.Record(0); !errors.Is(err, ErrNoSpace) {
+		t.Fatalf("record beside a full leased budget = %v, want ErrNoSpace", err)
+	}
+	if got := buffer.RecordingBytes(); got != sample.Size {
+		t.Fatalf("the refused cut changed the accounting to %d bytes", got)
+	}
+	if err := first.Valid(); err != nil {
+		t.Fatalf("the leased file was taken by the refused cut: %v", err)
+	}
+	if err := lease.Release(); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+}
+
+func TestRecordingBudgetRefusesOneCutUnderATinyBudget(t *testing.T) {
 	buffer, err := New(Options{Dir: t.TempDir(), RecordingBytes: 1})
 	if err != nil {
 		t.Fatalf("new buffer: %v", err)
@@ -209,6 +253,12 @@ func TestRecordingBudgetRefusesWhenEverythingIsLeased(t *testing.T) {
 	}
 	if got := buffer.RecordingBytes(); got != 0 {
 		t.Fatalf("a refused cut still took %d bytes", got)
+	}
+}
+
+func TestANegativeRecordingBudgetIsRefused(t *testing.T) {
+	if _, err := New(Options{Dir: t.TempDir(), RecordingBytes: -1}); !errors.Is(err, core.ErrInvalid) {
+		t.Fatalf("a negative recording budget = %v, want ErrInvalid", err)
 	}
 }
 

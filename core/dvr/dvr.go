@@ -145,9 +145,10 @@ type Options struct {
 	// without a second lookup; an empty value is allowed for a bare buffer.
 	Source core.SourceID
 	// RecordingBytes bounds the disk the published recordings may take. Zero
-	// leaves them unbounded. When a new cut does not fit, the oldest recordings
-	// nobody holds are removed first; if it still does not fit, the cut is
-	// refused instead of deleting a file a player is reading.
+	// leaves them unbounded, which is a deliberate risk the caller takes: with no
+	// budget nothing but Close reclaims a published file. When a new cut does not
+	// fit, the oldest recordings nobody holds are removed first; if it still does
+	// not fit, the cut is refused instead of deleting a file a player is reading.
 	RecordingBytes int64
 }
 
@@ -189,8 +190,8 @@ func New(opts Options) (*Buffer, error) {
 	if strings.TrimSpace(opts.Dir) == "" {
 		return nil, fmt.Errorf("%w: buffer needs a directory", core.ErrInvalid)
 	}
-	if opts.Retention < 0 || opts.MaxBytes < 0 {
-		return nil, fmt.Errorf("%w: retention and size limits cannot be negative", core.ErrInvalid)
+	if opts.Retention < 0 || opts.MaxBytes < 0 || opts.RecordingBytes < 0 {
+		return nil, fmt.Errorf("%w: retention, size and recording limits cannot be negative", core.ErrInvalid)
 	}
 	owned := false
 	if _, err := os.Stat(opts.Dir); errors.Is(err, os.ErrNotExist) {

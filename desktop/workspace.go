@@ -23,6 +23,9 @@ const (
 	// workspaceDiagnostics shows the session, the synchronisation state and the
 	// session's own event list.
 	workspaceDiagnostics
+	// workspaceSettings edits the global settings; the page keeps its own draft
+	// until Apply, so Cancel is free.
+	workspaceSettings
 	// workspaceCount is the number of pages, so a scenario can walk all of them.
 	workspaceCount
 )
@@ -34,6 +37,8 @@ func (w workspace) title() string {
 		return "Sources"
 	case workspaceDiagnostics:
 		return "Diagnostics"
+	case workspaceSettings:
+		return "Settings"
 	default:
 		return "Stage"
 	}

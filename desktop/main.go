@@ -351,21 +351,23 @@ func (a *appState) view(c *ui.Context) {
 	width, height := c.Size()
 	ui.Column(c).Fill().Background(colorBg).Children(func() {
 		a.topBar(c, width, height)
-		ui.Row(c).WidthPercent(100).Grow(1).Gap(spaceMd).Padding(spaceMd).AlignItems(ui.Stretch).Children(func() {
+		ui.Row(c).WidthPercent(100).Grow(1).Gap(a.space(6, spaceMd)).Padding(a.space(6, spaceMd)).AlignItems(ui.Stretch).Children(func() {
 			a.railPane(c, width, height)
-			ui.Column(c).Grow(1).Gap(spaceMd).AlignItems(ui.Start).Children(func() {
+			ui.Column(c).Grow(1).MinWidth(0).Gap(a.space(6, spaceMd)).AlignItems(ui.Start).Children(func() {
 				switch a.workspace {
 				case workspaceSources:
 					a.sourcesPage(c)
 				case workspaceDiagnostics:
 					a.diagnosticsPage(c)
+				case workspaceSettings:
+					a.settingsPage(c)
 				default:
 					a.center(c, width, height)
 				}
 			})
 			a.inspectorPane(c, width, height)
 		})
-		if a.dock.shown(height >= dockAutoHeight) {
+		if a.dock.shown(a.settings.DockOpen && height >= dockAutoHeight) {
 			a.dockPane(c)
 		}
 		a.statusBar(c)
@@ -610,6 +612,7 @@ func main() {
 	dir := flag.String("dir", "", "directory the scenario writes its PNGs into")
 	flag.StringVar(&wakeMode, "wake", wakeMode, "nudge a network player once for its first frame, or none to record what happens without it")
 	flag.DurationVar(&handoverWait, "handover", handoverWait, "how long a reopened player may take to show a picture before the previous one is kept")
+	settingsFile := flag.String("settings", "", "settings file to read and write; empty uses the per-user configuration directory")
 	flag.DurationVar(&syncAt, "at", 10*time.Second, "syncmap: the shared event time to measure")
 	flag.DurationVar(&syncOffset, "offset", 0, "syncmap: the offset applied to the measured source")
 	flag.StringVar(&dvrDir, "dvr-dir", dvrDir, "directory the replay buffer keeps its segments in")
@@ -658,6 +661,25 @@ func main() {
 	if err != nil {
 		log.Fatalf("muxshift-desktop: %v", err)
 	}
+	// Settings are read before anything is drawn, so the start page and the
+	// default volume are in force from the first frame. A file that does not
+	// validate is reported and the defaults stay in memory; the file is left
+	// alone so it can be read.
+	s.settingsPath = settingsPath(*settingsFile)
+	loaded, note := loadSettings(s.settingsPath)
+	s.settings = loaded
+	s.settingsDraft = loaded
+	if note != "" {
+		log.Printf("settings: %s", note)
+	}
+	if loaded.StartPage == "sources" {
+		s.workspace = workspaceSources
+	}
+	for _, it := range s.items {
+		it.volume = s.settingsSourceVolume()
+	}
+	s.apply()
+	log.Printf("settings: start page %q, file %s", loaded.StartPage, s.settingsPath)
 	for i, it := range s.items {
 		log.Printf("source %d: %s · video=%q audio=%q open=%v", i+1, it.uri, it.video, it.audio, errorString(it.openErr))
 	}

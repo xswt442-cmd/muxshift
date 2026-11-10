@@ -71,7 +71,7 @@ func (m paneMode) toggled(open bool) paneMode {
 // instead of leaving a button that does nothing.
 func (a *appState) topBar(c *ui.Context, width, height float32) {
 	a.frameWidth, a.frameHeight = width, height
-	ui.Row(c).Height(topBarHeight).WidthPercent(100).Padding(spaceSm, spaceLg).
+	ui.Row(c).Height(topBarHeight).WidthPercent(100).Padding(a.space(4, spaceSm), a.space(8, spaceLg)).
 		Gap(spaceSm).AlignItems(ui.Center).Background(colorBgSoft).Children(func() {
 		ui.Text(c, "MuxShift").FontSize(textTitle).TextColor(colorText).SingleLine()
 		// Below the rail threshold the chips would wrap the bar, so only the
@@ -87,18 +87,29 @@ func (a *appState) topBar(c *ui.Context, width, height float32) {
 		if width >= 1100 {
 			ui.Text(c, a.globalStatus()).FontSize(textSmall).TextColor(colorTextDim).
 				FontFeatures("tnum")
-			ui.Button(c.Key("top-open"), "Open…").Width(68).Height(28).
+			ui.Button(c.Key("top-open"), "Open…").Width(76).Height(28).
 				Disabled(true).
-				Tooltip("importing at runtime is not implemented; pass -media on the command line").
-				Description("Open or import a source (not available in this build)")
-			ui.Button(c.Key("top-settings"), "Settings").Width(80).Height(28).
-				Disabled(true).
-				Tooltip("the settings page arrives with P15.3; nothing is saved here yet").
-				Description("Global settings (not available in this build)")
+				Tooltip("opening a file from the desktop is not implemented; use the Sources page's address field or -media").
+				Description("Open a file picked on the desktop (not available in this build)")
+			open := a.workspace == workspaceSettings
+			label := "Settings"
+			if open {
+				label = "Settings ✓"
+			}
+			if ui.Button(c.Key("top-settings"), label).Width(100).Height(28).Clicked() {
+				if open {
+					a.workspace = workspaceStage
+				} else {
+					a.settingsDraft = a.settings
+					a.settingsErr = ""
+					a.settingsNote = ""
+					a.workspace = workspaceSettings
+				}
+			}
 		}
 		a.paneButton(c, paneRail, "Rail", a.rail.shown(width >= railAutoWidth))
 		a.paneButton(c, paneInspector, "Inspect", a.inspector.shown(width >= inspectorAutoWidth))
-		a.paneButton(c, paneDock, "Dock", a.dock.shown(height >= dockAutoHeight))
+		a.paneButton(c, paneDock, "Dock", a.dock.shown(a.settings.DockOpen && height >= dockAutoHeight))
 	})
 }
 
@@ -284,10 +295,10 @@ func (a *appState) inspectorSource(c *ui.Context, it *item, index int) {
 		}
 		if it.video != "" || it.audio != "" {
 			if ui.Button(c.Key("inspector-back"), "-0.1s").Width(64).Height(26).Clicked() {
-				a.report(a.runCommand(command{Kind: commandNudge, Source: it.source.ID, Delta: -100 * time.Millisecond}))
+				a.report(a.runCommand(command{Kind: commandNudge, Source: it.source.ID, Delta: a.settingsNudge(-1)}))
 			}
 			if ui.Button(c.Key("inspector-fwd"), "+0.1s").Width(64).Height(26).Clicked() {
-				a.report(a.runCommand(command{Kind: commandNudge, Source: it.source.ID, Delta: 100 * time.Millisecond}))
+				a.report(a.runCommand(command{Kind: commandNudge, Source: it.source.ID, Delta: a.settingsNudge(1)}))
 			}
 			if index > 0 && ui.Button(c.Key("inspector-probe"), "Try align").Width(92).Height(26).Clicked() {
 				a.probeAsync(0, index)
@@ -424,5 +435,5 @@ func (a *appState) layoutLine(width, height float32) string {
 		width, height,
 		a.rail.shown(width >= railAutoWidth),
 		a.inspector.shown(width >= inspectorAutoWidth),
-		a.dock.shown(height >= dockAutoHeight))
+		a.dock.shown(a.settings.DockOpen && height >= dockAutoHeight))
 }

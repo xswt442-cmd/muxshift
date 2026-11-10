@@ -102,6 +102,18 @@ type appState struct {
 	// first thing checked so a second Add cannot start a second read.
 	importing string
 
+	// settings is what is applied and running; settingsDraft is what the
+	// Settings page edits until Apply. settingsPath is where applied values are
+	// written, and settingsSaved says this start has written that file, so the
+	// page can be exact about the persistence boundary.
+	settings        settings
+	settingsDraft   settings
+	settingsPath    string
+	settingsSaved   bool
+	settingsErr     string
+	settingsNote    string
+	settingsSection string
+
 	// rail, inspector and dock say whether each pane follows the window-size
 	// rule or a person's explicit choice; see workbench.go. The zero value is
 	// paneAuto, so an untouched window behaves as the size rule says.
@@ -154,7 +166,7 @@ func newAppState(uris []string) (*appState, error) {
 	if err != nil {
 		return nil, err
 	}
-	app := &appState{session: session, scene: scene.ID, output: output.ID, frames: make(chan struct{}, 1), sync: newSyncState(), audible: make(map[core.TrackID]bool)}
+	app := &appState{session: session, scene: scene.ID, output: output.ID, frames: make(chan struct{}, 1), sync: newSyncState(), audible: make(map[core.TrackID]bool), settings: defaultSettings(), settingsSection: "General"}
 	for _, uri := range uris {
 		it, err := app.add(uri)
 		if err != nil {
@@ -191,7 +203,7 @@ func newAppState(uris []string) (*appState, error) {
 // add registers one source and the tracks its player exposes, then opens the
 // player.
 func (a *appState) add(uri string) (*item, error) {
-	it := &item{uri: uri, volume: 1}
+	it := &item{uri: uri, volume: a.settingsSourceVolume()}
 	if isNetworkAddress(uri) {
 		if err := a.addProbed(it); err != nil {
 			return it, err
@@ -303,7 +315,7 @@ func (a *appState) importSource(uri string) {
 		cancel()
 	}
 	mygoRunOnMain(func() {
-		it := &item{uri: uri, volume: 1}
+		it := &item{uri: uri, volume: a.settingsSourceVolume()}
 		var err error
 		switch {
 		case probeErr != nil:
@@ -377,13 +389,13 @@ func (a *appState) apply() {
 		// A source whose place on the shared timeline is unknown makes no claim
 		// about which moment of the match it is playing, so its sound stays off
 		// until someone who can see both pictures says it is safe.
-		if !level.Muted && !a.audible[it.audio] && !a.aligned(it) {
+		if !level.Muted && a.settings.MuteUnaligned && !a.audible[it.audio] && !a.aligned(it) {
 			it.player.SetMuted(true)
 			continue
 		}
 		it.player.SetMuted(level.Muted)
 		if !level.Muted {
-			it.player.SetVolume(level.Volume)
+			it.player.SetVolume(a.volumeFor(level.Volume))
 		}
 	}
 }

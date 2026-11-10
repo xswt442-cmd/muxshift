@@ -162,6 +162,45 @@ func (r *dvrRunner) bufferAnchor(window dvr.Range) (dvr.Anchor, error) {
 	return anchor, nil
 }
 
+// mediaClock converts between the two clocks a replay file has. The buffer
+// records container timestamps; a player's position starts at zero on the first
+// frame of the file it opened, so seeking to a position means "container time
+// minus the first frame's container time". They are not interchangeable: a file
+// whose timestamps were all shifted keeps the same content at an earlier player
+// position, and that shift must not become a track offset.
+type mediaClock struct {
+	origin time.Duration // the file's first frame, in container time
+}
+
+// Player reports the position that shows the given container time.
+func (c mediaClock) Player(container time.Duration) time.Duration {
+	return container - c.origin
+}
+
+// Container reports the container time shown at a player position.
+func (c mediaClock) Container(player time.Duration) time.Duration {
+	return player + c.origin
+}
+
+// clockFor takes the conversion from an anchor measured for the file a player
+// holds: the anchor's media start is that file's first frame.
+func clockFor(anchor dvr.Anchor) mediaClock {
+	return mediaClock{origin: anchor.MediaStart}
+}
+
+// playerWindow reports the player positions that show a buffered window. Two
+// steps sit behind the single subtraction: the buffer's clock reaches the
+// container's through the anchor (`buffer = anchor.BufferStart + (container -
+// anchor.MediaStart)`), and a player that opens a file reports zero at its first
+// frame (`position = buffer - opened`). A file cut at the buffer start therefore
+// opens at `anchor.BufferStart`, and the container origin cancels out -- which is
+// the point: a timestamp shift shared by every frame must not survive into the
+// player clock, let alone into a track offset.
+func playerWindow(anchor dvr.Anchor, window dvr.Range) dvr.Range {
+	start := window.Start - anchor.BufferStart
+	return dvr.Range{Start: start, End: start + (window.End - window.Start)}
+}
+
 // replayEventTime converts a position inside the recording an item is showing to
 // shared event time. It refuses when the item shows no recording, when the anchor
 // was never measured, when the source has no track in the session, or when that

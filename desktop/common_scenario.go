@@ -236,6 +236,49 @@ func commonBody(window *mygo.Window, a *appState, dir string) {
 			index+1, sceneClock(anchors[index].MediaStart), anchors[index].Epoch, anchors[index].BufferInstance, sceneClock(proofEvent))
 	}
 
+	// The container window above is measured in the timestamps the files carry.
+	// A player cannot use it as it stands: its position starts at zero on the
+	// file's first frame. Converting both windows through their own measured
+	// clock has to make the two sources of one event line up with no offset at
+	// all -- the fixture only shifted timestamps, so the content offset is zero,
+	// and the four seconds belong to the conversion, not to the Core timeline.
+	step(window, a, dir, scenario, "", "put both sources on their own player clocks", func(a *appState) {
+		for index := range a.items {
+			it, err := a.at(index)
+			if err != nil {
+				logf(scenario, "%v", err)
+				continue
+			}
+			for _, track := range []core.TrackID{it.video, it.audio} {
+				if track == "" {
+					continue
+				}
+				if err := a.sync.timeline.SetShift(track, 0); err != nil {
+					logf(scenario, "clear %s: %v", track, err)
+				}
+			}
+		}
+		a.apply()
+	})
+	playerStarts := make([]time.Duration, len(windows))
+	playerEnds := make([]time.Duration, len(windows))
+	for index := range windows {
+		window := playerWindow(anchors[index], windows[index])
+		playerStarts[index] = window.Start
+		playerEnds[index] = window.End
+		logf(scenario, "source %d on its player clock: %s..%s (the buffered window was %s..%s; the container origin %s cancels against the buffer origin %s)",
+			index+1, sceneClock(window.Start), sceneClock(window.End),
+			sceneClock(windows[index].Start), sceneClock(windows[index].End),
+			sceneClock(anchors[index].MediaStart), sceneClock(anchors[index].BufferStart))
+	}
+	check(absDuration(playerStarts[1]-playerStarts[0]) <= 100*time.Millisecond,
+		"the same event starts %s apart on the two player clocks after conversion",
+		sceneClock(playerStarts[1]-playerStarts[0]))
+	check(absDuration((playerEnds[1]-playerStarts[1])-(playerEnds[0]-playerStarts[0])) <= 100*time.Millisecond,
+		"the two player windows differ in length by %s",
+		sceneClock((playerEnds[1]-playerStarts[1])-(playerEnds[0]-playerStarts[0])))
+	step(window, a, dir, scenario, "", "the same event on two player clocks", nil)
+
 	// The first negative: the same buffers, but the second source has no
 	// confirmed offset at all. A window would be a guess, so the answer has to
 	// be a refusal that names the unaligned source.
@@ -264,7 +307,7 @@ func commonBody(window *mygo.Window, a *appState, dir string) {
 		"an unaligned source produced a window instead of ErrNotAligned (%v)", unprovenErr)
 	step(window, a, dir, scenario, "2-unaligned.png", "the same buffers with no confirmed offset", nil)
 
-	// The second negative: a confirmed but wrong offset is not refused 閳?it
+	// The second negative: a confirmed but wrong offset is not refused; it
 	// moves the window by the difference. This is the reason the offset needs
 	// evidence of its own: the window follows whatever mapping it is given, so
 	// a shifted answer is only as good as the shift.

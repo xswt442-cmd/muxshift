@@ -182,3 +182,42 @@ func TestBufferAnchorRefusesAWindowBeforeTheMeasuredSegment(t *testing.T) {
 		t.Fatal("a window before the measured segment was accepted")
 	}
 }
+
+func TestMediaClockKeepsAPtsShiftOutOfThePlayerClock(t *testing.T) {
+	// The two files hold the same frames; only their container timestamps differ,
+	// which is what the d-3.0 fixture did. The same content therefore has to land
+	// on the same player position in both, and the shift must stay in the
+	// conversion instead of turning into a track offset.
+	first := dvr.Anchor{Source: "a", MeasuredAt: time.Now(), MediaStart: 1466667 * time.Microsecond}
+	second := dvr.Anchor{Source: "b", MeasuredAt: time.Now(), MediaStart: 5466667 * time.Microsecond}
+	content := 6 * time.Second
+
+	if got, want := clockFor(first).Player(first.MediaStart+content), content; got != want {
+		t.Fatalf("the unshifted file shows content %s at player %s, want %s", content, got, want)
+	}
+	if got, want := clockFor(second).Player(second.MediaStart+content), content; got != want {
+		t.Fatalf("the shifted file shows content %s at player %s, want %s", content, got, want)
+	}
+	shift := second.MediaStart - first.MediaStart
+	if shift != 4*time.Second {
+		t.Fatalf("the fixture's shift is %s, want 4s", shift)
+	}
+	if got := clockFor(second).Player(second.MediaStart+content) - clockFor(first).Player(first.MediaStart+content); got != 0 {
+		t.Fatalf("the same content sits %s apart on the two player clocks, want 0", got)
+	}
+	if got, want := clockFor(first).Container(content), first.MediaStart+content; got != want {
+		t.Fatalf("container time for player %s is %s, want %s", content, got, want)
+	}
+	// The buffer window is the clock a player is handed: both sources buffered
+	// 0s..30s, and a player opening a file cut at the buffer start reports 0s
+	// there, so the same content lands on the same positions even though the
+	// container origins differ by the fixture's shift.
+	window := playerWindow(second, dvr.Range{Start: 0, End: 30 * time.Second})
+	if window.Start != 0 || window.End != 30*time.Second {
+		t.Fatalf("the converted window is %s..%s, want 0s..30s", window.Start, window.End)
+	}
+	shifted := playerWindow(second, dvr.Range{Start: second.BufferStart + 5*time.Second, End: second.BufferStart + 15*time.Second})
+	if shifted.Start != 5*time.Second || shifted.End != 15*time.Second {
+		t.Fatalf("a window cut later converts to %s..%s, want 5s..15s", shifted.Start, shifted.End)
+	}
+}

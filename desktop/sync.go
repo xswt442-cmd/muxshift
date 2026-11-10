@@ -53,6 +53,11 @@ type replaySource struct {
 // both can show. An unaligned source, or one whose buffered range has not
 // reached the others, makes an honest answer impossible, so the error says which
 // source refused instead of guessing a number.
+//
+// The window is in the buffers' clock, which is the container's timestamps. It
+// is not yet a position a player may be asked for: a player reports zero at the
+// first frame of the file it opened, so a caller that wants to seek converts
+// each source's window through its measured anchor with playerWindow first.
 func (a *appState) commonReplay(sources []replaySource) (time.Duration, time.Duration, error) {
 	if len(sources) == 0 {
 		return 0, 0, fmt.Errorf("no buffered source")

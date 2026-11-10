@@ -417,14 +417,15 @@ func (a *appState) nudge(index int, delta time.Duration) (string, error) {
 		}
 	}
 
-	before := it.player.Position()
-	it.player.Seek(target)
+	outcome := seekAndMeasure(it.player, target)
 	// The source now has a known offset, so the conservative mute can lift.
 	a.apply()
-	after := it.player.Position()
-	return fmt.Sprintf("source %d offset=%+.3fs target=%s before=%s after=%s residual=%s",
-		index+1, shift.Offset.Seconds(), target.Round(time.Millisecond), before.Round(time.Millisecond),
-		after.Round(time.Millisecond), (after - target).Round(time.Millisecond)), nil
+	a.lastSeek = outcome
+	a.lastSeekSource = it.source.ID
+	return fmt.Sprintf("source %d offset=%+.3fs requested=%s actual=%s residual=%s window=%s at %s",
+		index+1, shift.Offset.Seconds(), outcome.Requested.Round(time.Millisecond),
+		outcome.Actual.Round(time.Millisecond), outcome.Residual.Round(time.Millisecond),
+		outcome.Window.String(), outcome.RequestedAt.Format("15:04:05.000")), nil
 }
 
 // offsetAfter adds delta to an offset, reporting a sum a duration cannot hold.

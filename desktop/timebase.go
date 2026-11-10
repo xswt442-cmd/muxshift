@@ -33,6 +33,54 @@ func mediaFromEvent(event, offset time.Duration) (time.Duration, error) {
 	return target, nil
 }
 
+// playableWindow is the part of a stream a player can reach right now: known
+// only when the engine reports a duration, because a live list has no end.
+type playableWindow struct {
+	Known bool
+	Start time.Duration
+	End   time.Duration
+}
+
+func (w playableWindow) String() string {
+	if !w.Known {
+		return "unknown"
+	}
+	return w.Start.Round(time.Millisecond).String() + ".." + w.End.Round(time.Millisecond).String()
+}
+
+// seekOutcome is one seek in the terms that can be checked: what was requested,
+// what the player reports afterwards, the playable window at that moment, the
+// residual between requested and actual, and the wall clock of the request and
+// of the reading. Wall clock is recorded, never used as the shared clock.
+type seekOutcome struct {
+	Requested   time.Duration
+	Actual      time.Duration
+	Residual    time.Duration
+	Window      playableWindow
+	RequestedAt time.Time
+	ReadAt      time.Time
+}
+
+// seekAndMeasure seeks a player and reads back what it did, so a caller can
+// report a residual instead of trusting the requested value.
+func seekAndMeasure(p desktopPlayer, target time.Duration) seekOutcome {
+	outcome := seekOutcome{Requested: target, RequestedAt: time.Now()}
+	if p == nil {
+		outcome.ReadAt = outcome.RequestedAt
+		return outcome
+	}
+	before := engineStateFrom(p)
+	if before.Dur > 0 {
+		outcome.Window = playableWindow{Known: true, Start: 0, End: before.Dur}
+	}
+	p.Seek(target)
+	after := engineStateFrom(p)
+	outcome.Actual = after.Pos
+	outcome.Residual = after.Pos - target
+	outcome.ReadAt = time.Now()
+	return outcome
+}
+
 // eventFromMedia is the inverse: where a buffered media range sits on the
 // shared clock.
 func eventFromMedia(media, offset time.Duration) (time.Duration, error) {

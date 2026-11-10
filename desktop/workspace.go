@@ -90,6 +90,12 @@ func (a *appState) diagnosticsPage(c *ui.Context) {
 				source.Position.Round(100*1e6), source.Duration.Round(100*1e6), source.Offset)).
 				FontSize(textSmall).TextColor(colorText).FontFeatures("tnum")
 		}
+		if snapshot.SeekWallClock != "" {
+			ui.Text(c, fmt.Sprintf("seek %s · requested %s · actual %s · residual %s · window %s · at %s (wall clock)",
+				snapshot.SeekSource, snapshot.SeekRequested.Round(100*1e6), snapshot.SeekActual.Round(100*1e6),
+				snapshot.SeekResidual.Round(100*1e6), snapshot.SeekWindow, snapshot.SeekWallClock)).
+				FontSize(textSmall).TextColor(colorTextDim).FontFeatures("tnum")
+		}
 		if a.syncNote != "" {
 			ui.Text(c, a.syncNote).FontSize(textSmall).TextColor(colorTextDim)
 		}

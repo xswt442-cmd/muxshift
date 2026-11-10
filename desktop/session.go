@@ -67,6 +67,12 @@ type appState struct {
 	// visible in the window instead of only in the log.
 	syncNote string
 
+	// lastSeek is the most recent seek with what was requested, what the player
+	// reported, the playable window, and both wall-clock readings. It is the
+	// adapter's answer to "did the seek land where the clock said".
+	lastSeek       seekOutcome
+	lastSeekSource core.SourceID
+
 	// lastCommand is the outcome of the last command that came through
 	// runCommand, kept so the window and a scenario can read what happened
 	// instead of parsing the status line. See controller.go.

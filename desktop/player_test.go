@@ -4,19 +4,32 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/egoist/mygo/ui"
 )
 
 // fakePlayer stands in for MyGo's player in the adapter tests.
 type fakePlayer struct {
-	ready   bool
-	playing bool
-	buf     bool
-	pos     time.Duration
-	dur     time.Duration
-	volume  float64
-	muted   bool
-	err     error
+	ready      bool
+	playing    bool
+	buf        bool
+	pos        time.Duration
+	dur        time.Duration
+	volume     float64
+	muted      bool
+	err        error
+	seekOffset time.Duration
 }
+
+// seekOffset lets a test pretend the engine lands a little off the request.
+func (f *fakePlayer) Play()  {}
+func (f *fakePlayer) Pause() {}
+func (f *fakePlayer) Seek(d time.Duration) {
+	f.pos = d + f.seekOffset
+}
+func (f *fakePlayer) SetVolume(v float64) *ui.VideoPlayer { f.volume = v; return nil }
+func (f *fakePlayer) SetMuted(m bool) *ui.VideoPlayer     { f.muted = m; return nil }
+func (f *fakePlayer) Close()                              {}
 
 func (f fakePlayer) Ready() bool             { return f.ready }
 func (f fakePlayer) Playing() bool           { return f.playing }
@@ -68,5 +81,46 @@ func TestStateOfAnAbsentPlayer(t *testing.T) {
 	}
 	if state.ready() {
 		t.Fatal("an absent player is never ready")
+	}
+}
+
+func TestSeekAndMeasureReportsWhatThePlayerDid(t *testing.T) {
+	player := &fakePlayer{dur: 30 * time.Second, seekOffset: 120 * time.Millisecond}
+	outcome := seekAndMeasure(player, 5*time.Second)
+	if outcome.Requested != 5*time.Second {
+		t.Fatalf("requested = %s", outcome.Requested)
+	}
+	if outcome.Actual != 5*time.Second+120*time.Millisecond {
+		t.Fatalf("actual = %s", outcome.Actual)
+	}
+	if outcome.Residual != 120*time.Millisecond {
+		t.Fatalf("residual = %s", outcome.Residual)
+	}
+	if !outcome.Window.Known || outcome.Window.Start != 0 || outcome.Window.End != 30*time.Second {
+		t.Fatalf("window = %s", outcome.Window)
+	}
+	if outcome.RequestedAt.IsZero() || outcome.ReadAt.Before(outcome.RequestedAt) {
+		t.Fatalf("wall clock: requested=%v read=%v", outcome.RequestedAt, outcome.ReadAt)
+	}
+}
+
+func TestSeekAndMeasureOnAnAbsentPlayer(t *testing.T) {
+	outcome := seekAndMeasure(nil, 4*time.Second)
+	if outcome.Actual != 0 || outcome.Residual != 0 {
+		t.Fatalf("absent player outcome = %+v", outcome)
+	}
+	if outcome.Window.Known {
+		t.Fatalf("absent player reported a window: %s", outcome.Window)
+	}
+}
+
+func TestSeekAndMeasureLeavesLiveWindowsUnknown(t *testing.T) {
+	player := &fakePlayer{dur: 0}
+	outcome := seekAndMeasure(player, time.Second)
+	if outcome.Window.Known {
+		t.Fatalf("a player without a duration reported a window: %s", outcome.Window)
+	}
+	if outcome.Window.String() != "unknown" {
+		t.Fatalf("unknown window renders as %q", outcome.Window.String())
 	}
 }

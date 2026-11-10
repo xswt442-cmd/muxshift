@@ -197,6 +197,15 @@ type sessionSnapshot struct {
 	Group       string
 	GroupTracks int
 	LastCommand string
+
+	// Seek is the last measured seek, in media time; SeekSource names the source
+	// it belongs to so the numbers cannot be read as the shared clock.
+	SeekSource    core.SourceID
+	SeekRequested time.Duration
+	SeekActual    time.Duration
+	SeekResidual  time.Duration
+	SeekWindow    string
+	SeekWallClock string
 }
 
 // snapshot copies the state the window shows. It must be called on the drawing
@@ -252,6 +261,14 @@ func (a *appState) snapshot() sessionSnapshot {
 		out.GroupTracks = len(group.Tracks)
 	}
 	out.LastCommand = a.lastCommand.String()
+	out.SeekSource = a.lastSeekSource
+	out.SeekRequested = a.lastSeek.Requested
+	out.SeekActual = a.lastSeek.Actual
+	out.SeekResidual = a.lastSeek.Residual
+	out.SeekWindow = a.lastSeek.Window.String()
+	if !a.lastSeek.RequestedAt.IsZero() {
+		out.SeekWallClock = a.lastSeek.RequestedAt.Format("15:04:05.000")
+	}
 	if a.lastCommand.Command.Kind == "" {
 		out.LastCommand = "none yet"
 	}

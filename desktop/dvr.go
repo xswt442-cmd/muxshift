@@ -202,6 +202,14 @@ func (r *dvrRunner) lastRecording() (dvr.Recording, bool) {
 
 // hold leases the recording with this id so the buffer keeps its bytes while a
 // player reads it. A second call releases the lease it replaces.
+// recordAndHold cuts the buffer at from and takes a lease on the new file in one
+// step. A player may only open a file this returned: taking the file from a
+// Record call and leasing it afterwards would leave a window in which another
+// cut under the recording budget could drop it.
+func (r *dvrRunner) recordAndHold(from time.Duration) (dvr.Recording, *dvr.Lease, error) {
+	return r.buffer.RecordAndLease(from)
+}
+
 func (r *dvrRunner) hold(id string) (dvr.Recording, error) {
 	lease, err := r.buffer.Lease(id)
 	if err != nil {

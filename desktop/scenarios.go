@@ -62,6 +62,7 @@ var scenarios = map[string]scenario{
 	"lease":            runLease,
 	"sweep":            runSweep,
 	"replay":           runReplay,
+	"swap":             runSwap,
 }
 
 // runReplayProbe narrows down why a replay player added mid-run does not start:

@@ -445,3 +445,58 @@ func addFixture(t *testing.T, buffer *Buffer) {
 		}
 	}
 }
+
+func TestRecordAndLeasePublishesAndHoldsInOneStep(t *testing.T) {
+	// Measure one cut first: the fixture is small, so a fixed budget would hold
+	// several recordings and the refusal would not be exercised.
+	probe, err := New(Options{Dir: filepath.Join(t.TempDir(), "probe")})
+	if err != nil {
+		t.Fatalf("new probe buffer: %v", err)
+	}
+	addFixture(t, probe)
+	measured, err := probe.Record(0)
+	if err != nil {
+		t.Fatalf("measure a cut: %v", err)
+	}
+	if err := probe.Close(); err != nil {
+		t.Fatalf("close probe: %v", err)
+	}
+
+	dir := filepath.Join(t.TempDir(), "buffer")
+	buffer, err := New(Options{Dir: dir, RecordingBytes: measured.Size})
+	if err != nil {
+		t.Fatalf("new buffer: %v", err)
+	}
+	addFixture(t, buffer)
+
+	first, lease, err := buffer.RecordAndLease(0)
+	if err != nil {
+		t.Fatalf("record and lease: %v", err)
+	}
+	if lease == nil {
+		t.Fatal("record and lease returned no lease")
+	}
+	if lease.Recording().ID != first.ID {
+		t.Fatalf("the lease holds %q, the cut returned %q", lease.Recording().ID, first.ID)
+	}
+
+	// The lease exists from the moment the file is published, so a second cut
+	// under a budget that only holds one recording has to be refused instead of
+	// dropping the file the first caller is about to open.
+	if _, _, err := buffer.RecordAndLease(0); !errors.Is(err, ErrNoSpace) {
+		t.Fatalf("a second cut beside a leased recording returned %v, want ErrNoSpace", err)
+	}
+	if err := first.Valid(); err != nil {
+		t.Fatalf("the leased recording is not valid: %v", err)
+	}
+
+	if err := lease.Release(); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if err := buffer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if _, err := os.Stat(first.Path); !os.IsNotExist(err) {
+		t.Fatalf("the released recording is still on disk: %v", err)
+	}
+}

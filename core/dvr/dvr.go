@@ -462,12 +462,38 @@ func (b *Buffer) Join(from time.Duration) (string, error) {
 func (b *Buffer) Record(from time.Duration) (Recording, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	recording, _, err := b.recordLocked(from)
+	return recording, err
+}
+
+// RecordAndLease writes the range that holds from and returns a lease on it.
+//
+// Publishing and leasing happen under one lock, so no other cut can drop the
+// file between the moment it appears and the moment a player holds it: a caller
+// that used Record and then Lease would leave a window in which a second cut
+// under the recording budget could remove what the first one just published.
+// The engine must open the file from this lease, not from a path it looked up
+// separately.
+func (b *Buffer) RecordAndLease(from time.Duration) (Recording, *Lease, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	recording, index, err := b.recordLocked(from)
+	if err != nil {
+		return Recording{}, nil, err
+	}
+	b.recordings[index].refs++
+	return recording, &Lease{buffer: b, id: recording.ID, recording: recording}, nil
+}
+
+// recordLocked is Record without the lock. It returns the index of the published
+// recording so a caller can lease it before another cut runs.
+func (b *Buffer) recordLocked(from time.Duration) (Recording, int, error) {
 	if b.closed {
-		return Recording{}, core.ErrClosed
+		return Recording{}, -1, core.ErrClosed
 	}
 	chosen, err := b.rangeAtLocked(from)
 	if err != nil {
-		return Recording{}, err
+		return Recording{}, -1, err
 	}
 	// The cut needs room under the recording budget. Unleased older recordings
 	// are dropped first; a recording a player holds is never dropped, so a cut
@@ -479,12 +505,12 @@ func (b *Buffer) Record(from time.Duration) (Recording, error) {
 		}
 	}
 	if b.opts.RecordingBytes > 0 && need > b.opts.RecordingBytes {
-		return Recording{}, fmt.Errorf("%w: one recording needs %d bytes, the budget is %d",
+		return Recording{}, -1, fmt.Errorf("%w: one recording needs %d bytes, the budget is %d",
 			ErrNoSpace, need, b.opts.RecordingBytes)
 	}
 	for b.opts.RecordingBytes > 0 && b.recordingBytes+need > b.opts.RecordingBytes {
 		if !b.dropOldestRecordingLocked() {
-			return Recording{}, fmt.Errorf("%w: the recording budget of %d bytes is held by files a player is using or files the system will not let the buffer remove",
+			return Recording{}, -1, fmt.Errorf("%w: the recording budget of %d bytes is held by files a player is using or files the system will not let the buffer remove",
 				ErrNoSpace, b.opts.RecordingBytes)
 		}
 	}
@@ -495,13 +521,13 @@ func (b *Buffer) Record(from time.Duration) (Recording, error) {
 	temporary := filepath.Join(b.opts.RecordingsDir, "."+id+".part")
 	out, err := os.OpenFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
-		return Recording{}, fmt.Errorf("%w: create %s: %v", ErrNoSpace, name, err)
+		return Recording{}, -1, fmt.Errorf("%w: create %s: %v", ErrNoSpace, name, err)
 	}
 	// A failed cut removes its own temporary file; nothing else is touched.
-	failed := func(err error) (Recording, error) {
+	failed := func(err error) (Recording, int, error) {
 		out.Close()
 		os.Remove(temporary)
-		return Recording{}, err
+		return Recording{}, -1, err
 	}
 	recording := Recording{
 		ID:                  id,
@@ -538,16 +564,16 @@ func (b *Buffer) Record(from time.Duration) (Recording, error) {
 	}
 	if err := out.Close(); err != nil {
 		os.Remove(temporary)
-		return Recording{}, fmt.Errorf("%w: close %s: %v", ErrNoSpace, name, err)
+		return Recording{}, -1, fmt.Errorf("%w: close %s: %v", ErrNoSpace, name, err)
 	}
 	if err := os.Rename(temporary, path); err != nil {
 		os.Remove(temporary)
-		return Recording{}, fmt.Errorf("%w: publish %s: %v", ErrNoSpace, name, err)
+		return Recording{}, -1, fmt.Errorf("%w: publish %s: %v", ErrNoSpace, name, err)
 	}
 	recording.Size = written
 	b.recordings = append(b.recordings, recorded{Recording: recording})
 	b.recordingBytes += written
-	return recording, nil
+	return recording, len(b.recordings) - 1, nil
 }
 
 // rangeAtLocked returns the contiguous range that covers at, or the first one

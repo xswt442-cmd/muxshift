@@ -404,6 +404,12 @@ func (a *appState) stage(c *ui.Context) {
 			if it.player == nil {
 				continue
 			}
+			// A replacement waiting for its first picture is drawn under the
+			// picture the item already shows, so a viewer sees the old one
+			// until the switch commits and never a black stage.
+			if it.swap != nil {
+				ui.Video(c, it.swap.player).Fill()
+			}
 			if it.previous != nil {
 				ui.Video(c, rawPlayer(it.previous)).Fill()
 				shown++

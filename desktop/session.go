@@ -53,6 +53,19 @@ type item struct {
 	// earlier player cannot seek the current one or a closed one.
 	generation int
 
+	// replay is the recording this item currently shows, nil when it shows the
+	// address it was opened from. The recording belongs to the source its
+	// buffer was started for, which is what SourceID on it says.
+	replay *dvr.Recording
+
+	// replayLease keeps the file of replay alive while its player reads it. A
+	// live source has none.
+	replayLease *dvr.Lease
+
+	// swap is a replacement player and its lease waiting for a picture, drawn
+	// under the current picture until it commits. See playRecording.
+	swap *replaySwap
+
 	// volume is the level this source's audio track gets when the scene plays
 	// it, kept here so the window's buttons can raise and lower it.
 	volume float64
@@ -82,6 +95,19 @@ type appState struct {
 	// runners are the replay buffers this run opened, in the order they started.
 	// Shutdown walks them first: recording stops before any player closes.
 	runners []trackedRunner
+
+	// leaseMu guards the counters the replay scenario uses to show that every
+	// recording a player was handed was given back: leasesOpen is what players
+	// hold now, leasesGiven how many were taken over the whole run.
+	leaseMu     sync.Mutex
+	leasesOpen  int
+	leasesGiven int
+
+	// openReplay and replayStarted are the seams desktop/replay_swap.go uses in
+	// its scenario: a run can stand in for a player that cannot open a file, or
+	// for one that never shows a picture. Production leaves both nil.
+	openReplay    func(path string) (*ui.VideoPlayer, error)
+	replayStarted func(player *ui.VideoPlayer) bool
 
 	// syncNote is the outcome of the last sync command, so a refused seek stays
 	// visible in the window instead of only in the log.
@@ -664,12 +690,38 @@ func (a *appState) at(index int) (*item, error) {
 func (a *appState) close(it *item) {
 	var kept *handover
 	var previous *ui.VideoPlayer
+	var swap *replaySwap
+	var lease *dvr.Lease
 	mygoRunOnMain(func() {
 		kept = it.handover
 		previous = rawPlayer(it.previous)
+		swap = it.swap
+		lease = it.replayLease
 		it.handover = nil
 		it.previous = nil
+		it.swap = nil
+		it.replayLease = nil
+		it.replay = nil
 	})
+	if swap != nil {
+		// The replacement never became the item's player, so this close is the
+		// only owner of it and of the lease on the file it was handed.
+		a.releasePlayer(swap.player)
+		if err := swap.lease.Release(); err != nil {
+			logf("replay", "release the lease of %s on close: %v", swap.recording.FileName(), err)
+		}
+		a.leftLease()
+	}
+	if lease != nil {
+		// The player that was showing the recording is closed below; the lease
+		// goes with it, in that order.
+		defer func() {
+			if err := lease.Release(); err != nil {
+				logf("replay", "release the lease of the recording on close: %v", err)
+			}
+			a.leftLease()
+		}()
+	}
 	switch {
 	case kept != nil:
 		// The handover that was waiting owns the player it kept drawn; a close

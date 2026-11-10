@@ -10,6 +10,7 @@ package main
 
 import (
 	"encoding/json"
+	"go/format"
 	"flag"
 	"fmt"
 	"log"
@@ -68,7 +69,11 @@ func main() {
 	if err := os.WriteFile(*web, []byte(css(t, *source)), 0o644); err != nil {
 		log.Fatalf("designtokens: write %s: %v", *web, err)
 	}
-	if err := os.WriteFile(*desktop, []byte(golang(t, *source)), 0o644); err != nil {
+	formatted, err := format.Source([]byte(golang(t, *source)))
+	if err != nil {
+		log.Fatalf("designtokens: format %s: %v", *desktop, err)
+	}
+	if err := os.WriteFile(*desktop, formatted, 0o644); err != nil {
 		log.Fatalf("designtokens: write %s: %v", *desktop, err)
 	}
 	// The desktop window shows a small page; it gets the same sheet so the two

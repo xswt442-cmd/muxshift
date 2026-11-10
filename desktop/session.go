@@ -80,6 +80,10 @@ type appState struct {
 	panelCalls int
 	webView    *mygo.WebView
 
+	// workspace is the page the rail shows. The stage page is the default so a
+	// window opened without a scenario looks exactly as it did before the rail.
+	workspace workspace
+
 	// sync is the shared event clock and the per-track offsets the panel
 	// edits; see sync.go.
 

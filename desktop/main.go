@@ -349,21 +349,30 @@ func (a *appState) view(c *ui.Context) {
 	c.SetTheme(muxshiftTheme())
 	ui.Column(c).Fill().Background(colorBg).Padding(spaceLg).Gap(spaceMd).Children(func() {
 		a.headerRow(c)
-		a.stage(c)
-		a.transportRow(c)
-		// P13.3: the web view sits below the native stage, in the same window,
-		// and reads the same session. It is absent unless a scenario asked for
-		// it, so an ordinary run draws the native interface alone.
-		if a.webView != nil {
-			ui.Box(c).Height(6)
-			ui.Column(c).Height(300).Children(func() {
-				// A web view takes its size from layout: the column gives it
-				// the room and the element stretches across it.
-				ui.WebView(c, a.webView).Grow(1)
-			})
-		}
-		for i, it := range a.items {
-			a.sourceCard(c, i, it)
+		a.workspaceRow(c)
+		switch a.workspace {
+		case workspaceSources:
+			a.sourcesPage(c)
+		case workspaceDiagnostics:
+			a.diagnosticsPage(c)
+		default:
+			a.stage(c)
+			a.transportRow(c)
+			// P13.3: the web view sits below the native stage, in the same
+			// window, and reads the same session. It is absent unless a
+			// scenario asked for it, so an ordinary run draws the native
+			// interface alone.
+			if a.webView != nil {
+				ui.Box(c).Height(6)
+				ui.Column(c).Height(300).Children(func() {
+					// A web view takes its size from layout: the column gives it
+					// the room and the element stretches across it.
+					ui.WebView(c, a.webView).Grow(1)
+				})
+			}
+			for i, it := range a.items {
+				a.sourceCard(c, i, it)
+			}
 		}
 		ui.Text(c, a.status()).FontSize(textSmall).TextColor(colorTextDim).FontFeatures("tnum")
 		if a.syncNote != "" {

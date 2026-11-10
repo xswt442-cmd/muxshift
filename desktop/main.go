@@ -436,6 +436,13 @@ func (a *appState) view(c *ui.Context) {
 					if ui.Button(c.Key(fmt.Sprintf("fwd-%d", i)), "+0.1s").Width(64).Clicked() {
 						a.nudgeAndRecord(index, 100*time.Millisecond)
 					}
+					if i > 0 {
+						// The probe reads both files and offers an offset; it
+						// does not move either player or the timeline.
+						if ui.Button(c.Key(fmt.Sprintf("probe-%d", i)), fmt.Sprintf("Try align %d", i+1)).Width(112).Clicked() {
+							a.probeAsync(0, index)
+						}
+					}
 				}
 			}
 			ui.Text(c, a.status()).FontFeatures("tnum")

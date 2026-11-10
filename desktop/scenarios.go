@@ -42,6 +42,7 @@ var scenarios = map[string]scenario{
 	"syncfail":      runSyncFail,
 	"dvr":           runDVR,
 	"replayprobe":   runReplayProbe,
+	"align-probe":   runAlignProbe,
 }
 
 // runReplayProbe narrows down why a replay player added mid-run does not start:
@@ -459,6 +460,43 @@ func runSyncFail(window *mygo.Window, a *appState, dir string) {
 // than on whatever the scene selects: a source the scene shows after the group
 // was made keeps playing, and a source removed from the session leaves the group
 // without any command going to a player that no longer exists.
+// positions is every live player position, used to show that a probe left the
+// players where they were.
+func (a *appState) positions() []string {
+	out := make([]string, 0, len(a.items))
+	for index, it := range a.items {
+		if it.player == nil {
+			out = append(out, fmt.Sprintf("%d: none", index+1))
+			continue
+		}
+		out = append(out, fmt.Sprintf("%d: %s", index+1, it.player.Position()))
+	}
+	return out
+}
+
+func describeShifts(shifts []core.Shift) string {
+	if len(shifts) == 0 {
+		return "none"
+	}
+	parts := make([]string, 0, len(shifts))
+	for _, shift := range shifts {
+		parts = append(parts, fmt.Sprintf("%s %+.3fs", shift.Track, shift.Offset.Seconds()))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func sameShifts(before, after []core.Shift) bool {
+	if len(before) != len(after) {
+		return false
+	}
+	for index := range before {
+		if before[index] != after[index] {
+			return false
+		}
+	}
+	return true
+}
+
 func runSyncGroup(window *mygo.Window, a *appState, dir string) {
 	go func() {
 		wait := time.Sleep

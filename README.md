@@ -69,7 +69,7 @@ python tools\separate\separate.py --model testplace\models\Kim_Vocal_2.onnx \
 
 模型权重不随仓库发布，也没有确认可再分发的许可，因此脚本只接受显式传入的 `--model` 路径。在这台 RTX 4060 Laptop 上，44.1 kHz 立体声、5.92 秒一块：DirectML 稳态每块约 0.26 秒（约 7.8 倍实时，显存约 6.2 GiB），纯 CPU 每块约 5.75 秒（比实时更慢）。5.92 秒是**一次模型输入块的长度**，不是实测的端到端延迟：实际等到输出还要算上分块重叠、调度、编码、缓冲与播放器启动，这些没有测量。合成样例上人声轨与解说源相关 0.99、非人声轨与环境声源相关 0.83；真实录音（LibriVox 公版朗读 + Wikimedia 公版掌声，20 秒混音）上人声轨与朗读源相关 0.93、非人声轨与掌声源相关 0.94。真实球场转播里的解说还没有验证，两条 WAV 也还只是同一段录音的派生结果，不是两路独立直播源。细节见 [tools/separate/README.md](tools/separate/README.md)。
 
-`tools/align/` 是第二个实验：它只用内容本身估计两段记录的相对偏移——`match.py` 比较音频能量包络，`frame_hash.py` 比较 16x16 灰度帧缩略图——并给出最佳候选、次佳候选、与全部候选的中位水平之差，达不到阈值就拒绝。它**不接入播放**，也**不会自动改时间轴**：桌面端的手动对轴仍然是唯一会改变播放位置的方式。
+`tools/align/` 是第二个实验：它只用内容本身估计两段记录的相对偏移——`match.py` 比较音频能量包络，`frame_hash.py` 比较 16x16 灰度帧缩略图——并给出最佳候选、次佳候选、与全部候选的中位水平之差，达不到阈值就拒绝。它**不接入播放**，也**不会自动改时间轴**：桌面端的手动对轴仍然是唯一会改变播放位置的方式。桌面端的「试着对齐」按钮走同一条只读路径：它用 `core/align` 比较两路音频，把本地匹配偏移按 `CoreOffset = (MediaStart_B − MediaStart_A) + LocalMatchOffset` 换算成 Core 偏移，显示建议值与当前偏移的差值，或者显示拒绝原因；结果返回时还会核对源身份、播放器代次与目标偏移，变了就只显示「已过期」。两种结果都不写 Timeline、不移动播放器。
 
 ```sh
 python tools\align\match.py --a testplace\media\p12\ref.wav --b testplace\media\p12\shift-15.wav --max-lag 60

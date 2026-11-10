@@ -66,6 +66,11 @@ type appState struct {
 	// visible in the window instead of only in the log.
 	syncNote string
 
+	// lastCommand is the outcome of the last command that came through
+	// runCommand, kept so the window and a scenario can read what happened
+	// instead of parsing the status line. See controller.go.
+	lastCommand commandResult
+
 	// sync is the shared event clock and the per-track offsets the panel
 	// edits; see sync.go.
 

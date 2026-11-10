@@ -413,15 +413,14 @@ func (a *appState) transportRow(c *ui.Context) {
 			label = "Play all"
 		}
 		if ui.Button(c.Key("pause-all"), label).Width(96).Clicked() {
-			var problems []string
+			kind := commandPlay
 			if a.sync.playhead.Playing() {
-				problems = a.pauseAll()
-			} else {
-				problems = a.playAll()
+				kind = commandPause
 			}
-			if len(problems) > 0 {
-				a.syncNote = "sync: group command reported: " + strings.Join(problems, "; ")
-				log.Printf("group command: %s", strings.Join(problems, "; "))
+			result := a.runCommand(command{Kind: kind})
+			a.report(result)
+			if result.Err != nil {
+				a.syncNote = "sync: group command reported: " + result.Err.Error()
 			} else {
 				members, _ := a.group()
 				a.syncNote = "sync: group command done for " + itoa(len(members)) + " source(s)"
@@ -434,7 +433,7 @@ func (a *appState) transportRow(c *ui.Context) {
 		}
 		if ui.Button(c.Key("reload"), "Reload").Width(88).Clicked() {
 			if first := a.first(); first != nil {
-				a.reopenPlayer(first)
+				a.report(a.runCommand(command{Kind: commandReload, Source: first.source.ID}))
 			}
 		}
 		if ui.Button(c.Key("quit"), "Close").Width(88).Clicked() {
@@ -448,7 +447,6 @@ func (a *appState) transportRow(c *ui.Context) {
 // controls that change that. The web page lists the same fields in the same
 // order, which is what keeps the two clients recognisable as one product.
 func (a *appState) sourceCard(c *ui.Context, i int, it *item) {
-	index := i
 	item := it
 	ui.Row(c).Gap(spaceMd).Padding(spaceMd).Radius(radiusMd).Border(1, colorLine).
 		Background(colorPanel).AlignItems(ui.Center).Children(func() {
@@ -471,31 +469,21 @@ func (a *appState) sourceCard(c *ui.Context, i int, it *item) {
 		})
 		if item.video != "" {
 			if ui.Button(c.Key("show-"+itoa(i)), "Show").Width(72).Clicked() {
-				if err := a.showVideo(index); err != nil {
-					a.lastErr = err
-				}
+				a.report(a.runCommand(command{Kind: commandShow, Source: item.source.ID}))
 			}
 		}
 		if item.audio != "" {
 			if ui.Button(c.Key("hear-"+itoa(i)), "Hear").Width(72).Clicked() {
-				if err := a.hearAudio(index, item.volume); err != nil {
-					a.lastErr = err
-				}
+				a.report(a.runCommand(command{Kind: commandHear, Source: item.source.ID}))
 			}
 			if ui.Button(c.Key("allow-"+itoa(i)), allowLabel(a, item)).Width(96).Clicked() {
-				if err := a.allowAudio(index); err != nil {
-					a.lastErr = err
-				}
+				a.report(a.runCommand(command{Kind: commandAllow, Source: item.source.ID}))
 			}
 			if ui.Button(c.Key("vol-down-"+itoa(i)), "Vol -").Width(64).Clicked() {
-				if err := a.setVolume(index, max(0, item.volume-0.25)); err != nil {
-					a.lastErr = err
-				}
+				a.report(a.runCommand(command{Kind: commandVolume, Source: item.source.ID, Volume: max(0, item.volume-0.25)}))
 			}
 			if ui.Button(c.Key("vol-up-"+itoa(i)), "Vol +").Width(64).Clicked() {
-				if err := a.setVolume(index, min(1, item.volume+0.25)); err != nil {
-					a.lastErr = err
-				}
+				a.report(a.runCommand(command{Kind: commandVolume, Source: item.source.ID, Volume: min(1, item.volume+0.25)}))
 			}
 		}
 		if item.video != "" || item.audio != "" {
@@ -503,16 +491,16 @@ func (a *appState) sourceCard(c *ui.Context, i int, it *item) {
 			// timecode; the report after each press says where the player
 			// actually landed.
 			if ui.Button(c.Key("back-"+itoa(i)), "-0.1s").Width(64).Clicked() {
-				a.nudgeAndRecord(index, -100*time.Millisecond)
+				a.report(a.runCommand(command{Kind: commandNudge, Source: item.source.ID, Delta: -100 * time.Millisecond}))
 			}
 			if ui.Button(c.Key("fwd-"+itoa(i)), "+0.1s").Width(64).Clicked() {
-				a.nudgeAndRecord(index, 100*time.Millisecond)
+				a.report(a.runCommand(command{Kind: commandNudge, Source: item.source.ID, Delta: 100 * time.Millisecond}))
 			}
 			if i > 0 {
 				// The probe reads both files and offers an offset; it does
 				// not move either player or the timeline.
 				if ui.Button(c.Key("probe-"+itoa(i)), "Try align").Width(88).Clicked() {
-					a.probeAsync(0, index)
+					a.probeAsync(0, i)
 				}
 			}
 		}
@@ -717,6 +705,7 @@ func main() {
 			Height:  height,
 			Content: ui.View(s.view),
 		})
+		installWindowIcon(window)
 		window.OnClose(func(*mygo.CloseEvent) { s.release() })
 		if *shot != "" {
 			time.AfterFunc(*shotDelay, func() {

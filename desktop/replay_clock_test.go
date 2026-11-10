@@ -144,6 +144,52 @@ func TestReplayEventTimeRefusesWhatItCannotProve(t *testing.T) {
 	}
 }
 
+func TestReplayFileRefusesAnAnchorForAnotherFile(t *testing.T) {
+	recording := dvr.Recording{
+		Source:           "fixture",
+		SourceMediaEpoch: 2,
+		BufferInstance:   "buf-1",
+		StartBufferTime:  5 * time.Second,
+		EndBufferTime:    9 * time.Second,
+	}
+	anchor := dvr.Anchor{
+		Source:         "fixture",
+		Epoch:          2,
+		BufferInstance: "buf-1",
+		BufferStart:    5 * time.Second,
+		MediaStart:     100 * time.Second,
+		Interval:       dvr.Range{Start: 5 * time.Second, End: 9 * time.Second},
+		MeasuredAt:     time.Now(),
+	}
+	file, err := replayFileFor(recording, anchor)
+	if err != nil {
+		t.Fatalf("binding the anchor to its own file: %v", err)
+	}
+	if file.epoch != 2 || file.instance != "buf-1" || file.clock.Player(100*time.Second) != 0 {
+		t.Fatalf("the contract lost what it was given: %+v", file)
+	}
+
+	cases := []struct {
+		name      string
+		recording dvr.Recording
+		anchor    dvr.Anchor
+		want      string
+	}{
+		{"another source", recording, func() dvr.Anchor { a := anchor; a.Source = "other"; return a }(), "names other"},
+		{"another buffer", recording, func() dvr.Anchor { a := anchor; a.BufferInstance = "buf-2"; return a }(), "buf-2"},
+		{"another epoch", recording, func() dvr.Anchor { a := anchor; a.Epoch = 3; return a }(), "epoch 3"},
+		{"another cut point", recording, func() dvr.Anchor { a := anchor; a.BufferStart = 6 * time.Second; return a }(), "starts at buffer"},
+		{"never measured", recording, func() dvr.Anchor { a := anchor; a.MeasuredAt = time.Time{}; return a }(), "was not measured"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := replayFileFor(tc.recording, tc.anchor); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %v, want an error containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestBufferAnchorRefusesAWindowBeforeTheMeasuredSegment(t *testing.T) {
 	anchor := dvr.Anchor{
 		Source:         "fixture",

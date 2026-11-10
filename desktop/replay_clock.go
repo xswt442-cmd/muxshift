@@ -201,6 +201,63 @@ func playerWindow(anchor dvr.Anchor, window dvr.Range) dvr.Range {
 	return dvr.Range{Start: start, End: start + (window.End - window.Start)}
 }
 
+// replayFile is the contract between a player and the clock it runs on. Three
+// facts have to agree before a position means anything: which file the player
+// actually opened, which source instance that file came from, and where the
+// file's own zero sits in the container clock. They are kept in one place
+// because carrying them separately invites the mistake this work has to rule
+// out -- a position read from one file, converted with an anchor measured for
+// another, and then presented as a shared event time.
+type replayFile struct {
+	file     string // the recording's file name, for logs and errors
+	source   core.SourceID
+	instance string // the buffer that produced the file
+	epoch    uint64
+	clock    mediaClock
+}
+
+// replayFileFor binds a recording to the anchor measured for it, refusing any
+// mismatch instead of converting with a plausible-looking value. An anchor from
+// another source, another buffer instance, another epoch, or one measured for a
+// different part of the buffer cannot locate this file's first frame.
+func replayFileFor(recording dvr.Recording, anchor dvr.Anchor) (replayFile, error) {
+	if !anchor.Measured() {
+		return replayFile{}, fmt.Errorf("the anchor for %s was not measured", recording.FileName())
+	}
+	if anchor.Source != recording.Source {
+		return replayFile{}, fmt.Errorf("the anchor names %s, but the file came from %s",
+			anchor.Source, recording.Source)
+	}
+	if anchor.BufferInstance != recording.BufferInstance {
+		return replayFile{}, fmt.Errorf("the anchor was measured on buffer %s, but the file came from buffer %s",
+			bufferName(anchor.BufferInstance), bufferName(recording.BufferInstance))
+	}
+	if anchor.Epoch != recording.SourceMediaEpoch {
+		return replayFile{}, fmt.Errorf("the anchor was measured in epoch %d, but the file was cut in epoch %d",
+			anchor.Epoch, recording.SourceMediaEpoch)
+	}
+	if anchor.BufferStart != recording.StartBufferTime {
+		return replayFile{}, fmt.Errorf("the anchor starts at buffer %s, but the file starts at buffer %s",
+			anchor.BufferStart, recording.StartBufferTime)
+	}
+	return replayFile{
+		file:     recording.FileName(),
+		source:   recording.Source,
+		instance: recording.BufferInstance,
+		epoch:    recording.SourceMediaEpoch,
+		clock:    clockFor(anchor),
+	}, nil
+}
+
+// bufferName keeps an empty instance from disappearing into a sentence: a
+// recording cut before this field existed still has to name what it lacks.
+func bufferName(instance string) string {
+	if instance == "" {
+		return "(no instance recorded)"
+	}
+	return instance
+}
+
 // replayEventTime converts a position inside the recording an item is showing to
 // shared event time. It refuses when the item shows no recording, when the anchor
 // was never measured, when the source has no track in the session, or when that
@@ -227,5 +284,18 @@ func (a *appState) replayEventTime(it *item, position time.Duration) (time.Durat
 	if !ok {
 		return 0, fmt.Errorf("%s: %w", track, core.ErrNotAligned)
 	}
-	return it.replay.EventTime(position, *it.replayAnchor, shift.Offset)
+	// EventTime takes a position inside the file, which is what the player
+	// reports: its zero is the file's first frame. The recording adds its own
+	// start to reach buffer time, so passing the position here is the whole
+	// conversion -- and doing it through `file` is what proves the anchor
+	// describes the file the player actually opened.
+	file, err := replayFileFor(*it.replay, *it.replayAnchor)
+	if err != nil {
+		return 0, err
+	}
+	event, err := it.replay.EventTime(position, *it.replayAnchor, shift.Offset)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", file.file, err)
+	}
+	return event, nil
 }

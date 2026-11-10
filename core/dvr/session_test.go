@@ -3,10 +3,13 @@ package dvr
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/xswt442-cmd/muxshift/core"
 )
 
 func TestOpenSessionCreatesItsOwnMarkedDirectory(t *testing.T) {
@@ -260,6 +263,7 @@ func TestCloseLeavesTheSessionIdentifiableWhenContentIsHeld(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
+	t.Cleanup(func() { _ = session.releaseLock() })
 	held := filepath.Join(session.SegmentsDir(), "held.ts")
 	if err := os.WriteFile(held, []byte("still open"), 0o600); err != nil {
 		t.Fatalf("write a segment: %v", err)
@@ -283,18 +287,73 @@ func TestCloseLeavesTheSessionIdentifiableWhenContentIsHeld(t *testing.T) {
 		t.Fatalf("the failed close removed the lock file: %v", err)
 	}
 
-	if err := handle.Close(); err != nil {
-		t.Fatalf("release the segment: %v", err)
-	}
+	// The lock is still held by this process, so a sweep must treat the session
+	// as alive even though its marker says it is going away: the lock is the
+	// only proof of life, and a sweep has no business deleting files that the
+	// process that owns them may still retry.
 	result, err := SweepSessions(root)
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
-	if len(result.Removed) != 1 {
-		t.Fatalf("the retry removed %+v, want the finished session", result)
+	if len(result.Removed) != 0 || len(result.Live) != 1 {
+		t.Fatalf("a sweep ran on a held session: %+v", result)
+	}
+
+	if err := handle.Close(); err != nil {
+		t.Fatalf("release the segment: %v", err)
+	}
+	if err := os.Remove(held); err != nil {
+		t.Fatalf("a buffer empties the directory: %v", err)
+	}
+	// The retry runs in this process, under the lock the first attempt kept.
+	if err := session.Close(); err != nil {
+		t.Fatalf("the retry after the handle closed: %v", err)
 	}
 	if _, err := os.Stat(session.Dir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the directory survived the retry: %v", err)
+	}
+}
+
+// A marker that cannot be rewritten stops the close before anything is deleted:
+// a directory that cannot say what it is any more must not lose its files.
+func TestCloseStopsWhenTheMarkerCannotBeWritten(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "cache")
+	session, err := OpenSession(root)
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	t.Cleanup(func() { _ = session.releaseLock() })
+	segment := filepath.Join(session.SegmentsDir(), "keep.ts")
+	if err := os.WriteFile(segment, []byte("held by a buffer"), 0o600); err != nil {
+		t.Fatalf("write a segment: %v", err)
+	}
+	markerPath := filepath.Join(session.Dir, MarkerName)
+	if err := os.Remove(markerPath); err != nil {
+		t.Fatalf("remove the marker: %v", err)
+	}
+	// A directory in place of the marker makes the rename of the new marker
+	// fail on every platform.
+	if err := os.MkdirAll(filepath.Join(markerPath, "occupied"), 0o700); err != nil {
+		t.Fatalf("block the marker: %v", err)
+	}
+
+	if err := session.Close(); err == nil {
+		t.Fatalf("close succeeded with an unwritable marker")
+	}
+	if _, err := os.Stat(segment); err != nil {
+		t.Fatalf("the failed close removed a segment: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(session.Dir, lockName)); err != nil {
+		t.Fatalf("the failed close removed the lock file: %v", err)
+	}
+	// The lock was kept, so a second attempt reports the same problem instead of
+	// refusing outright because the session no longer holds its lock.
+	err = session.Close()
+	if err == nil {
+		t.Fatalf("the retry succeeded with an unwritable marker")
+	}
+	if errors.Is(err, core.ErrInvalid) {
+		t.Fatalf("the retry lost the lock: %v", err)
 	}
 }
 
@@ -359,5 +418,123 @@ func TestSweepDoesNotFollowALink(t *testing.T) {
 	}
 	if _, err := os.Stat(inner.Dir); err != nil {
 		t.Fatalf("the sweep followed the link and removed its target: %v", err)
+	}
+}
+
+// A state this version does not know is not a reason to delete anything: a
+// newer build may have left the directory in the middle of something.
+func TestSweepKeepsAMarkerWithAnUnknownState(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "cache")
+	dir := sessionPrefix + "0badc0de0badc0de"
+	full := filepath.Join(root, dir)
+	if err := os.MkdirAll(full, 0o700); err != nil {
+		t.Fatalf("make the directory: %v", err)
+	}
+	record := marker{Version: markerVersion, App: markerApp, ID: "0badc0de0badc0de", State: "moving"}
+	if err := writeMarker(filepath.Join(full, MarkerName), record); err != nil {
+		t.Fatalf("write the marker: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(full, lockName), nil, 0o600); err != nil {
+		t.Fatalf("make the lock file: %v", err)
+	}
+	result, err := SweepSessions(root)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if len(result.Kept) != 1 || len(result.Removed) != 0 {
+		t.Fatalf("sweep kept %+v, want one kept directory", result)
+	}
+	if !strings.Contains(result.Kept[0].Reason, "not understood") {
+		t.Fatalf("kept reason = %q, want the unknown state", result.Kept[0].Reason)
+	}
+}
+
+// A session that wrote "removing" and then died before it could finish leaves
+// no lock: the kernel released it with the process. The next boot finishes the
+// job instead of keeping the leftovers forever.
+func TestSweepFinishesACleanupThatStoppedHalfway(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "cache")
+	id := "5eedface5eedface"
+	full := filepath.Join(root, sessionPrefix+id)
+	if err := os.MkdirAll(filepath.Join(full, SegmentsName, "source-1"), 0o700); err != nil {
+		t.Fatalf("make the directory: %v", err)
+	}
+	record := marker{Version: markerVersion, App: markerApp, ID: id, State: markerRemoving}
+	if err := writeMarker(filepath.Join(full, MarkerName), record); err != nil {
+		t.Fatalf("write the marker: %v", err)
+	}
+	result, err := SweepSessions(root)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if len(result.Removed) != 1 {
+		t.Fatalf("sweep left %+v, want the half-cleaned session removed", result)
+	}
+	if _, err := os.Stat(full); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the directory survived the sweep: %v", err)
+	}
+}
+
+// The same missing lock on a marker that never asked to be removed says nothing
+// about the process that owns the data, so it stays.
+func TestSweepKeepsAnActiveMarkerWithoutItsLock(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "cache")
+	id := "0a0a0a0a0a0a0a0a"
+	full := filepath.Join(root, sessionPrefix+id)
+	if err := os.MkdirAll(full, 0o700); err != nil {
+		t.Fatalf("make the directory: %v", err)
+	}
+	record := marker{Version: markerVersion, App: markerApp, ID: id}
+	if err := writeMarker(filepath.Join(full, MarkerName), record); err != nil {
+		t.Fatalf("write the marker: %v", err)
+	}
+	result, err := SweepSessions(root)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if len(result.Kept) != 1 || len(result.Removed) != 0 {
+		t.Fatalf("sweep %+v, want the directory kept", result)
+	}
+}
+
+// A junction wears a directory name but leads somewhere else. Following it
+// would delete the tree it points at.
+func TestSweepDoesNotFollowAJunction(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("junctions are a Windows feature")
+	}
+	root := filepath.Join(t.TempDir(), "cache")
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.MkdirAll(filepath.Join(outside, SegmentsName, "source-1"), 0o700); err != nil {
+		t.Fatalf("make the outside directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, SegmentsName, "source-1", "seg-00000000.ts"), []byte("outside"), 0o600); err != nil {
+		t.Fatalf("write the outside file: %v", err)
+	}
+	id := "1234abcd1234abcd"
+	link := filepath.Join(root, sessionPrefix+id)
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatalf("make the root: %v", err)
+	}
+	cmd := exec.Command("cmd", "/c", "mklink", "/J", link, outside)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Skipf("cannot make a junction here: %v %s", err, out)
+	}
+	record := marker{Version: markerVersion, App: markerApp, ID: id}
+	if err := writeMarker(filepath.Join(outside, MarkerName), record); err != nil {
+		t.Fatalf("write the marker: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, lockName), nil, 0o600); err != nil {
+		t.Fatalf("make the lock file: %v", err)
+	}
+	result, err := SweepSessions(root)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if len(result.Removed) != 0 {
+		t.Fatalf("sweep removed %+v, want the junction kept", result.Removed)
+	}
+	if _, err := os.Stat(filepath.Join(outside, SegmentsName, "source-1", "seg-00000000.ts")); err != nil {
+		t.Fatalf("the sweep followed the junction: %v", err)
 	}
 }

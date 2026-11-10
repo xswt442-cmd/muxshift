@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -134,23 +135,32 @@ func (s *Session) Close() error {
 	if s == nil || s.close {
 		return nil
 	}
+	if s.lock == nil {
+		return fmt.Errorf("%w: the session is not open, so it cannot be cleaned up", core.ErrInvalid)
+	}
 	markerPath := filepath.Join(s.Dir, MarkerName)
 	going := s.record
 	going.State = markerRemoving
-	markErr := writeMarker(markerPath, going)
+	// The marker goes first and a failure stops everything: if the directory
+	// cannot say what it is any more, deleting its files would leave something
+	// nobody can identify later. The lock is kept on every failure, so a retry
+	// in this process runs under the same protection as the first attempt and a
+	// concurrent sweep cannot take the directory apart underneath it.
+	if err := writeMarker(markerPath, going); err != nil {
+		return err
+	}
 	if left, err := s.emptyContentDirs(); err != nil {
-		_ = s.releaseLock() // the lock file stays: it is part of the identity
 		return err
 	} else if len(left) > 0 {
-		_ = s.releaseLock()
 		return fmt.Errorf("%w: the session still holds %s", ErrNoSpace, strings.Join(left, ", "))
 	}
-	if markErr == nil {
-		if err := os.Remove(markerPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			_ = s.releaseLock()
-			return fmt.Errorf("%w: remove session marker: %v", ErrNoSpace, err)
-		}
+	if err := os.Remove(markerPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%w: remove session marker: %v", ErrNoSpace, err)
 	}
+	// The lock file cannot be removed while this process holds the exclusive
+	// handle, so the lock is released just before the last two names go. A sweep
+	// that wins that small race removes the directory itself; both paths treat
+	// an already missing name as success.
 	if err := s.releaseLock(); err != nil {
 		return err
 	}
@@ -303,12 +313,23 @@ func SweepSessions(root string) (SweepResult, error) {
 			result.Kept = append(result.Kept, KeptDirectory{Path: dir, Reason: "the entry cannot be inspected: " + err.Error()})
 			continue
 		}
-		if info.Mode()&os.ModeSymlink != 0 {
+		// Links and junctions both lead elsewhere. Go reports a junction as a
+		// reparse point rather than a symbolic link on Windows, so Readlink is
+		// the check that catches both: following either would delete the tree
+		// it points at.
+		if info.Mode()&os.ModeSymlink != 0 || isLink(dir) {
 			result.Kept = append(result.Kept, KeptDirectory{Path: dir, Reason: "the entry is a link, not a session directory"})
 			continue
 		}
 		if !info.IsDir() {
 			continue // a stray file with our prefix belongs to nobody
+		}
+		// A junction looks like a directory but leads somewhere else. Following
+		// one would delete the tree it points at, so a name that resolves away
+		// from itself is reported and left alone.
+		if reason := confirmOwnDirectory(dir); reason != "" {
+			result.Kept = append(result.Kept, KeptDirectory{Path: dir, Reason: reason})
+			continue
 		}
 		reason, live, err := sweepOne(dir)
 		if err != nil {
@@ -339,9 +360,22 @@ func sweepOne(dir string) (reason string, live bool, err error) {
 	}
 	lockPath := filepath.Join(dir, lockName)
 	lock, err := openExistingLock(lockPath)
+	releaseLock := func() error {
+		if lock == nil {
+			return nil
+		}
+		return lock.release()
+	}
 	switch {
 	case errors.Is(err, errNoLock):
-		return "the session has no lock file, so it cannot be confirmed dead", false, nil
+		// A session that wrote "removing" and no longer holds its lock was
+		// killed after it decided to go away: nothing is using the directory,
+		// so the next boot finishes what the killed process started. A marker
+		// that never asked to be removed is left alone, because a missing lock
+		// file says nothing about the process that owns the data.
+		if record.State != markerRemoving {
+			return "the session has no lock file, so it cannot be confirmed dead", false, nil
+		}
 	case errors.Is(err, errLocked):
 		return "", true, nil
 	case err != nil:
@@ -353,19 +387,19 @@ func sweepOne(dir string) (reason string, live bool, err error) {
 	for _, sub := range []string{SegmentsName, RecordingsName} {
 		subDir := filepath.Join(dir, sub)
 		if err := clearDirContents(subDir); err != nil {
-			lock.release()
+			_ = releaseLock()
 			return "the " + sub + " cannot be removed: " + err.Error(), false, nil
 		}
 		if err := os.Remove(subDir); err != nil && !errors.Is(err, os.ErrNotExist) {
-			lock.release()
+			_ = releaseLock()
 			return "the " + sub + " directory cannot be removed: " + err.Error(), false, nil
 		}
 	}
 	if err := os.Remove(markerPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		lock.release()
+		_ = releaseLock()
 		return "the marker cannot be removed: " + err.Error(), false, nil
 	}
-	if err := lock.release(); err != nil {
+	if err := releaseLock(); err != nil {
 		return "the stale lock cannot be released: " + err.Error(), false, nil
 	}
 	if err := os.Remove(lockPath); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -422,5 +456,40 @@ func readMarker(path string) (marker, error) {
 	if record.ID == "" {
 		return record, errors.New("the marker has no session id")
 	}
+	switch record.State {
+	case "", markerRemoving:
+	default:
+		return record, fmt.Errorf("the marker state %q is not understood", record.State)
+	}
 	return record, nil
+}
+
+// confirmOwnDirectory reports why a directory with a session name is not the
+// directory it claims to be. Links and junctions are resolved and the result
+// must be the same name: a session directory that points somewhere else is not
+// this package's to delete.
+func confirmOwnDirectory(dir string) string {
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return "the entry cannot be resolved: " + err.Error()
+	}
+	if !samePath(resolved, dir) {
+		return "the entry resolves to " + resolved + ", so it is not the directory it claims to be"
+	}
+	return ""
+}
+
+func samePath(a, b string) bool {
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
+}
+
+// isLink reports whether a path is a link or a junction. Readlink answers for
+// both, which Lstat alone does not on Windows.
+func isLink(path string) bool {
+	_, err := os.Readlink(path)
+	return err == nil
 }

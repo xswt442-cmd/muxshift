@@ -79,10 +79,14 @@ func (a *appState) commonReplay(sources []replaySource) (time.Duration, time.Dur
 		if !ok {
 			return 0, 0, fmt.Errorf("source %d (%s) has no playable buffered range", source.index+1, shortURI(it.uri))
 		}
-		// media = event + offset, so the same range on the event clock is
-		// media - offset.
-		eventStart := window.Start - shift.Offset
-		eventEnd := window.End - shift.Offset
+		eventStart, err := eventFromMedia(window.Start, shift.Offset)
+		if err != nil {
+			return 0, 0, fmt.Errorf("source %d (%s): %w", source.index+1, shortURI(it.uri), err)
+		}
+		eventEnd, err := eventFromMedia(window.End, shift.Offset)
+		if err != nil {
+			return 0, 0, fmt.Errorf("source %d (%s): %w", source.index+1, shortURI(it.uri), err)
+		}
 		if first {
 			start, end = eventStart, eventEnd
 			first = false
@@ -392,13 +396,10 @@ func (a *appState) nudge(index int, delta time.Duration) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("source %d: %w", index+1, err)
 	}
-	target, err := addDuration(a.sync.playhead.Event(), projected)
+	target, err := mediaFromEvent(a.sync.playhead.Event(), projected)
 	if err != nil {
-		return "", fmt.Errorf("source %d: %w", index+1, err)
-	}
-	if target < 0 {
-		return "", fmt.Errorf("source %d: offset %+.1fs puts the target at %s, before the start of the stream; this player has no history that far back",
-			index+1, projected.Seconds(), target)
+		return "", fmt.Errorf("source %d: offset %+.1fs puts the target %w; this player has no history that far back",
+			index+1, projected.Seconds(), err)
 	}
 
 	// The offset is only stored once the player accepted the seek's target, so

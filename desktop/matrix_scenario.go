@@ -44,14 +44,13 @@ func (a *appState) sampleOnMain(index int, since time.Time) readySample {
 			sample.Err = "no player"
 			return
 		}
-		sample.Ready = it.player.Ready()
-		sample.Playing = it.player.Playing()
-		sample.Buf = it.player.Buffering()
-		sample.Pos = it.player.Position()
-		sample.Dur = it.player.Duration()
-		if err := it.player.Err(); err != nil {
-			sample.Err = err.Error()
-		}
+		state := readPlayer(it.player)
+		sample.Ready = state.Ready
+		sample.Playing = state.Playing
+		sample.Buf = state.Buf
+		sample.Pos = state.Pos
+		sample.Dur = state.Dur
+		sample.Err = state.Err
 	})
 	return sample
 }

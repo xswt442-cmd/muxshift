@@ -232,15 +232,16 @@ func (a *appState) snapshot() sessionSnapshot {
 				entry.Offset = shift.Offset
 			}
 		}
-		if player := it.player; player != nil {
+		if it.player != nil {
+			state := readPlayer(it.player)
 			entry.Player = true
-			entry.Ready = player.Ready()
-			entry.Playing = player.Playing()
-			entry.Buffering = player.Buffering()
-			entry.Muted = player.Muted()
-			entry.Volume = player.Volume()
-			entry.Position = player.Position()
-			entry.Duration = player.Duration()
+			entry.Ready = state.Ready
+			entry.Playing = state.Playing
+			entry.Buffering = state.Buf
+			entry.Muted = state.Muted
+			entry.Volume = state.Volume
+			entry.Position = state.Pos
+			entry.Duration = state.Dur
 		}
 		out.Sources = append(out.Sources, entry)
 	}

@@ -26,10 +26,19 @@ const (
 	// markerVersion lets a later build recognise a marker it cannot read
 	// instead of guessing.
 	markerVersion = 1
+	// markerRemoving is written into the marker before a session starts
+	// deleting its files. A directory in that state is one its owner already
+	// gave up on, so a half-finished removal can be retried without guessing.
+	markerRemoving = "removing"
 	// sessionPrefix marks the directories this package creates. Anything else
 	// in the cache root belongs to someone else and is left alone.
 	sessionPrefix = "session-"
 )
+
+// errNoLock says a session directory has no lock file. The sweep cannot tell
+// whether that session is live, so it keeps the directory: creating a lock to
+// find out would turn an unknown directory into a dead one by accident.
+var errNoLock = errors.New("the session has no lock file")
 
 // marker is the record a session leaves next to its cache. The id must match
 // the directory name: a directory whose marker describes another session is
@@ -39,6 +48,9 @@ type marker struct {
 	ID        string    `json:"id"`
 	PID       int       `json:"pid"`
 	StartedAt time.Time `json:"started_at"`
+	// State is empty while the session runs and markerRemoving once it has
+	// started to clean up.
+	State string `json:"state,omitempty"`
 }
 
 // Session is one run's cache root: a private directory holding this run's
@@ -52,8 +64,9 @@ type Session struct {
 	// ID is the random id in the directory name and the marker.
 	ID string
 
-	lock  *fileLock
-	close bool
+	lock   *fileLock
+	record marker
+	close  bool
 }
 
 // OpenSession creates a new session directory under root and takes its lock.
@@ -93,7 +106,7 @@ func OpenSession(root string) (*Session, error) {
 		cleanup()
 		return nil, err
 	}
-	return &Session{Dir: dir, ID: id, lock: lock}, nil
+	return &Session{Dir: dir, ID: id, lock: lock, record: record}, nil
 }
 
 // SegmentsDir is where this session's rolling HLS segments belong.
@@ -102,21 +115,84 @@ func (s *Session) SegmentsDir() string { return filepath.Join(s.Dir, SegmentsNam
 // RecordingsDir is where this session's published recordings belong.
 func (s *Session) RecordingsDir() string { return filepath.Join(s.Dir, RecordingsName) }
 
-// Close releases the lock and removes the session's directory. A failure to
-// remove it leaves the directory in place, marked, for a later sweep: the next
-// run only collects a directory once no process holds its lock.
+// Close removes everything the session owns. The order matters: the marker is
+// rewritten first to say the session is going away, then the media is removed,
+// and only a directory that is already empty loses its marker and its lock. A
+// failure part way through therefore leaves a directory the next sweep can
+// still identify and finish, rather than an unnamed orphan.
 func (s *Session) Close() error {
 	if s == nil || s.close {
 		return nil
 	}
 	s.close = true
-	if s.lock != nil {
-		if err := s.lock.release(); err != nil {
-			return fmt.Errorf("%w: release session lock: %v", ErrNoSpace, err)
+	markerPath := filepath.Join(s.Dir, MarkerName)
+	going := s.record
+	going.State = markerRemoving
+	markErr := writeMarker(markerPath, going)
+	if err := s.clearContent(); err != nil {
+		_ = s.releaseLock() // the lock file stays: it is part of the identity
+		return err
+	}
+	if markErr == nil {
+		if err := os.Remove(markerPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			_ = s.releaseLock()
+			return fmt.Errorf("%w: remove session marker: %v", ErrNoSpace, err)
 		}
 	}
-	if err := os.RemoveAll(s.Dir); err != nil {
+	if err := s.releaseLock(); err != nil {
+		return err
+	}
+	if err := os.Remove(filepath.Join(s.Dir, lockName)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%w: remove session lock: %v", ErrNoSpace, err)
+	}
+	if err := os.Remove(s.Dir); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("%w: remove session directory: %v", ErrNoSpace, err)
+	}
+	return nil
+}
+
+// clearContent empties the segment and recording directories, then removes the
+// directories themselves once they are empty. A failure leaves whatever could
+// not be removed, and the marker, for the next sweep to retry.
+func (s *Session) clearContent() error {
+	for _, dir := range []string{s.SegmentsDir(), s.RecordingsDir()} {
+		if err := clearDirContents(dir); err != nil {
+			return fmt.Errorf("%w: remove session content in %s: %v", ErrNoSpace, filepath.Base(dir), err)
+		}
+		if err := os.Remove(dir); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("%w: remove session directory %s: %v", ErrNoSpace, filepath.Base(dir), err)
+		}
+	}
+	return nil
+}
+
+func (s *Session) releaseLock() error {
+	if s.lock == nil {
+		return nil
+	}
+	err := s.lock.release()
+	s.lock = nil
+	if err != nil {
+		return fmt.Errorf("%w: release session lock: %v", ErrNoSpace, err)
+	}
+	return nil
+}
+
+// clearDirContents removes everything inside dir and leaves dir itself. A
+// missing dir is already clear.
+func clearDirContents(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		path := filepath.Join(dir, entry.Name())
+		if err := os.RemoveAll(path); err != nil {
+			return fmt.Errorf("%s: %v", entry.Name(), err)
+		}
 	}
 	return nil
 }
@@ -177,23 +253,47 @@ func SweepSessions(root string) (SweepResult, error) {
 // sweepOne inspects one candidate directory. live means a process still holds
 // the lock; a non-empty reason means the directory was kept on purpose.
 func sweepOne(dir string) (reason string, live bool, err error) {
-	record, err := readMarker(filepath.Join(dir, MarkerName))
+	markerPath := filepath.Join(dir, MarkerName)
+	record, err := readMarker(markerPath)
 	if err != nil {
 		return err.Error(), false, nil
 	}
 	if sessionPrefix+record.ID != filepath.Base(dir) {
 		return "the marker names another directory", false, nil
 	}
-	lock, err := lockFile(filepath.Join(dir, lockName))
-	if err != nil {
-		if errors.Is(err, errLocked) {
-			return "", true, nil
-		}
+	lockPath := filepath.Join(dir, lockName)
+	lock, err := openExistingLock(lockPath)
+	switch {
+	case errors.Is(err, errNoLock):
+		return "the session has no lock file, so it cannot be confirmed dead", false, nil
+	case errors.Is(err, errLocked):
+		return "", true, nil
+	case err != nil:
 		return "the lock cannot be taken: " + err.Error(), false, nil
 	}
-	// Nothing holds the lock, so the session that owned this directory is gone.
+	// The lock is free and this process holds it, so nobody else can start the
+	// same cleanup while it runs. Content goes before the marker: a removal
+	// that fails half way keeps the directory's identity for the next boot.
+	for _, sub := range []string{SegmentsName, RecordingsName} {
+		subDir := filepath.Join(dir, sub)
+		if err := clearDirContents(subDir); err != nil {
+			lock.release()
+			return "the " + sub + " cannot be removed: " + err.Error(), false, nil
+		}
+		if err := os.Remove(subDir); err != nil && !errors.Is(err, os.ErrNotExist) {
+			lock.release()
+			return "the " + sub + " directory cannot be removed: " + err.Error(), false, nil
+		}
+	}
+	if err := os.Remove(markerPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		lock.release()
+		return "the marker cannot be removed: " + err.Error(), false, nil
+	}
 	if err := lock.release(); err != nil {
 		return "the stale lock cannot be released: " + err.Error(), false, nil
+	}
+	if err := os.Remove(lockPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "the lock file cannot be removed: " + err.Error(), false, nil
 	}
 	if err := os.RemoveAll(dir); err != nil {
 		return "the directory cannot be removed: " + err.Error(), false, nil

@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -152,5 +154,96 @@ func TestSweepWithoutARootIsNotAnError(t *testing.T) {
 	}
 	if len(result.Removed)+len(result.Live)+len(result.Kept) != 0 {
 		t.Fatalf("a missing root reported %+v", result)
+	}
+}
+
+// A sweep must not create the lock it is about to look for: doing so would turn
+// a directory whose state cannot be read into a session it just declared dead.
+func TestSweepKeepsADirectoryWithoutALockFile(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "cache")
+	session, err := OpenSession(root)
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	defer func() { session.close = true }()
+	left := filepath.Join(session.SegmentsDir(), "left.ts")
+	if err := os.WriteFile(left, []byte("a segment"), 0o600); err != nil {
+		t.Fatalf("write a segment: %v", err)
+	}
+	// A lock file that went missing: the directory still claims to be a session
+	// but nothing proves whether that session is over.
+	if err := session.lock.release(); err != nil {
+		t.Fatalf("release the lock: %v", err)
+	}
+	session.lock = nil
+	lockPath := filepath.Join(session.Dir, lockName)
+	if err := os.Remove(lockPath); err != nil {
+		t.Fatalf("remove the lock file: %v", err)
+	}
+
+	result, err := SweepSessions(root)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if len(result.Removed) != 0 || len(result.Live) != 0 {
+		t.Fatalf("the sweep acted on an unconfirmed directory: %+v", result)
+	}
+	if len(result.Kept) != 1 || !strings.Contains(result.Kept[0].Reason, "no lock file") {
+		t.Fatalf("kept = %+v, want the missing-lock reason", result.Kept)
+	}
+	if _, err := os.Stat(left); err != nil {
+		t.Fatalf("the kept directory lost its contents: %v", err)
+	}
+	if _, err := os.Stat(lockPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the sweep created a lock file: %v", err)
+	}
+}
+
+// A close that cannot remove a file must leave the marker and the lock behind,
+// so the next boot can identify the directory and finish the job.
+func TestCloseLeavesTheSessionIdentifiableWhenContentIsHeld(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("only Windows refuses to delete an open file")
+	}
+	root := filepath.Join(t.TempDir(), "cache")
+	session, err := OpenSession(root)
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	held := filepath.Join(session.SegmentsDir(), "held.ts")
+	if err := os.WriteFile(held, []byte("still open"), 0o600); err != nil {
+		t.Fatalf("write a segment: %v", err)
+	}
+	handle, err := os.Open(held)
+	if err != nil {
+		t.Fatalf("hold the segment open: %v", err)
+	}
+	if err := session.Close(); err == nil {
+		handle.Close()
+		t.Fatalf("close succeeded while a file was held open")
+	}
+	record, err := readMarker(filepath.Join(session.Dir, MarkerName))
+	if err != nil {
+		t.Fatalf("the failed close removed the marker: %v", err)
+	}
+	if record.State != markerRemoving {
+		t.Fatalf("marker state = %q, want %q", record.State, markerRemoving)
+	}
+	if _, err := os.Stat(filepath.Join(session.Dir, lockName)); err != nil {
+		t.Fatalf("the failed close removed the lock file: %v", err)
+	}
+
+	if err := handle.Close(); err != nil {
+		t.Fatalf("release the segment: %v", err)
+	}
+	result, err := SweepSessions(root)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if len(result.Removed) != 1 {
+		t.Fatalf("the retry removed %+v, want the finished session", result)
+	}
+	if _, err := os.Stat(session.Dir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the directory survived the retry: %v", err)
 	}
 }

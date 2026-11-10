@@ -187,11 +187,12 @@ func commonBody(window *mygo.Window, a *appState, dir string) {
 	step(window, a, dir, scenario, "1-shared-window.png", "two sources of the same event on one clock", nil)
 
 	// The pictures carry the proof the numbers cannot: both fixtures show the
-	// same burned-in timecode from the source material, so pausing both at the
-	// same event time and putting each on the stage must read the same timecode
-	// off two players whose media positions differ by the fixture's shift.
+	// same burned-in timecode from the source material. Both players are asked
+	// for the same position, because a player's seek and Position() follow the
+	// content clock, not the container timestamps the buffer records -- asking
+	// the second one for 6s+shift would repeat the mistake this stage is about.
 	const proofEvent = 6 * time.Second
-	step(window, a, dir, scenario, "", "pause both players on the same event time", func(a *appState) {
+	step(window, a, dir, scenario, "", "pause both players on the same content position", func(a *appState) {
 		// The group only covers sources that joined the scene, and the second
 		// one is deliberately background here, so pause the players themselves.
 		for index, it := range a.items {
@@ -199,40 +200,41 @@ func commonBody(window *mygo.Window, a *appState, dir string) {
 				continue
 			}
 			it.player.Pause()
-			target := proofEvent
-			if index == 1 {
-				target += commonShift
-			}
-			it.player.Seek(target)
-			logf(scenario, "source %d paused and put at media %s", index+1, sceneClock(target))
+			it.player.Seek(proofEvent)
+			logf(scenario, "source %d paused and asked for %s", index+1, sceneClock(proofEvent))
 		}
 	})
 	time.Sleep(2 * time.Second)
 	var firstPos, secondPos time.Duration
-	step(window, a, dir, scenario, "1a-source-1.png", "the first source at the shared event time", func(a *appState) {
+	step(window, a, dir, scenario, "1a-source-1.png", "the first source at the shared content position", func(a *appState) {
 		if err := a.showVideo(0); err != nil {
 			logf(scenario, "show source 1: %v", err)
 		}
 	})
 	firstPos = positionOf(a, 0)
-	step(window, a, dir, scenario, "1b-source-2.png", "the second source at the same event time", func(a *appState) {
+	step(window, a, dir, scenario, "1b-source-2.png", "the second source at the same content position", func(a *appState) {
 		if err := a.showVideo(1); err != nil {
 			logf(scenario, "show source 2: %v", err)
 		}
 	})
 	secondPos = positionOf(a, 1)
-	logf(scenario, "the pictures were taken at media %s and %s, %s apart",
+	logf(scenario, "the pictures were taken at player positions %s and %s, %s apart",
 		sceneClock(firstPos), sceneClock(secondPos), sceneClock(secondPos-firstPos))
-	// Both captures carry the burnt-in timecode of the source material. Reading
-	// them is the external check the numbers cannot make on their own, and it
-	// says the player and the buffer do not share a clock: the player was asked
-	// for container media 6s and 10s (the second file's frames really are four
-	// seconds later), and the pictures read 6.000 and 10.000. A player seek
-	// therefore follows the content clock (presentation time minus the file's
-	// first timestamp), while the buffer's anchor is measured in the container's
-	// timestamps. d-3.1 has to settle which clock an anchor may claim.
-	logf(scenario, "the pictures were taken at media %s and %s, %s apart; the burnt-in timecodes are read in the evidence file",
-		sceneClock(firstPos), sceneClock(secondPos), sceneClock(secondPos-firstPos))
+	// Reading the two captures is the check the numbers cannot make on their
+	// own: the same content position has to read the same burned-in timecode in
+	// both pictures even though the second file's container timestamps are four
+	// seconds later. The tolerance is one frame at 30 fps, not the 1.4667s the
+	// container delays this fixture by.
+	check(absDuration(secondPos-firstPos) <= 40*time.Millisecond,
+		"the two players sit %s apart at the same content position, more than one frame apart",
+		sceneClock(secondPos-firstPos))
+	for index := range a.items {
+		if index >= len(anchors) {
+			break
+		}
+		logf(scenario, "source %d: the buffer's measured container media at its start is %s (epoch %d, %s), while the player was asked for %s",
+			index+1, sceneClock(anchors[index].MediaStart), anchors[index].Epoch, anchors[index].BufferInstance, sceneClock(proofEvent))
+	}
 
 	// The first negative: the same buffers, but the second source has no
 	// confirmed offset at all. A window would be a guess, so the answer has to

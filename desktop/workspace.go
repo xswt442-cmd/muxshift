@@ -39,25 +39,6 @@ func (w workspace) title() string {
 	}
 }
 
-// workspaceRow draws the rail. The page names are the only buttons, and every
-// one of them opens a page that reads the running session.
-func (a *appState) workspaceRow(c *ui.Context) {
-	ui.Row(c).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
-		for w := workspace(0); w < workspaceCount; w++ {
-			page := w
-			button := ui.Button(c.Key(fmt.Sprintf("workspace-%d", int(page))), page.title()).
-				Width(112).
-				Height(30)
-			if page == a.workspace {
-				button = button.Background(colorAccentSoft).Border(1, colorAccent)
-			}
-			if button.Clicked() {
-				a.workspace = page
-			}
-		}
-	})
-}
-
 // sourcesPage lists every source with the state of the player behind it and the
 // commands that act on that one source.
 func (a *appState) sourcesPage(c *ui.Context) {

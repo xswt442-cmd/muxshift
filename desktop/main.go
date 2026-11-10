@@ -347,54 +347,31 @@ func clock(d time.Duration) string {
 func (a *appState) view(c *ui.Context) {
 	defer a.signalFrame()
 	c.SetTheme(muxshiftTheme())
-	ui.Column(c).Fill().Background(colorBg).Padding(spaceLg).Gap(spaceMd).Children(func() {
-		a.headerRow(c)
-		a.workspaceRow(c)
-		switch a.workspace {
-		case workspaceSources:
-			a.sourcesPage(c)
-		case workspaceDiagnostics:
-			a.diagnosticsPage(c)
-		default:
-			a.stage(c)
-			a.transportRow(c)
-			// P13.3: the web view sits below the native stage, in the same
-			// window, and reads the same session. It is absent unless a
-			// scenario asked for it, so an ordinary run draws the native
-			// interface alone.
-			if a.webView != nil {
-				ui.Box(c).Height(6)
-				ui.Column(c).Height(300).Children(func() {
-					// A web view takes its size from layout: the column gives it
-					// the room and the element stretches across it.
-					ui.WebView(c, a.webView).Grow(1)
-				})
-			}
-			for i, it := range a.items {
-				a.sourceCard(c, i, it)
-			}
+	// P15.1: the workbench. The top bar and the status bar always exist; the
+	// rail, the inspector and the dock fold away by window size, and each can
+	// be switched by hand. The panes sit beside the stage, never on top of it,
+	// so the picture is never covered.
+	width, height := c.Size()
+	ui.Column(c).Fill().Background(colorBg).Children(func() {
+		a.topBar(c, width, height)
+		ui.Row(c).WidthPercent(100).Grow(1).Gap(spaceMd).Padding(spaceMd).AlignItems(ui.Stretch).Children(func() {
+			a.railPane(c, width, height)
+			ui.Column(c).Grow(1).Gap(spaceMd).AlignItems(ui.Start).Children(func() {
+				switch a.workspace {
+				case workspaceSources:
+					a.sourcesPage(c)
+				case workspaceDiagnostics:
+					a.diagnosticsPage(c)
+				default:
+					a.center(c, width, height)
+				}
+			})
+			a.inspectorPane(c, width, height)
+		})
+		if a.dock.shown(height >= dockAutoHeight) {
+			a.dockPane(c)
 		}
-		ui.Text(c, a.status()).FontSize(textSmall).TextColor(colorTextDim).FontFeatures("tnum")
-		if a.syncNote != "" {
-			ui.Text(c, a.syncNote).FontSize(textSmall).TextColor(colorTextDim)
-		}
-	})
-}
-
-// headerRow is the title and the two chips that say which scene is live and
-// how the session is doing. It is the same top bar the web page has.
-func (a *appState) headerRow(c *ui.Context) {
-	ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "MuxShift").FontSize(textTitle).TextColor(colorText)
-		pill(c, a.sceneLabel(), colorAccent, true)
-		label := fmt.Sprintf("%d source", len(a.items))
-		if len(a.items) != 1 {
-			label += "s"
-		}
-		pill(c, label, colorTextDim, false)
-		if a.lastErr != nil {
-			pill(c, "error: "+a.lastErr.Error(), colorBad, true)
-		}
+		a.statusBar(c)
 	})
 }
 

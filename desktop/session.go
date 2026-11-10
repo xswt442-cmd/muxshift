@@ -90,6 +90,18 @@ type appState struct {
 	// window opened without a scenario looks exactly as it did before the rail.
 	workspace workspace
 
+	// rail, inspector and dock say whether each pane follows the window-size
+	// rule or a person's explicit choice; see workbench.go. The zero value is
+	// paneAuto, so an untouched window behaves as the size rule says.
+	rail      paneMode
+	inspector paneMode
+	dock      paneMode
+
+	// frameWidth and frameHeight are the size the last frame laid out at, so
+	// a scenario log can name the size it actually drew instead of the size
+	// it asked the window for.
+	frameWidth, frameHeight float32
+
 	// sync is the shared event clock and the per-track offsets the panel
 	// edits; see sync.go.
 

@@ -66,7 +66,7 @@ python tools\separate\separate.py --model testplace\models\Kim_Vocal_2.onnx \
   --input testplace\media\p11\sample-mixed.wav --out-dir testplace\p11-stems
 ```
 
-模型权重不随仓库发布，也没有确认可再分发的许可，因此脚本只接受显式传入的 `--model` 路径。在这台 RTX 4060 Laptop 上，44.1 kHz 立体声、5.92 秒一块：DirectML 稳态每块约 0.26 秒（约 7.8 倍实时，显存约 6.2 GiB），纯 CPU 每块约 5.75 秒（比实时更慢），算法延迟固定为一块 5.92 秒。合成样例上人声轨与解说源相关 0.99、非人声轨与环境声源相关 0.83；真实球场解说尚未验证。细节见 [tools/separate/README.md](tools/separate/README.md)。
+模型权重不随仓库发布，也没有确认可再分发的许可，因此脚本只接受显式传入的 `--model` 路径。在这台 RTX 4060 Laptop 上，44.1 kHz 立体声、5.92 秒一块：DirectML 稳态每块约 0.26 秒（约 7.8 倍实时，显存约 6.2 GiB），纯 CPU 每块约 5.75 秒（比实时更慢）。5.92 秒是**一次模型输入块的长度**，不是实测的端到端延迟：实际等到输出还要算上分块重叠、调度、编码、缓冲与播放器启动，这些没有测量。合成样例上人声轨与解说源相关 0.99、非人声轨与环境声源相关 0.83；真实录音（LibriVox 公版朗读 + Wikimedia 公版掌声，20 秒混音）上人声轨与朗读源相关 0.93、非人声轨与掌声源相关 0.94。真实球场转播里的解说还没有验证，两条 WAV 也还只是同一段录音的派生结果，不是两路独立直播源。细节见 [tools/separate/README.md](tools/separate/README.md)。
 
 ## 许可证
 

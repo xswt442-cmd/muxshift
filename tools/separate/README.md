@@ -35,9 +35,17 @@ The last line of standard output is one JSON object:
  "vocal":"...\\vocal.wav","non_vocal":"...\\non_vocal.wav"}
 ```
 
-`latency_s` is the algorithmic delay: the model sees 5.92 s of audio per call, so
-no output for time T exists before the input reaches T + 5.92 s. `--overlap`
-(default 0.25) trades overlap for step size; it does not shorten that delay.
+`latency_s` is the chunk window, not a measured end-to-end delay: the model sees
+5.92 s of audio per call. What a listener would actually wait for also includes
+overlap-add scheduling, encoding, buffering and player startup, and none of that
+is measured here. `--overlap` (default 0.25) trades overlap for step size; it
+does not change the window length.
+
+The two stems are derived from one recording, not two independent live sources.
+Feeding them back as separate sources is a way to hear the result today; a real
+integration has to keep the source, the sample rate, the original timeline and
+the processing delay together, and any cross-source offset has to come from the
+content timestamps rather than from a constant.
 
 `compare.py` prints levels and correlations for the two stems, and optionally
 against the recordings that were mixed together:
@@ -58,10 +66,32 @@ RTX 4060 Laptop (8 GiB), driver 621.01, Python 3.12.4, onnxruntime-directml
 
 | input | provider | chunks | first chunk | steady chunk | inference | realtime |
 | --- | --- | --- | --- | --- | --- | --- |
-| 12 s | DirectML | 4 | 0.53 s | 0.24 s | 1.74 s | 6.9x |
-| 60 s | DirectML | 15 | 0.51 s | 0.26 s | 7.72 s | 7.8x |
-| 30 s | CPU | 8 | 5.33 s | 5.75 s | 50.2 s | 0.6x |
+| 12 s synthetic | DirectML | 4 | 0.53 s | 0.24 s | 1.74 s | 6.9x |
+| 60 s synthetic | DirectML | 15 | 0.51 s | 0.26 s | 7.72 s | 7.8x |
+| 30 s synthetic | CPU | 8 | 5.33 s | 5.75 s | 50.2 s | 0.6x |
+| 20 s real | DirectML | 6 | 0.80 s | 0.26 s | 3.49 s | 5.7x |
 
 CPU inference is slower than real time, so a live pipeline needs a GPU; DirectML
 held 6.2 GiB of the 8 GiB card while running. See
 `testplace/evidence/P11/evidence.md` for the full record.
+
+## Real-recording check
+
+The synthetic sample only proves the plumbing. A second check mixes two real,
+public-domain recordings: a LibriVox reading
+(`escape_benson_bn_64kb.mp3` from the LibriVox Nonfiction Collection Vol. 001,
+public domain per the item's Creative Commons public-domain dedication) and
+applause recorded by a Wikimedia Commons contributor
+(`Slow_starting_applause.ogg`, public domain). Both are kept in the ignored
+`testplace/media/p11-real/`, mixed at 0.8 applause level for 20 s, and
+separated with the same command as above.
+
+| check | synthetic | real |
+| --- | --- | --- |
+| vocal vs its source | +0.992 | +0.929 |
+| non-vocal vs its source | +0.834 | +0.939 |
+| vocal + non-vocal - mix (rms) | 3e-5 | 2e-5 |
+
+That is still not commentary inside a stadium broadcast: the reading is quiet
+studio speech and the applause is a clean field recording, so crowd noise
+masking a shouting commentator is not covered.

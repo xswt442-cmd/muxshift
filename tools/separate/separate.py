@@ -192,6 +192,7 @@ def main():
     finished = time.perf_counter()
 
     non_vocal = mix - vocal
+    os.makedirs(args.out_dir, exist_ok=True)
     vocal_path = f"{args.out_dir}\\vocal.wav"
     non_vocal_path = f"{args.out_dir}\\non_vocal.wav"
     write_wav(vocal_path, args.rate, vocal)

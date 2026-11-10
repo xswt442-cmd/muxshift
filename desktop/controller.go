@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/xswt442-cmd/muxshift/core"
@@ -36,6 +37,9 @@ const (
 	commandPlay    commandKind = "play-all"
 	commandReload  commandKind = "reload"
 	commandDVRInfo commandKind = "dvr-info"
+	commandAdd     commandKind = "add-source"
+	commandRemove  commandKind = "remove-source"
+	commandRetry   commandKind = "retry"
 )
 
 // UnknownSourceError names a source that is not in the session any more, which
@@ -49,6 +53,8 @@ type command struct {
 	Source core.SourceID
 	Volume float64
 	Delta  time.Duration
+	// URI is the address an add command reads; the other commands leave it empty.
+	URI string
 }
 
 // commandResult is kept after the command returns, so the window can show the
@@ -149,6 +155,50 @@ func (a *appState) runCommand(cmd command) commandResult {
 			result.Message = note
 		}
 		return finish(err, result.Message)
+
+	case commandAdd:
+		uri := strings.TrimSpace(cmd.URI)
+		if uri == "" {
+			return finish(errors.New("nothing to import: type an address or a file path first"), "")
+		}
+		if a.importing != "" {
+			return finish(fmt.Errorf("%s is still being read", shortURI(a.importing)), "")
+		}
+		a.importing = uri
+		a.importText = ""
+		go a.importSource(uri)
+		return finish(nil, fmt.Sprintf("reading %s in the background; the result is logged when it lands", shortURI(uri)))
+
+	case commandRemove:
+		it, index, err := a.itemBySource(cmd.Source)
+		if err != nil {
+			return finish(err, "")
+		}
+		result.Generation = it.generation
+		name := a.name(it)
+		if err := a.remove(index); err != nil {
+			return finish(err, "")
+		}
+		if a.selected == cmd.Source {
+			a.selected = ""
+		}
+		return finish(nil, fmt.Sprintf("removed %s; %d source(s) left", name, len(a.items)))
+
+	case commandRetry:
+		it, _, err := a.itemBySource(cmd.Source)
+		if err != nil {
+			return finish(err, "")
+		}
+		result.Generation = it.generation
+		if it.openErr == nil && it.player != nil {
+			return finish(fmt.Errorf("%s has not failed, there is nothing to retry", a.name(it)), "")
+		}
+		it.openErr = nil
+		a.reopenPlayer(it)
+		if it.openErr != nil {
+			return finish(it.openErr, "the retry opened no player")
+		}
+		return finish(nil, "opened a new player for "+a.name(it))
 
 	default:
 		return finish(fmt.Errorf("unknown command %q", cmd.Kind), "")

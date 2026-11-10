@@ -259,9 +259,6 @@ func needsWake(uri string) bool {
 // for; once the player is replaced or closed the task stops, so it never
 // touches a released player.
 func wakeNetworkPlayer(uri string, player *ui.VideoPlayer, live func() bool) {
-	if !needsWake(uri) {
-		return
-	}
 	go func() {
 		if wakeMode == "none" {
 			return
@@ -321,7 +318,7 @@ func status(it *item) string {
 	case it.openErr != nil:
 		return "error: " + it.openErr.Error()
 	case it.player == nil:
-		return "closed"
+		return "not shown yet"
 	case it.player.Err() != nil:
 		return "error: " + it.player.Err().Error()
 	case !it.player.Ready():
@@ -443,10 +440,21 @@ func (a *appState) transportRow(c *ui.Context) {
 // sourceCard is one source: its name, what the scene does with it, and the
 // controls that change that. The web page lists the same fields in the same
 // order, which is what keeps the two clients recognisable as one product.
+// sourceCard is one source in the Sources list. The row is the selection: a
+// click makes the inspector follow this source. A card carries only the quick
+// actions; the rest live in the inspector, so a source row does not turn into a
+// wall of buttons.
 func (a *appState) sourceCard(c *ui.Context, i int, it *item) {
 	item := it
-	ui.Row(c).Gap(spaceMd).Padding(spaceMd).Radius(radiusMd).Border(1, colorLine).
-		Background(colorPanel).AlignItems(ui.Center).Children(func() {
+	selected := a.selected == item.source.ID
+	row := ui.Row(c).Gap(spaceSm).Padding(spaceMd).Radius(radiusMd).Wrap().
+		AlignItems(ui.Center).Background(colorPanel)
+	if selected {
+		row.Border(2, colorAccent).Background(colorPanel2)
+	} else {
+		row.Border(1, colorLine)
+	}
+	row.OnClick(func() { a.selected = item.source.ID }).Children(func() {
 		ui.Column(c).Gap(spaceXs).Grow(1).Children(func() {
 			ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, itoa(i+1)).FontSize(textMicro).TextColor(colorTextDim).FontFeatures("tnum")
@@ -466,42 +474,40 @@ func (a *appState) sourceCard(c *ui.Context, i int, it *item) {
 		})
 		if item.video != "" {
 			if ui.Button(c.Key("show-"+itoa(i)), "Show").Width(72).Clicked() {
-				a.report(a.runCommand(command{Kind: commandShow, Source: item.source.ID}))
+				a.selectVideo(item)
 			}
 		}
 		if item.audio != "" {
 			if ui.Button(c.Key("hear-"+itoa(i)), "Hear").Width(72).Clicked() {
-				a.report(a.runCommand(command{Kind: commandHear, Source: item.source.ID}))
-			}
-			if ui.Button(c.Key("allow-"+itoa(i)), allowLabel(a, item)).Width(96).Clicked() {
-				a.report(a.runCommand(command{Kind: commandAllow, Source: item.source.ID}))
-			}
-			if ui.Button(c.Key("vol-down-"+itoa(i)), "Vol -").Width(64).Clicked() {
-				a.report(a.runCommand(command{Kind: commandVolume, Source: item.source.ID, Volume: max(0, item.volume-0.25)}))
-			}
-			if ui.Button(c.Key("vol-up-"+itoa(i)), "Vol +").Width(64).Clicked() {
-				a.report(a.runCommand(command{Kind: commandVolume, Source: item.source.ID, Volume: min(1, item.volume+0.25)}))
+				a.selectAudio(item)
 			}
 		}
-		if item.video != "" || item.audio != "" {
-			// A tenth of a second is the step a person can still see on a
-			// timecode; the report after each press says where the player
-			// actually landed.
-			if ui.Button(c.Key("back-"+itoa(i)), "-0.1s").Width(64).Clicked() {
-				a.report(a.runCommand(command{Kind: commandNudge, Source: item.source.ID, Delta: -100 * time.Millisecond}))
+		if item.openErr != nil {
+			if ui.Button(c.Key("retry-"+itoa(i)), "Retry").Width(72).Clicked() {
+				a.report(a.runCommand(command{Kind: commandRetry, Source: item.source.ID}))
 			}
-			if ui.Button(c.Key("fwd-"+itoa(i)), "+0.1s").Width(64).Clicked() {
-				a.report(a.runCommand(command{Kind: commandNudge, Source: item.source.ID, Delta: 100 * time.Millisecond}))
-			}
-			if i > 0 {
-				// The probe reads both files and offers an offset; it does
-				// not move either player or the timeline.
-				if ui.Button(c.Key("probe-"+itoa(i)), "Try align").Width(88).Clicked() {
-					a.probeAsync(0, i)
-				}
-			}
+		}
+		// Peek would need a second player for the same source: one video element
+		// cannot draw a player twice. The button stays visible so the feature is
+		// findable, and says why it is not available instead of pretending.
+		ui.Button(c.Key("peek-"+itoa(i)), "Peek").Width(64).Disabled(true).
+			Tooltip("Peek needs a second player for the same source; not implemented yet")
+		if ui.Button(c.Key("remove-"+itoa(i)), "Remove").Width(80).Clicked() {
+			a.report(a.runCommand(command{Kind: commandRemove, Source: item.source.ID}))
 		}
 	})
+}
+
+// selectVideo shows a source's picture and makes the inspector follow it.
+func (a *appState) selectVideo(it *item) {
+	a.selected = it.source.ID
+	a.report(a.runCommand(command{Kind: commandShow, Source: it.source.ID}))
+}
+
+// selectAudio plays a source's sound and makes the inspector follow it.
+func (a *appState) selectAudio(it *item) {
+	a.selected = it.source.ID
+	a.report(a.runCommand(command{Kind: commandHear, Source: it.source.ID}))
 }
 
 // pill draws a short label, the desktop equivalent of the web page's .chip and

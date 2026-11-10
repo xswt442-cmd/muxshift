@@ -50,6 +50,7 @@ var scenarios = map[string]scenario{
 	"workbench":     runWorkbench,
 	"matrix":        runMatrix,
 	"lifecycle":     runLifecycle,
+	"sources":       runSources,
 }
 
 // runReplayProbe narrows down why a replay player added mid-run does not start:
@@ -188,6 +189,9 @@ func step(window *mygo.Window, a *appState, dir, scenario, path, what string, fn
 		if fn != nil {
 			fn(a)
 		}
+		// A page change or a selection does not paint by itself; the window
+		// only redraws when it is told the content moved.
+		window.Invalidate()
 	})
 	if path != "" {
 		// A capture taken in the same pass as the change shows the previous

@@ -43,14 +43,65 @@ func (w workspace) title() string {
 // commands that act on that one source.
 func (a *appState) sourcesPage(c *ui.Context) {
 	ui.Column(c).Fill().Grow(1).Gap(spaceSm).Children(func() {
-		ui.Text(c, "every source in the session").FontSize(textSmall).TextColor(colorTextDim)
-		for i, it := range a.items {
-			a.sourceCard(c, i, it)
-		}
-		if len(a.items) == 0 {
-			ui.Text(c, "no sources yet").FontSize(textBody).TextColor(colorTextDim)
+		a.importRow(c)
+		ui.Text(c, fmt.Sprintf("%d source(s); click a row to inspect it", len(a.items))).
+			FontSize(textSmall).TextColor(colorTextDim)
+		ui.Scroll(c).Grow(1).WidthPercent(100).Children(func() {
+			ui.Column(c).WidthPercent(100).Gap(spaceSm).Children(func() {
+				for i, it := range a.items {
+					a.sourceCard(c, i, it)
+				}
+				if len(a.items) == 0 {
+					ui.Text(c, "no sources yet: type an address above and press Add").
+						FontSize(textBody).TextColor(colorTextDim).Padding(spaceMd, 0)
+				}
+			})
+		})
+	})
+}
+
+// importRow is the address field and the Add button. Both are real: Add sends
+// an add-source command, the read runs off the drawing thread, and the outcome
+// lands in the status line and the log. A failed read keeps the address here
+// with a Retry, because the source it never added has no card to retry from.
+func (a *appState) importRow(c *ui.Context) {
+	ui.Column(c).WidthPercent(100).Gap(spaceXs).Children(func() {
+		ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).WidthPercent(100).Children(func() {
+			ui.TextInput(c, &a.importText).Grow(1).Height(34).
+				Placeholder("https://… .m3u8  or  C:\\path\\file.mp4")
+			label := "Add"
+			if a.importing != "" {
+				label = "Reading…"
+			}
+			add := ui.Button(c.Key("import-add"), label).Width(96).Height(34)
+			if a.importing != "" {
+				add.Disabled(true)
+			}
+			if add.Clicked() {
+				a.report(a.runCommand(command{Kind: commandAdd, URI: a.importText}))
+			}
+		})
+		failed := a.lastCommand.Command.Kind == commandAdd && a.lastCommand.Err != nil
+		if failed {
+			ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).WidthPercent(100).Children(func() {
+				ui.Text(c, fmt.Sprintf("last import failed: %v", a.lastCommand.Err)).
+					FontSize(textMicro).TextColor(colorBad).Grow(1)
+				if ui.Button(c.Key("import-retry"), "Retry").Width(76).Height(26).Clicked() {
+					a.report(a.runCommand(command{Kind: commandAdd, URI: a.lastCommand.Command.URI}))
+				}
+			})
 		}
 	})
+}
+
+// selectedSource is the source the inspector follows, or nil.
+func (a *appState) selectedSource() (*item, int, bool) {
+	for i, it := range a.items {
+		if it.source.ID == a.selected {
+			return it, i, true
+		}
+	}
+	return nil, 0, false
 }
 
 // diagnosticsPage shows what the session and the players actually report. It is

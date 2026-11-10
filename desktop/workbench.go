@@ -218,10 +218,90 @@ func (a *appState) inspectorPane(c *ui.Context, width, height float32) {
 		ui.Text(c, "inspector").FontSize(textMicro).TextColor(colorDim)
 		ui.Scroll(c).Grow(1).WidthPercent(100).Children(func() {
 			ui.Column(c).WidthPercent(100).Gap(spaceXs).Children(func() {
-				a.inspectorSession(c)
+				if it, index, ok := a.selectedSource(); ok {
+					a.inspectorSource(c, it, index)
+				} else {
+					a.inspectorSession(c)
+				}
 			})
 		})
 	})
+}
+
+// inspectorSource follows the selected source: its Core identity, the player
+// behind it, and the actions too detailed for a row in the Sources list.
+func (a *appState) inspectorSource(c *ui.Context, it *item, index int) {
+	snapshot := a.snapshot()
+	var entry sourceSnapshot
+	for _, source := range snapshot.Sources {
+		if source.ID == it.source.ID {
+			entry = source
+			break
+		}
+	}
+	ui.Row(c).WidthPercent(100).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, fmt.Sprintf("source %d", index+1)).FontSize(textMicro).TextColor(colorAccent)
+		if ui.Button(c.Key("inspector-clear"), "clear").Width(64).Height(22).Clicked() {
+			a.selected = ""
+		}
+	})
+	a.detailRow(c, "address", shortURI(it.uri))
+	a.detailRow(c, "id", string(it.source.ID))
+	a.detailRow(c, "video", string(it.video))
+	a.detailRow(c, "audio", string(it.audio))
+	a.detailRow(c, "generation", itoa(entry.Generation))
+	a.detailRow(c, "player", fmt.Sprintf("%v", entry.Player))
+	a.detailRow(c, "ready", fmt.Sprintf("%v", entry.Ready))
+	a.detailRow(c, "playing", fmt.Sprintf("%v", entry.Playing))
+	a.detailRow(c, "position", formatEvent(entry.Position))
+	a.detailRow(c, "duration", formatEvent(entry.Duration))
+	a.detailRow(c, "volume", fmt.Sprintf("%.2f", entry.Volume))
+	a.detailRow(c, "muted", fmt.Sprintf("%v", entry.Muted))
+	if it.audio != "" {
+		a.detailRow(c, "offset", fmt.Sprintf("%+.1fs", entry.Offset.Seconds()))
+		a.detailRow(c, "aligned", fmt.Sprintf("%v", entry.Aligned))
+	}
+	if entry.OpenErr != "" && entry.OpenErr != "nil" {
+		a.detailRow(c, "error", entry.OpenErr)
+	}
+	ui.Row(c).Wrap().Gap(spaceXs).Padding(spaceSm, 0).Children(func() {
+		if it.video != "" && ui.Button(c.Key("inspector-show"), "Show").Width(72).Height(26).Clicked() {
+			a.report(a.runCommand(command{Kind: commandShow, Source: it.source.ID}))
+		}
+		if it.audio != "" {
+			if ui.Button(c.Key("inspector-hear"), "Hear").Width(72).Height(26).Clicked() {
+				a.report(a.runCommand(command{Kind: commandHear, Source: it.source.ID}))
+			}
+			if ui.Button(c.Key("inspector-allow"), shortAllowLabel(a, it)).Width(84).Height(26).Clicked() {
+				a.report(a.runCommand(command{Kind: commandAllow, Source: it.source.ID}))
+			}
+			if ui.Button(c.Key("inspector-vol-down"), "Vol -").Width(72).Height(26).Clicked() {
+				a.report(a.runCommand(command{Kind: commandVolume, Source: it.source.ID, Volume: max(0, it.volume-0.25)}))
+			}
+			if ui.Button(c.Key("inspector-vol-up"), "Vol +").Width(72).Height(26).Clicked() {
+				a.report(a.runCommand(command{Kind: commandVolume, Source: it.source.ID, Volume: min(1, it.volume+0.25)}))
+			}
+		}
+		if it.video != "" || it.audio != "" {
+			if ui.Button(c.Key("inspector-back"), "-0.1s").Width(64).Height(26).Clicked() {
+				a.report(a.runCommand(command{Kind: commandNudge, Source: it.source.ID, Delta: -100 * time.Millisecond}))
+			}
+			if ui.Button(c.Key("inspector-fwd"), "+0.1s").Width(64).Height(26).Clicked() {
+				a.report(a.runCommand(command{Kind: commandNudge, Source: it.source.ID, Delta: 100 * time.Millisecond}))
+			}
+			if index > 0 && ui.Button(c.Key("inspector-probe"), "Try align").Width(92).Height(26).Clicked() {
+				a.probeAsync(0, index)
+			}
+		}
+		if entry.OpenErr != "" && entry.OpenErr != "nil" && ui.Button(c.Key("inspector-retry"), "Retry").Width(72).Height(26).Clicked() {
+			a.report(a.runCommand(command{Kind: commandRetry, Source: it.source.ID}))
+		}
+		if ui.Button(c.Key("inspector-remove"), "Remove").Width(84).Height(26).Clicked() {
+			a.report(a.runCommand(command{Kind: commandRemove, Source: it.source.ID}))
+		}
+	})
+	ui.Text(c, "no waveform is drawn: this build does not decode audio samples, so volume and mute come from the player itself.").
+		FontSize(textMicro).TextColor(colorDim).Padding(spaceSm, 0)
 }
 
 // inspectorSession is the read-only session summary.
@@ -238,8 +318,19 @@ func (a *appState) inspectorSession(c *ui.Context) {
 	if snapshot.SeekWindow != "" && snapshot.SeekWindow != "unknown" {
 		a.detailRow(c, "seek", snapshot.SeekWindow)
 	}
-	ui.Text(c, "selecting a source and editing it here arrives with P15.2").
+	ui.Text(c, "click a source in the Sources page to follow it here").
 		FontSize(textMicro).TextColor(colorDim).Padding(spaceSm, 0)
+}
+
+// shortAllowLabel names the audio-hold action in the narrow inspector.
+func shortAllowLabel(a *appState, it *item) string {
+	if it.audio == "" {
+		return "No audio"
+	}
+	if a.audible[it.audio] {
+		return "Mute"
+	}
+	return "Allow"
 }
 
 // detailRow is one "name  value" line in the inspector.
@@ -284,7 +375,7 @@ func (a *appState) dockPane(c *ui.Context) {
 		if len(a.items) == 0 {
 			ui.Text(c, "no sources").FontSize(textMicro).TextColor(colorDim)
 		}
-		ui.Text(c, "read-only: seeking and buffer editing arrive with the DVR work; nudge stays on the source cards").
+		ui.Text(c, "read-only: seeking and buffer editing arrive with the DVR work; nudges live in the inspector").
 			FontSize(textMicro).TextColor(colorDim)
 	})
 }

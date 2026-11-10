@@ -90,6 +90,18 @@ type appState struct {
 	// window opened without a scenario looks exactly as it did before the rail.
 	workspace workspace
 
+	// selected is the source the inspector follows. The empty ID means nothing
+	// is selected, and the inspector shows the session summary instead.
+	selected core.SourceID
+
+	// importText is what the Sources page's address field holds. It lives here
+	// so a redraw does not lose what was typed.
+	importText string
+
+	// importing is the address being read right now, or empty. The field is the
+	// first thing checked so a second Add cannot start a second read.
+	importing string
+
 	// rail, inspector and dock say whether each pane follows the window-size
 	// rule or a person's explicit choice; see workbench.go. The zero value is
 	// paneAuto, so an untouched window behaves as the size rule says.
@@ -221,6 +233,14 @@ func (a *appState) addProbed(it *item) error {
 		it.openErr = err
 		return err
 	}
+	return a.attachStream(it, stream)
+}
+
+// attachStream puts the tracks a probed stream declared into the session. It is
+// separate from the probe so an import can read the origin off the drawing
+// thread and only then touch the session, which is not safe to write from two
+// threads.
+func (a *appState) attachStream(it *item, stream hls.Stream) error {
 	source, attachments, err := stream.Attach(a.session)
 	if err != nil {
 		it.openErr = err
@@ -263,6 +283,68 @@ func (a *appState) addLocal(it *item) error {
 	it.video = videoTrack.ID
 	it.audio = audioTrack.ID
 	return nil
+}
+
+// importSource adds a source without freezing the window. Reading an HLS
+// address takes as long as the origin takes, so the probe runs off the drawing
+// thread; everything that writes the session or opens a player happens back on
+// it. The outcome is reported as a command result, so the status line and the
+// log say what happened to the import that was asked for.
+func (a *appState) importSource(uri string) {
+	var (
+		stream   hls.Stream
+		probed   bool
+		probeErr error
+	)
+	if isNetworkAddress(uri) {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		stream, probeErr = hls.Probe(ctx, uri, hls.Options{})
+		probed = probeErr == nil
+		cancel()
+	}
+	mygoRunOnMain(func() {
+		it := &item{uri: uri, volume: 1}
+		var err error
+		switch {
+		case probeErr != nil:
+			err = probeErr
+		case probed:
+			err = a.attachStream(it, stream)
+		default:
+			err = a.addLocal(it)
+		}
+		if err == nil {
+			// The player opens at import, as it does for a source given on the
+			// command line: the stage builds a video for every source with a
+			// player, and a player created later, in the same pass that first
+			// shows it, stayed unready in this build. Opening it here gives it
+			// the frames that come before the user shows it.
+			var player *ui.VideoPlayer
+			player, err = openPlayerOnMain(uri)
+			if err == nil {
+				it.player = player
+				it.generation++
+				wakeNetworkPlayer(it.uri, rawPlayer(player), a.generationIs(it, it.generation))
+				a.items = append(a.items, it)
+				a.selected = it.source.ID
+				a.apply()
+				a.closePendingWhenReady()
+			}
+		}
+		a.importing = ""
+		a.importText = ""
+		result := commandResult{Command: command{Kind: commandAdd, URI: uri}, At: time.Now()}
+		if err != nil {
+			it.openErr = err
+			result.Err = err
+			result.Message = fmt.Sprintf("could not import %s", shortURI(uri))
+			a.lastErr = err
+		} else {
+			result.Message = fmt.Sprintf("imported %s as %s; it is selected, Show puts it on the stage", shortURI(uri), it.source.ID)
+		}
+		a.lastCommand = result
+		a.report(result)
+	})
 }
 
 // apply maps the current scene onto the players: the video tracks in the scene
@@ -316,6 +398,9 @@ func (a *appState) showVideo(index int) error {
 	if it.video == "" {
 		return fmt.Errorf("source %d has no video track", index+1)
 	}
+	if err := a.ensurePlayer(it); err != nil {
+		return err
+	}
 	if _, err := a.session.SetSceneVideo(a.scene, it.video); err != nil {
 		return err
 	}
@@ -324,12 +409,32 @@ func (a *appState) showVideo(index int) error {
 	return nil
 }
 
+// ensurePlayer opens the player of a source that has none yet. Sources added
+// while the window runs stay closed until something needs them: the player of
+// a source that never draws does not become ready, so opening it on import only
+// produces a card that says "opening" forever.
+func (a *appState) ensurePlayer(it *item) error {
+	if it.player != nil {
+		return it.openErr
+	}
+	player, err := openPlayerOnMain(it.uri)
+	if err != nil {
+		it.openErr = err
+		return err
+	}
+	it.openErr = nil
+	it.player = player
+	it.generation++
+	a.closePendingWhenReady()
+	return nil
+}
+
 // wakeShown asks one seek of a network player that only became visible now. A
 // network source that is shown for the first time after it was opened does not
 // deliver its first picture on its own with this build of MyGo, and the seek is
 // the only signal observed to make it start.
 func (a *appState) wakeShown(it *item) {
-	if it == nil || it.player == nil || !needsWake(it.uri) {
+	if it == nil || it.player == nil {
 		return
 	}
 	if it.player.Ready() || it.player.Err() != nil {
@@ -347,6 +452,9 @@ func (a *appState) hearAudio(index int, volume float64) error {
 	}
 	if it.audio == "" {
 		return fmt.Errorf("source %d has no audio track", index+1)
+	}
+	if err := a.ensurePlayer(it); err != nil {
+		return err
 	}
 	scene, err := a.session.Scene(a.scene)
 	if err != nil {

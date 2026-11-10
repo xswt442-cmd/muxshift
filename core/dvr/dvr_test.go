@@ -354,3 +354,67 @@ func TestJoinStartsAtTheAskedSegment(t *testing.T) {
 		t.Fatalf("join after close = %v, want ErrClosed", err)
 	}
 }
+
+func TestBufferIdentityAndEpoch(t *testing.T) {
+	first, server, info := recBuffer(t, "source-3")
+	second, err := New(Options{Dir: t.TempDir(), Source: "source-3"})
+	if err != nil {
+		t.Fatalf("new second buffer: %v", err)
+	}
+	t.Cleanup(func() { _ = second.Close() })
+
+	// Two buffers for one source keep two clocks, so their recordings can never
+	// be mapped with the other's anchor.
+	if first.Instance() == "" || second.Instance() == "" {
+		t.Fatal("a buffer without an instance name cannot be told apart from another")
+	}
+	if first.Instance() == second.Instance() {
+		t.Fatalf("two buffers share the instance %q", first.Instance())
+	}
+	if got := first.Epoch(); got != 1 {
+		t.Fatalf("a buffer that names no epoch starts at %d, want 1", got)
+	}
+	explicit, err := New(Options{Dir: t.TempDir(), Source: "source-3", SourceEpoch: 7})
+	if err != nil {
+		t.Fatalf("new explicit epoch buffer: %v", err)
+	}
+	t.Cleanup(func() { _ = explicit.Close() })
+	if got := explicit.Epoch(); got != 7 {
+		t.Fatalf("explicit epoch = %d, want 7", got)
+	}
+
+	// A recording fixes the epoch and the instance it was cut from, and a jump
+	// in the playlist moves the buffer on without rewriting older recordings.
+	before, err := first.Record(info.Segments[0].Duration)
+	if err != nil {
+		t.Fatalf("record before the jump: %v", err)
+	}
+	if before.BufferInstance != first.Instance() || before.SourceMediaEpoch != 1 {
+		t.Fatalf("recording identity = %s epoch %d, want %s epoch 1",
+			before.BufferInstance, before.SourceMediaEpoch, first.Instance())
+	}
+
+	jump := info.Segments[len(info.Segments)-1]
+	jump.Discontinuity = true
+	if _, err := first.Add(context.Background(), server.Client(), jump); err != nil {
+		t.Fatalf("add segment after the jump: %v", err)
+	}
+	if got := first.Epoch(); got != 2 {
+		t.Fatalf("epoch after a discontinuity = %d, want 2", got)
+	}
+	window, ok := first.Available()
+	if !ok {
+		t.Fatal("the buffer states no window after the jump")
+	}
+	after, err := first.Record(window.End - time.Second)
+	if err != nil {
+		t.Fatalf("record after the jump: %v", err)
+	}
+	if after.SourceMediaEpoch != 2 {
+		t.Fatalf("recording after the jump has epoch %d, want 2", after.SourceMediaEpoch)
+	}
+	if before.SourceMediaEpoch != 1 || before.BufferInstance != first.Instance() {
+		t.Fatalf("an older recording changed: epoch %d instance %s",
+			before.SourceMediaEpoch, before.BufferInstance)
+	}
+}

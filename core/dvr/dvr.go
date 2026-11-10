@@ -26,6 +26,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/xswt442-cmd/muxshift/core"
@@ -148,6 +149,12 @@ type Options struct {
 	// It is copied into every Recording so a saved file can be attributed
 	// without a second lookup; an empty value is allowed for a bare buffer.
 	Source core.SourceID
+	// SourceEpoch names the run of the source's media clock this buffer
+	// records. It is copied into every Recording and every Anchor is checked
+	// against it, so a recording made before a discontinuity cannot be mapped
+	// with an anchor measured after it. Zero means the buffer starts the first
+	// epoch itself; a caller that reopens a source increments it.
+	SourceEpoch uint64
 	// RecordingBytes bounds the disk the published recordings may take. Zero
 	// leaves them unbounded, which is a deliberate risk the caller takes: with no
 	// budget nothing but Close reclaims a published file. When a new cut does not
@@ -183,11 +190,22 @@ type Buffer struct {
 	// cuts counts recordings so two cuts in the same nanosecond still get
 	// different names; recordings lists the published files, which Close keeps
 	// while a lease holds them.
+	// cuts counts recordings so two cuts in the same nanosecond still get
+	// different names; recordings lists the published files, which Close keeps
+	// while a lease holds them.
 	cuts           int
 	recordings     []recorded
 	recordingBytes int64
 	pendingCleanup []string
 	lastRemoveErr  error
+	// instance names this buffer and never changes, so an anchor measured on
+	// another buffer instance is refused even when the source identity and the
+	// epoch match: two buffers for one source keep different clocks.
+	instance string
+	// epoch is the run of the source's media clock the buffer is storing. A
+	// discontinuity in the playlist moves it forward, which makes every earlier
+	// recording refuse an anchor measured after the jump.
+	epoch uint64
 }
 
 // New creates the buffer's directory and returns it empty. The directory is
@@ -219,7 +237,43 @@ func New(opts Options) (*Buffer, error) {
 			return nil, fmt.Errorf("%w: %v", ErrNoSpace, err)
 		}
 	}
-	return &Buffer{opts: opts, dirOwned: owned, recordingsOwned: recordingsOwned}, nil
+	epoch := opts.SourceEpoch
+	if epoch == 0 {
+		epoch = 1
+	}
+	return &Buffer{
+		opts:            opts,
+		dirOwned:        owned,
+		recordingsOwned: recordingsOwned,
+		instance:        newInstanceID(),
+		epoch:           epoch,
+	}, nil
+}
+
+// instanceSeq keeps two buffers created in the same nanosecond apart.
+var instanceSeq atomic.Uint64
+
+// newInstanceID names one buffer. The process-wide counter is what makes the
+// name unique; the creation time only helps when logs from different runs are
+// compared side by side.
+func newInstanceID() string {
+	return fmt.Sprintf("buf-%d-%d", time.Now().UnixNano(), instanceSeq.Add(1))
+}
+
+// Instance names this buffer. It is unique for the life of the process and is
+// fixed when the buffer is created.
+func (b *Buffer) Instance() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.instance
+}
+
+// Epoch is the run of the source's media clock the buffer is currently storing.
+// It moves forward when the playlist states a discontinuity.
+func (b *Buffer) Epoch() uint64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.epoch
 }
 
 // Add fetches one segment, checks that it can be played, stores it, and places
@@ -298,8 +352,11 @@ func (b *Buffer) Add(ctx context.Context, client *http.Client, segment hls.Segme
 	}
 	if b.seen && segment.Discontinuity {
 		// The playlist says this segment's timestamps do not follow the
-		// previous one, so the two cannot share a replayable range.
+		// previous one, so the two cannot share a replayable range. The media
+		// clock itself was rebuilt, which also ends the epoch: an anchor
+		// measured before this segment cannot describe a time after it.
 		split = true
+		b.epoch++
 	}
 
 	stored := Segment{
@@ -533,6 +590,8 @@ func (b *Buffer) recordLocked(from time.Duration) (Recording, int, error) {
 		ID:                  id,
 		Path:                path,
 		Source:              b.opts.Source,
+		SourceMediaEpoch:    b.epoch,
+		BufferInstance:      b.instance,
 		RequestedBufferTime: from,
 		JoinedAt:            time.Now(),
 		Ranges:              b.ranges(),

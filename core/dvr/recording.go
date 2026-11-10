@@ -35,6 +35,14 @@ type Recording struct {
 	Path string
 	// Source is the source the buffer was opened for, when one was named.
 	Source core.SourceID
+	// SourceMediaEpoch is the run of the source's media clock this file was
+	// cut from. It is fixed at cut time: an anchor measured in another epoch
+	// cannot map this file's times, even for the same source.
+	SourceMediaEpoch uint64
+	// BufferInstance names the buffer that produced the file. Two buffers for
+	// one source keep different clocks, so an anchor from the other one is
+	// refused rather than applied with an unknown offset.
+	BufferInstance string
 	// RequestedBufferTime is the time the caller asked to start from.
 	RequestedBufferTime time.Duration
 	// StartBufferTime is the buffer time of the file's first frame: the start
@@ -63,10 +71,29 @@ type Recording struct {
 type Anchor struct {
 	// Source is the source the anchor was measured on.
 	Source core.SourceID
+	// Epoch is the source's media-clock run the anchor was measured in. It must
+	// match the epoch the recording was cut in.
+	Epoch uint64
+	// BufferInstance names the buffer the anchor was measured on. A clock from
+	// another buffer is a different clock even for the same source.
+	BufferInstance string
 	// BufferStart is the buffer time the anchor was measured at.
 	BufferStart time.Duration
 	// MediaStart is the source media time observed at BufferStart.
 	MediaStart time.Duration
+	// Interval is the contiguous buffer range that was available when the
+	// anchor was measured. A time outside it is not explained by this anchor:
+	// the buffer may have been rebuilt or evicted across the jump.
+	Interval Range
+	// MeasuredAt is when the anchor was measured. A zero value means it was
+	// constructed rather than measured, which is not an anchor.
+	MeasuredAt time.Time
+}
+
+// Measured reports whether the anchor was actually observed rather than
+// constructed by a caller that guessed the mapping.
+func (a Anchor) Measured() bool {
+	return !a.MeasuredAt.IsZero()
 }
 
 // Duration is how much media the file holds.
@@ -112,7 +139,46 @@ func (r Recording) SourceMediaTime(position time.Duration, anchor Anchor) (time.
 	if anchor.Source != r.Source {
 		return 0, fmt.Errorf("%w: the anchor belongs to %s, not %s", ErrNoAnchor, anchor.Source, r.Source)
 	}
+	if !anchor.Measured() {
+		return 0, fmt.Errorf("%w: the anchor for %s was not measured; a constructed mapping would shift the result by an unknown amount",
+			ErrNoAnchor, r.Source)
+	}
+	if anchor.BufferInstance != r.BufferInstance || anchor.BufferInstance == "" {
+		return 0, fmt.Errorf("%w: the anchor was measured on %s, %s was cut from %s",
+			ErrNoAnchor, orUnknown(anchor.BufferInstance), r.name(), orUnknown(r.BufferInstance))
+	}
+	if anchor.Epoch != r.SourceMediaEpoch {
+		return 0, fmt.Errorf("%w: the anchor is for epoch %d of %s, %s was cut in epoch %d",
+			ErrNoAnchor, anchor.Epoch, r.Source, r.name(), r.SourceMediaEpoch)
+	}
+	if err := anchor.explains(at); err != nil {
+		return 0, fmt.Errorf("%w: %v", ErrNoAnchor, err)
+	}
 	return anchor.MediaStart + (at - anchor.BufferStart), nil
+}
+
+// explains reports whether the anchor covers a buffer time. The interval is the
+// contiguous range that was available when the anchor was measured; a time
+// outside it may belong to a clock run the anchor never saw.
+func (a Anchor) explains(at time.Duration) error {
+	if a.Interval.End <= a.Interval.Start {
+		return fmt.Errorf("the anchor for %s states no interval, so it cannot explain %s",
+			a.Source, at.Round(time.Millisecond))
+	}
+	if at < a.Interval.Start || at >= a.Interval.End {
+		return fmt.Errorf("%s is outside %s..%s, the interval the anchor for %s explains",
+			at.Round(time.Millisecond), a.Interval.Start.Round(time.Millisecond),
+			a.Interval.End.Round(time.Millisecond), a.Source)
+	}
+	return nil
+}
+
+// orUnknown names an empty buffer instance so a refusal reads as a sentence.
+func orUnknown(instance string) string {
+	if instance == "" {
+		return "an unnamed buffer"
+	}
+	return instance
 }
 
 // EventTime maps a position inside the file to shared event time. The Core

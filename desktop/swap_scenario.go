@@ -73,6 +73,8 @@ func swapBody(window *mygo.Window, a *appState, dir string) {
 	base := windowOf.Start
 
 	// 1. A recording reaches the stage through a lease.
+	epochBefore, instanceBefore := runner.buffer.Epoch(), runner.buffer.Instance()
+	generationBefore := it.generation
 	if err := a.playRecording(it, runner, base+2*time.Second); err != nil {
 		logf(scenario, "first switch: %v", err)
 		return
@@ -81,6 +83,15 @@ func swapBody(window *mygo.Window, a *appState, dir string) {
 		logf(scenario, "the first recording never reached the stage")
 		return
 	}
+	epochAfter, instanceAfter := runner.buffer.Epoch(), runner.buffer.Instance()
+	logf(scenario, "the switch replaced the player, not the source clock: buffer %s epoch %d -> %s epoch %d, generation %d -> %d",
+		instanceBefore, epochBefore, instanceAfter, epochAfter, generationBefore, it.generation)
+	check(instanceAfter == instanceBefore && epochAfter == epochBefore,
+		"a replay switch changed the buffer identity (%s epoch %d became %s epoch %d)",
+		instanceBefore, epochBefore, instanceAfter, epochAfter)
+	check(it.generation > generationBefore, "a committed switch left the player generation at %d", it.generation)
+	check(showing(it) != nil && showing(it).BufferInstance == instanceBefore && showing(it).SourceMediaEpoch == epochBefore,
+		"the recording on the stage does not name the buffer it was cut from")
 	open, given := a.leaseStats()
 	logf(scenario, "the recording is on the stage: %s | leases open=%d given=%d", replayLine(it), open, given)
 	check(open == 1 && given == 1, "the first switch asked for %d lease(s) and left %d open", given, open)

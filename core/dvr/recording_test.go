@@ -142,13 +142,40 @@ func TestSourceMediaTimeNeedsAMeasuredAnchor(t *testing.T) {
 		t.Fatalf("no anchor = %v, want ErrNoAnchor", err)
 	}
 	// An anchor measured on another source does not describe this one.
-	other := Anchor{Source: "source-9", BufferStart: 2 * time.Second, MediaStart: 100 * time.Second}
+	other := anchorFor(recording, 2*time.Second, 100*time.Second)
+	other.Source = "source-9"
 	if _, err := recording.SourceMediaTime(0, other); !errors.Is(err, ErrNoAnchor) {
 		t.Fatalf("foreign anchor = %v, want ErrNoAnchor", err)
 	}
+	// A constructed anchor states the mapping without measuring it.
+	guessed := anchorFor(recording, 2*time.Second, 100*time.Second)
+	guessed.MeasuredAt = time.Time{}
+	if _, err := recording.SourceMediaTime(0, guessed); !errors.Is(err, ErrNoAnchor) {
+		t.Fatalf("unmeasured anchor = %v, want ErrNoAnchor", err)
+	}
+	// An anchor from another buffer instance, even for the same source, is a
+	// different clock.
+	elsewhere := anchorFor(recording, 2*time.Second, 100*time.Second)
+	elsewhere.BufferInstance = "buf-elsewhere"
+	if _, err := recording.SourceMediaTime(0, elsewhere); !errors.Is(err, ErrNoAnchor) {
+		t.Fatalf("anchor from another buffer = %v, want ErrNoAnchor", err)
+	}
+	// An anchor from another epoch of the same source was measured before the
+	// media clock jumped.
+	jumped := anchorFor(recording, 2*time.Second, 100*time.Second)
+	jumped.Epoch = recording.SourceMediaEpoch + 1
+	if _, err := recording.SourceMediaTime(0, jumped); !errors.Is(err, ErrNoAnchor) {
+		t.Fatalf("anchor from another epoch = %v, want ErrNoAnchor", err)
+	}
+	// The anchor only explains the contiguous interval it was measured in.
+	outside := anchorFor(recording, 2*time.Second, 100*time.Second)
+	outside.Interval = Range{Start: recording.EndBufferTime, End: recording.EndBufferTime + 10*time.Second}
+	if _, err := recording.SourceMediaTime(0, outside); !errors.Is(err, ErrNoAnchor) {
+		t.Fatalf("anchor outside its interval = %v, want ErrNoAnchor", err)
+	}
 
 	// A measured anchor: buffer 2s was the source's 100s.
-	anchor := Anchor{Source: "source-2", BufferStart: 2 * time.Second, MediaStart: 100 * time.Second}
+	anchor := anchorFor(recording, 2*time.Second, 100*time.Second)
 	for _, test := range []struct {
 		position time.Duration
 		want     time.Duration
@@ -173,7 +200,7 @@ func TestEventTimeFollowsTheCoreTimelineSign(t *testing.T) {
 	if err != nil {
 		t.Fatalf("record: %v", err)
 	}
-	anchor := Anchor{Source: "source-1", BufferStart: 2 * time.Second, MediaStart: 3 * time.Second}
+	anchor := anchorFor(recording, 2*time.Second, 3*time.Second)
 
 	// Core fixes media = event + offset, so event = media - offset. A media time
 	// of 3s with a +0.5s offset is 2.5s on the shared clock.
@@ -311,5 +338,21 @@ func TestRecordedFilesStayInsideTheBufferDirectory(t *testing.T) {
 	}
 	if filepath.Base(recording.Path) != recording.FileName() {
 		t.Fatalf("the file name disagrees with the path")
+	}
+}
+
+// anchorFor builds a measured anchor for a recording: the test says which
+// buffer time it observed and which source media time it saw there. Tests that
+// want a refusal change one field afterwards.
+func anchorFor(recording Recording, bufferStart, mediaStart time.Duration) Anchor {
+	return Anchor{
+		Source:         recording.Source,
+		Epoch:          recording.SourceMediaEpoch,
+		BufferInstance: recording.BufferInstance,
+		BufferStart:    bufferStart,
+		MediaStart:     mediaStart,
+		// The buffer still held a second past the file when the anchor was taken.
+		Interval:   Range{Start: recording.StartBufferTime, End: recording.EndBufferTime + time.Second},
+		MeasuredAt: time.Now(),
 	}
 }

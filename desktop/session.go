@@ -565,31 +565,41 @@ func (a *appState) release() {
 	}
 }
 
-// sceneLabel describes the scene as the window shows it.
+// sceneLabel describes the scene by source number, which is what the cards and
+// the web page both show: "picture 2 · sound 1 at 1.00 · 3 at 0.50".
 func (a *appState) sceneLabel() string {
 	scene, err := a.session.Scene(a.scene)
 	if err != nil {
 		return "scene: " + err.Error()
 	}
-	var video string
-	for _, it := range a.items {
+	picture := "none"
+	for i, it := range a.items {
 		if it.video != "" && containsTrack(scene.Video, it.video) {
-			video = it.uri
+			picture = itoa(i + 1)
 			break
 		}
 	}
 	audio := make([]string, 0, len(scene.Audio))
 	for _, level := range scene.Audio {
-		label := shortURI(trackURI(a.items, level.Track))
-		audio = append(audio, fmt.Sprintf("%s %.2f", label, level.Volume))
-	}
-	if video == "" {
-		video = "none"
+		if i := itemIndex(a.items, level.Track); i >= 0 {
+			audio = append(audio, fmt.Sprintf("%d at %.2f", i+1, level.Volume))
+		}
 	}
 	if len(audio) == 0 {
-		return "video " + shortURI(video) + " · silent"
+		return "picture " + picture + " · silent"
 	}
-	return "video " + shortURI(video) + " · audio " + strings.Join(audio, " + ")
+	return "picture " + picture + " · sound " + strings.Join(audio, " + ")
+}
+
+// itemIndex finds the card that owns a track, so the window can name sources by
+// the number it prints instead of by the file behind them.
+func itemIndex(items []*item, track core.TrackID) int {
+	for i, it := range items {
+		if it.video == track || it.audio == track {
+			return i
+		}
+	}
+	return -1
 }
 
 // containsTrack reports whether the track is in the list.
@@ -615,11 +625,14 @@ func trackURI(items []*item, track core.TrackID) string {
 // shortURI is the last path element, with the directory before it when that
 // element is a playlist, so a status line stays readable and still tells two
 // index.m3u8 addresses apart.
+// shortURI names a source the way a person does: the file, with the directory
+// that makes it unique when several sources share a file name. Windows paths
+// use backslashes, so they are folded onto the same separator first.
 func shortURI(uri string) string {
 	if uri == "" {
 		return "none"
 	}
-	trimmed := strings.TrimSuffix(uri, "/")
+	trimmed := strings.TrimSuffix(strings.ReplaceAll(uri, "\\", "/"), "/")
 	parts := strings.Split(trimmed, "/")
 	last := parts[len(parts)-1]
 	if strings.HasPrefix(last, "index.") && len(parts) >= 2 {

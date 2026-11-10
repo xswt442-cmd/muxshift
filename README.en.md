@@ -16,6 +16,7 @@ The repository currently contains a project scaffold with a Go Core session conf
 - `extension/`: browser extension and its native host, which hand one address the user confirmed to the running session.
 - `tools/separate/`: experimental vocal/non-vocal separation script that runs chunked ONNX inference on a model you supply; not wired into playback.
 - `tools/align/`: experimental content-offset probe that compares audio envelopes or frame thumbnails and reports a confidence; not wired into playback and it never moves the timeline.
+- `design/` and `tools/designtokens/`: the one place colours, radii, spacing, and type sizes are defined; `go run ./tools/designtokens` generates `web/tokens.css` and `desktop/tokens.go`, so the web page and the desktop window share one look.
 - `docs/development/`: engineering architecture documents.
 - `testplace/`: Git-ignored local experiments, drafts, and agent working material.
 

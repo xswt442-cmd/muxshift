@@ -14,6 +14,7 @@ This repository contains a scaffold with these implemented pieces: a Go Core ses
 | `web/` | Web client (hls.js and MSE) | Loopback-only session service and static page; browser limits stay visible instead of being assumed equal to the desktop |
 | `extension/` | Browser extension and native host | Hands the one page address the user picked to the running session; copies no cookies, headers, or keys |
 | `tools/separate/` | Experimental script | Splits one recording into vocal and non-vocal WAV files with a model you supply; not on the playback path and the weights are not published with the repository |
+| `design/`, `tools/designtokens/` | Design tokens and generator | Colours, radii, spacing and type sizes live only in `design/tokens.json`; it generates `web/tokens.css` and `desktop/tokens.go`, and both clients consume the generated files |
 | `testplace/` | Ignored local directory | Experiments, temporary notes, and agent working material |
 
 The intended client-to-core dependency direction is `desktop → core ← web`; the browser extension integrates through an explicit protocol instead of depending on the desktop UI. These are ownership constraints, not existing runtime calls.

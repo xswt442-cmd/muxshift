@@ -16,6 +16,7 @@ MuxShift 是一个面向多路音视频组合与时间轴控制的开源项目�
 - `extension/`：浏览器扩展与它的本机 Host，把用户确认过的一个媒体地址交给正在运行的会话。
 - `tools/separate/`：实验性的人声/环境声分离脚本，用自带权重跑分块 ONNX 推理；尚未接入播放路径。
 - `tools/align/`：实验性的内容偏移探测，比较音频包络或帧缩略图并给出置信度；不接入播放，也不改时间轴。
+- `design/` 与 `tools/designtokens/`：颜色、圆角、间距与字号的唯一来源；`go run ./tools/designtokens` 生成 `web/tokens.css` 与 `desktop/tokens.go`，Web 与桌面窗口因此共用一套外观。
 - `docs/development/`：工程架构文档。
 - `testplace/`：被 Git 忽略的本地实验、草稿和 Agent 工作材料。
 

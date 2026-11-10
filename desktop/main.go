@@ -346,18 +346,48 @@ func clock(d time.Duration) string {
 // once the video was a direct child.
 func (a *appState) view(c *ui.Context) {
 	defer a.signalFrame()
-	ui.Column(c).Fill().Children(func() {
+	c.SetTheme(muxshiftTheme())
+	ui.Column(c).Fill().Background(colorBg).Padding(spaceLg).Gap(spaceMd).Children(func() {
+		a.headerRow(c)
+		a.stage(c)
+		a.transportRow(c)
+		for i, it := range a.items {
+			a.sourceCard(c, i, it)
+		}
+		ui.Text(c, a.status()).FontSize(textSmall).TextColor(colorTextDim).FontFeatures("tnum")
+		if a.syncNote != "" {
+			ui.Text(c, a.syncNote).FontSize(textSmall).TextColor(colorTextDim)
+		}
+	})
+}
+
+// headerRow is the title and the two chips that say which scene is live and
+// how the session is doing. It is the same top bar the web page has.
+func (a *appState) headerRow(c *ui.Context) {
+	ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "MuxShift").FontSize(textTitle).TextColor(colorText)
+		pill(c, a.sceneLabel(), colorAccent, true)
+		label := fmt.Sprintf("%d source", len(a.items))
+		if len(a.items) != 1 {
+			label += "s"
+		}
+		pill(c, label, colorTextDim, false)
+		if a.lastErr != nil {
+			pill(c, "error: "+a.lastErr.Error(), colorBad, true)
+		}
+	})
+}
+
+// stage draws every player in one frame. The scene hides the players it does
+// not show instead of removing their elements: the window stops repainting
+// when a video element is added or removed while it is running.
+func (a *appState) stage(c *ui.Context) {
+	ui.Box(c).Fill().Grow(1).Radius(radiusLg).Border(1, colorLine).Background(colorPanel).Children(func() {
 		shown := 0
 		for _, it := range a.items {
 			if it.player == nil {
 				continue
 			}
-			// Every player keeps its video element in the tree and the scene
-			// hides the ones it does not show. Adding and removing a video
-			// element as the shown source changed froze the window: after the
-			// switch nothing repainted, and the status line kept its old text.
-			// The player a reopen left behind keeps its element drawn until the
-			// replacement has a picture; see reopenPlayer.
 			if it.previous != nil {
 				ui.Video(c, it.previous).Fill()
 				shown++
@@ -368,110 +398,136 @@ func (a *appState) view(c *ui.Context) {
 			}
 		}
 		if shown == 0 {
-			ui.Text(c, a.status()).Center()
+			ui.Text(c, "no picture yet\nopen a source, or press Show on a card").
+				FontSize(textBody).TextColor(colorTextDim).Center().Fill()
 		}
-		ui.Row(c).Gap(8).Padding(12).AlignItems(ui.Center).Children(func() {
-			// Pause and play go to every source the scene selects, not to one
-			// player: the group is what is being aligned, so it stops and
-			// starts together.
-			label := "Pause all"
-			if !a.sync.playhead.Playing() {
-				label = "Play all"
+	})
+}
+
+// transportRow is play/pause for the whole group plus the actions that act on
+// the first source, as the web page's control bar does.
+func (a *appState) transportRow(c *ui.Context) {
+	ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
+		label := "Pause all"
+		if !a.sync.playhead.Playing() {
+			label = "Play all"
+		}
+		if ui.Button(c.Key("pause-all"), label).Width(96).Clicked() {
+			var problems []string
+			if a.sync.playhead.Playing() {
+				problems = a.pauseAll()
+			} else {
+				problems = a.playAll()
 			}
-			if ui.Button(c.Key("pause-all"), label).Width(96).Clicked() {
-				var problems []string
-				if a.sync.playhead.Playing() {
-					problems = a.pauseAll()
-				} else {
-					problems = a.playAll()
-				}
-				if len(problems) > 0 {
-					a.syncNote = "sync: group command reported: " + strings.Join(problems, "; ")
-					log.Printf("group command: %s", strings.Join(problems, "; "))
-				} else {
-					members, _ := a.group()
-					a.syncNote = "sync: group command done for " + itoa(len(members)) + " source(s)"
-				}
+			if len(problems) > 0 {
+				a.syncNote = "sync: group command reported: " + strings.Join(problems, "; ")
+				log.Printf("group command: %s", strings.Join(problems, "; "))
+			} else {
+				members, _ := a.group()
+				a.syncNote = "sync: group command done for " + itoa(len(members)) + " source(s)"
 			}
-			if main := a.first(); main != nil && main.player != nil {
-				if ui.Button(c.Key("mute"), muteLabel(main.player)).Width(88).Clicked() {
-					main.player.SetMuted(!main.player.Muted())
-				}
+		}
+		if main := a.first(); main != nil && main.player != nil {
+			if ui.Button(c.Key("mute"), muteLabel(main.player)).Width(88).Clicked() {
+				main.player.SetMuted(!main.player.Muted())
 			}
-			if ui.Button(c.Key("reload"), "Reload").Width(88).Clicked() {
-				if first := a.first(); first != nil {
-					a.reopenPlayer(first)
-				}
+		}
+		if ui.Button(c.Key("reload"), "Reload").Width(88).Clicked() {
+			if first := a.first(); first != nil {
+				a.reopenPlayer(first)
 			}
-			if ui.Button(c.Key("quit"), "Close").Width(88).Clicked() {
-				a.release()
-				mygo.App.Quit()
-			}
-			ui.Text(c, a.sceneLabel()).FontFeatures("tnum")
-		})
-		for i, it := range a.items {
-			index := i
-			item := it
-			// One row per source: every source carries up to seven buttons, and a
-			// single row for all of them ran past the right edge of the window,
-			// which hid the probe button for the third source entirely.
-			ui.Row(c).Gap(8).Padding(12).AlignItems(ui.Center).Children(func() {
-				if item.video != "" {
-					if ui.Button(c.Key(fmt.Sprintf("show-%d", i)), fmt.Sprintf("Show %d", i+1)).Width(88).Clicked() {
-						if err := a.showVideo(index); err != nil {
-							a.lastErr = err
-						}
-					}
+		}
+		if ui.Button(c.Key("quit"), "Close").Width(88).Clicked() {
+			a.release()
+			mygo.App.Quit()
+		}
+	})
+}
+
+// sourceCard is one source: its name, what the scene does with it, and the
+// controls that change that. The web page lists the same fields in the same
+// order, which is what keeps the two clients recognisable as one product.
+func (a *appState) sourceCard(c *ui.Context, i int, it *item) {
+	index := i
+	item := it
+	ui.Row(c).Gap(spaceMd).Padding(spaceMd).Radius(radiusMd).Border(1, colorLine).
+		Background(colorPanel).AlignItems(ui.Center).Children(func() {
+		ui.Column(c).Gap(spaceXs).Grow(1).Children(func() {
+			ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, itoa(i+1)).FontSize(textMicro).TextColor(colorTextDim).FontFeatures("tnum")
+				ui.Text(c, shortURI(item.uri)).FontSize(textBody).TextColor(colorText)
+				if item.shown {
+					pill(c, "PICTURE", colorAccent, true)
 				}
-				if item.audio != "" {
-					if ui.Button(c.Key(fmt.Sprintf("hear-%d", i)), fmt.Sprintf("Hear %d", i+1)).Width(88).Clicked() {
-						if err := a.hearAudio(index, item.volume); err != nil {
-							a.lastErr = err
-						}
-					}
-					if ui.Button(c.Key(fmt.Sprintf("allow-%d", i)), allowLabel(a, item)).Width(104).Clicked() {
-						if err := a.allowAudio(index); err != nil {
-							a.lastErr = err
-						}
-					}
-					if ui.Button(c.Key(fmt.Sprintf("vol-down-%d", i)), "Vol -").Width(64).Clicked() {
-						if err := a.setVolume(index, max(0, item.volume-0.25)); err != nil {
-							a.lastErr = err
-						}
-					}
-					if ui.Button(c.Key(fmt.Sprintf("vol-up-%d", i)), "Vol +").Width(64).Clicked() {
-						if err := a.setVolume(index, min(1, item.volume+0.25)); err != nil {
-							a.lastErr = err
-						}
-					}
+				heard := item.audio != "" && item.player != nil && !item.player.Muted()
+				if heard {
+					pill(c, "SOUND", colorSound, true)
 				}
-				if item.video != "" || item.audio != "" {
-					// A tenth of a second is the step a person can still see on
-					// a timecode; the report after each press says where the
-					// player actually landed.
-					if ui.Button(c.Key(fmt.Sprintf("back-%d", i)), "-0.1s").Width(64).Clicked() {
-						a.nudgeAndRecord(index, -100*time.Millisecond)
-					}
-					if ui.Button(c.Key(fmt.Sprintf("fwd-%d", i)), "+0.1s").Width(64).Clicked() {
-						a.nudgeAndRecord(index, 100*time.Millisecond)
-					}
-					if i > 0 {
-						// The probe reads both files and offers an offset; it
-						// does not move either player or the timeline.
-						if ui.Button(c.Key(fmt.Sprintf("probe-%d", i)), fmt.Sprintf("Try align %d", i+1)).Width(112).Clicked() {
-							a.probeAsync(0, index)
-						}
-					}
+				if item.openErr != nil {
+					pill(c, "error", colorBad, true)
 				}
 			})
-		}
-		// The status text is its own row: with one row per source the buttons
-		// already fill the width, and a status line inside that row was pushed
-		// off the window exactly when there was something to report.
-		ui.Row(c).Gap(8).Padding(12).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, a.status()).FontFeatures("tnum")
+			ui.Text(c, status(item)).FontSize(textMicro).TextColor(colorTextDim).FontFeatures("tnum")
 		})
+		if item.video != "" {
+			if ui.Button(c.Key("show-"+itoa(i)), "Show").Width(72).Clicked() {
+				if err := a.showVideo(index); err != nil {
+					a.lastErr = err
+				}
+			}
+		}
+		if item.audio != "" {
+			if ui.Button(c.Key("hear-"+itoa(i)), "Hear").Width(72).Clicked() {
+				if err := a.hearAudio(index, item.volume); err != nil {
+					a.lastErr = err
+				}
+			}
+			if ui.Button(c.Key("allow-"+itoa(i)), allowLabel(a, item)).Width(96).Clicked() {
+				if err := a.allowAudio(index); err != nil {
+					a.lastErr = err
+				}
+			}
+			if ui.Button(c.Key("vol-down-"+itoa(i)), "Vol -").Width(64).Clicked() {
+				if err := a.setVolume(index, max(0, item.volume-0.25)); err != nil {
+					a.lastErr = err
+				}
+			}
+			if ui.Button(c.Key("vol-up-"+itoa(i)), "Vol +").Width(64).Clicked() {
+				if err := a.setVolume(index, min(1, item.volume+0.25)); err != nil {
+					a.lastErr = err
+				}
+			}
+		}
+		if item.video != "" || item.audio != "" {
+			// A tenth of a second is the step a person can still see on a
+			// timecode; the report after each press says where the player
+			// actually landed.
+			if ui.Button(c.Key("back-"+itoa(i)), "-0.1s").Width(64).Clicked() {
+				a.nudgeAndRecord(index, -100*time.Millisecond)
+			}
+			if ui.Button(c.Key("fwd-"+itoa(i)), "+0.1s").Width(64).Clicked() {
+				a.nudgeAndRecord(index, 100*time.Millisecond)
+			}
+			if i > 0 {
+				// The probe reads both files and offers an offset; it does
+				// not move either player or the timeline.
+				if ui.Button(c.Key("probe-"+itoa(i)), "Try align").Width(88).Clicked() {
+					a.probeAsync(0, index)
+				}
+			}
+		}
 	})
+}
+
+// pill draws a short label, the desktop equivalent of the web page's .chip and
+// .badge elements. MyGo boxes do not size themselves around their children, so
+// the label is drawn as coloured text between two thin rules instead.
+func pill(c *ui.Context, label string, tint ui.Color, on bool) {
+	textColor := colorTextDim
+	if on {
+		textColor = tint
+	}
+	ui.Text(c, label).FontSize(textMicro).TextColor(textColor)
 }
 
 // first is the item the buttons drive: the first one given.
@@ -482,21 +538,25 @@ func (a *appState) first() *item {
 	return a.items[0]
 }
 
-// status is every source as one line, with its index, followed by the scene.
+// status is one line: the clock of every source, then the sync group, then
+// whatever the last action had to report.
 func (a *appState) status() string {
-	if a.lastErr != nil {
-		return "error: " + a.lastErr.Error()
-	}
 	parts := make([]string, 0, len(a.items))
 	for i, it := range a.items {
 		parts = append(parts, fmt.Sprintf("%d: %s", i+1, status(it)))
 	}
-	if len(parts) == 0 {
-		return "no media"
+	line := strings.Join(parts, "   璺?  ")
+	if line == "" {
+		line = "no media"
 	}
-	line := strings.Join(parts, "   ") + "   ·   " + a.sceneLabel() + "   ·   " + a.syncLabel()
+	if label := a.syncLabel(); label != "" {
+		line += "   璺?  " + label
+	}
 	if a.syncNote != "" {
-		line += "   ·   " + a.syncNote
+		line += "   璺?  " + a.syncNote
+	}
+	if a.lastErr != nil {
+		line += "   璺?  error: " + a.lastErr.Error()
 	}
 	return line
 }
@@ -608,7 +668,7 @@ func main() {
 		log.Fatalf("muxshift-desktop: %v", err)
 	}
 	for i, it := range s.items {
-		log.Printf("source %d: %s · video=%q audio=%q open=%v", i+1, it.uri, it.video, it.audio, errorString(it.openErr))
+		log.Printf("source %d: %s 璺?video=%q audio=%q open=%v", i+1, it.uri, it.video, it.audio, errorString(it.openErr))
 	}
 	log.Printf("scene %s: %s", s.scene, s.sceneLabel())
 	// The shared event clock is wall time while the group plays and stands

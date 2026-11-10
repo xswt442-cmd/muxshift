@@ -14,6 +14,7 @@
 | `web/` | Web 客户端（hls.js 与 MSE） | 只监听本机的会话服务与静态页面；播放能力受浏览器限制，不假装等同桌面 |
 | `extension/` | 浏览器扩展与本机 Host | 把用户点击后选中的那一个页面地址交给正在运行的会话；不复制 Cookie、请求头或密钥 |
 | `tools/separate/` | 实验脚本 | 用自带权重把一段录音分成人声与非人声两份 WAV；不在播放路径上，模型权重不随仓库发布 |
+| `design/`、`tools/designtokens/` | 设计 token 与生成器 | 颜色、圆角、间距、字号只在 `design/tokens.json` 定义，生成 `web/tokens.css` 与 `desktop/tokens.go`；两端只消费生成物 |
 | `testplace/` | 本地忽略目录 | 实验、临时记录、Agent 工作文件 |
 
 客户端与 Core 的预期依赖方向为 `desktop → core ← web`；浏览器扩展通过显式协议衔接，不直接耦合桌面 UI。这里描述的是模块所有权约束，不代表这些调用已经实现。

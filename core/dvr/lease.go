@@ -149,6 +149,60 @@ func (b *Buffer) PendingCleanup() []string {
 	return append([]string(nil), b.pendingCleanup...)
 }
 
+// RetryCleanup makes one more attempt at the files a lease or a Windows handle
+// kept the buffer from removing, and returns what is still there. A recording
+// that goes away now leaves the pending list and its bytes go back to the budget.
+// Retrying is safe between closes: nothing is retried while a lease holds the
+// recording, so a file a player reads is never taken from under it.
+func (b *Buffer) RetryCleanup() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.pendingCleanup) == 0 {
+		return nil
+	}
+	left := b.pendingCleanup[:0]
+	for _, path := range b.pendingCleanup {
+		index := b.recordingAtLocked(path)
+		if index < 0 {
+			// The recording is no longer tracked: the file is somebody
+			// else's problem now, so the buffer stops claiming it.
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				left = append(left, path)
+			}
+			continue
+		}
+		if b.recordings[index].refs > 0 {
+			left = append(left, path)
+			continue
+		}
+		b.removeRecordingLocked(index)
+		if !b.recordings[index].gone {
+			left = append(left, path)
+		}
+	}
+	b.pendingCleanup = left
+	if len(left) == 0 {
+		b.lastRemoveErr = nil
+		// Nothing the buffer owns is left, so a directory it created itself can
+		// go now even though the close that failed had to keep it.
+		if b.dirOwned && b.emptyLocked() {
+			_ = os.RemoveAll(b.opts.Dir)
+		}
+	}
+	return append([]string(nil), left...)
+}
+
+// recordingAtLocked finds a recording by the file it published. The caller holds
+// the lock.
+func (b *Buffer) recordingAtLocked(path string) int {
+	for i := range b.recordings {
+		if b.recordings[i].Path == path {
+			return i
+		}
+	}
+	return -1
+}
+
 // dropOldestRecordingLocked tries to remove the oldest recording nobody holds,
 // to make room under the recording budget. It reports whether it found a
 // candidate, not whether the file went away: a file the system refuses to delete

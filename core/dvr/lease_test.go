@@ -296,6 +296,56 @@ func TestPendingCleanupReportsAFileWindowsStillHolds(t *testing.T) {
 	}
 }
 
+// A retry collects the file once the handle is gone, and reports it while the
+// handle is still there. It never takes a recording a lease holds.
+func TestRetryCleanupCollectsWhatItCanAndReportsWhatItCannot(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("only Windows refuses to delete a file another handle has open")
+	}
+	buffer, err := New(Options{Dir: filepath.Join(t.TempDir(), "buffer")})
+	if err != nil {
+		t.Fatalf("new buffer: %v", err)
+	}
+	addFixture(t, buffer)
+	recording, err := buffer.Record(0)
+	if err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	held, err := os.Open(recording.Path)
+	if err != nil {
+		t.Fatalf("open the recording: %v", err)
+	}
+	if err := buffer.Close(); err == nil {
+		t.Fatalf("closing with an undeletable recording reported success")
+	}
+
+	if left := buffer.RetryCleanup(); len(left) != 1 || left[0] != recording.Path {
+		t.Fatalf("retry while the handle is open = %v, want the recording path", left)
+	}
+	if _, err := os.Stat(recording.Path); err != nil {
+		t.Fatalf("the retry deleted a file that was still held: %v", err)
+	}
+
+	if err := held.Close(); err != nil {
+		t.Fatalf("release the handle: %v", err)
+	}
+	if left := buffer.RetryCleanup(); len(left) != 0 {
+		t.Fatalf("retry after the handle closed = %v, want nothing left", left)
+	}
+	if _, err := os.Stat(recording.Path); !os.IsNotExist(err) {
+		t.Fatalf("the retry left the file behind: %v", err)
+	}
+	if pending := buffer.PendingCleanup(); len(pending) != 0 {
+		t.Fatalf("pending cleanup = %v, want empty", pending)
+	}
+	if bytes := buffer.RecordingBytes(); bytes != 0 {
+		t.Fatalf("recording bytes = %d, want 0 after the retry", bytes)
+	}
+	if _, err := os.Stat(filepath.Join(buffer.opts.Dir, RecordingsName)); !os.IsNotExist(err) {
+		t.Fatalf("the retry left the recordings directory behind: %v", err)
+	}
+}
+
 func TestAClosedBufferHandsOutNoNewLease(t *testing.T) {
 	buffer, err := New(Options{Dir: filepath.Join(t.TempDir(), "buffer")})
 	if err != nil {

@@ -112,6 +112,13 @@ func runLease(window *mygo.Window, a *appState, dir string) {
 	}
 
 	// The consumer lets go first; only then may the buffer take the file back.
+	// A retry now finds nothing to do: the close skipped the file because the
+	// lease held it, so it was never queued for cleanup.
+	if left := runner.retryCleanup(); len(left) != 0 {
+		logf(scenario, "retry while the lease is held = %v, want nothing queued", left)
+	} else {
+		logf(scenario, "retry while the lease is held finds nothing queued")
+	}
 	if err := held.Close(); err != nil {
 		logf(scenario, "close the consumer handle: %v", err)
 	}
@@ -123,6 +130,52 @@ func runLease(window *mygo.Window, a *appState, dir string) {
 		logf(scenario, "the recording is gone as soon as the consumer let it go: %v", err)
 	}
 	logRecordings(scenario, "after the release", bufferDir, recordingsDir)
+
+	// A file whose handle closes after the buffer did is what the shutdown retry
+	// exists for: the close reports it, the first retry still cannot take it, and
+	// the retry after the handle lets go collects it along with the directory.
+	lateDir := filepath.Join(dir, "late")
+	lateRecordings := filepath.Join(dir, "late-recordings")
+	late, err := startDVR(it.uri, dvrFromMedia(lateDir, lateRecordings, 20*time.Second, 0, 4<<20, it.source.ID))
+	if err != nil {
+		logf(scenario, "open the late buffer: %v", err)
+		return
+	}
+	a.trackRunner(it.uri, late)
+	defer func() { _ = late.Close() }()
+	lateWindow, ok := waitForRange(late, 4*time.Second, 45*time.Second)
+	if !ok {
+		logf(scenario, "the late buffer did not hold 4s of media within 45s")
+		return
+	}
+	var lateRec dvr.Recording
+	mygoRunOnMain(func() {
+		lateRec, err = late.replay(lateWindow.Start)
+	})
+	if err != nil {
+		logf(scenario, "cut the late recording: %v", err)
+		return
+	}
+	handle, err := os.Open(lateRec.Path)
+	if err != nil {
+		logf(scenario, "open the late recording: %v", err)
+		return
+	}
+	lateErr := late.Close()
+	logf(scenario, "closed the late buffer with the file held: %v", lateErr)
+	if left := late.retryCleanup(); len(left) != 1 {
+		logf(scenario, "the first retry = %v, want the held recording", left)
+	} else {
+		logf(scenario, "the first retry still cannot take %s", left[0])
+	}
+	if err := handle.Close(); err != nil {
+		logf(scenario, "close the late handle: %v", err)
+	}
+	if left := late.retryCleanup(); len(left) != 0 {
+		logf(scenario, "the retry after the handle closed = %v, want nothing", left)
+	} else {
+		logf(scenario, "the retry after the handle closed collected the recording")
+	}
 
 	// A budget that cannot hold a cut is refused instead of taking space from a
 	// file somebody is already reading.

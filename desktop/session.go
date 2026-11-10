@@ -812,6 +812,9 @@ func (a *appState) shutdown() {
 		log.Printf("shutdown: the system still holds %s", strings.Join(pending, ", "))
 	}
 	a.closeBuffers()
+	if left := a.retryCleanup(); len(left) > 0 {
+		log.Printf("shutdown: the system still holds %s", strings.Join(left, ", "))
+	}
 	if a.session != nil && !a.session.Closed() {
 		a.lastErr = a.session.Close()
 	}
@@ -849,10 +852,44 @@ func (a *appState) releaseLeases() []string {
 
 func (a *appState) closeBuffers() {
 	for _, tracked := range a.runners {
-		if err := tracked.runner.Close(); err != nil {
-			log.Printf("shutdown: close the buffer for %s: %v", shortURI(tracked.uri), err)
+		err := tracked.runner.Close()
+		if err == nil {
+			continue
+		}
+		// A close that failed because a handle was still open is not the last
+		// word: the holder may have let go since. Say which of the two happened
+		// instead of reporting a failure that no longer exists.
+		if left := tracked.runner.retryCleanup(); len(left) == 0 {
+			log.Printf("shutdown: the buffer for %s reported %v; the file was released before exit",
+				shortURI(tracked.uri), err)
+			continue
+		}
+		log.Printf("shutdown: close the buffer for %s: %v", shortURI(tracked.uri), err)
+	}
+}
+
+// retryCleanup gives a file whose handle closed late a bounded few chances to go
+// away before the process exits, and reports what is still held. The wait is
+// short on purpose: shutdown must not hang on a file another program keeps open.
+func (a *appState) retryCleanup() []string {
+	const attempts = 3
+	const pause = 250 * time.Millisecond
+	var left []string
+	for attempt := 1; attempt <= attempts; attempt++ {
+		left = left[:0]
+		for _, tracked := range a.runners {
+			left = append(left, tracked.runner.retryCleanup()...)
+		}
+		if len(left) == 0 {
+			return nil
+		}
+		log.Printf("shutdown: cleanup attempt %d/%d left %s",
+			attempt, attempts, strings.Join(left, ", "))
+		if attempt < attempts {
+			time.Sleep(pause)
 		}
 	}
+	return left
 }
 
 // dvrDirFor names one buffer directory inside this run's session, so every

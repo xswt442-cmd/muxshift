@@ -250,6 +250,12 @@ func (r *dvrRunner) stopRecording() {
 	<-r.done
 }
 
+// retryCleanup makes one more attempt at files the system would not let the
+// buffer remove, and reports what is still there so shutdown can say so.
+func (r *dvrRunner) retryCleanup() []string {
+	return r.buffer.RetryCleanup()
+}
+
 // Close stops polling and removes the cache directory. A recording a lease holds
 // stays on disk; its release removes it. Closing twice is harmless: a scenario
 // that closes the buffer itself and then releases the session closes it again.

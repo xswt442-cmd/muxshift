@@ -450,3 +450,61 @@ func TestSeekTxnRefusesWhenTheRunnerIsReplacedBeforeTheCommit(t *testing.T) {
 		}
 	}
 }
+
+// A transaction that was replaced while it was preparing must not commit, must
+// give its files and players back, and must not clear the transaction that took
+// the session over.
+func TestSeekTxnGivesWayWhenAnotherTakesOver(t *testing.T) {
+	session, opened := seekTxnFixture(t)
+	release := make(chan struct{})
+	openedOnce := make(chan struct{}, 4)
+	inner := session.app.openSeek
+	session.app.openSeek = func(recording dvr.Recording) (desktopPlayer, error) {
+		openedOnce <- struct{}{}
+		<-release
+		return inner(recording)
+	}
+	before := make([]*dvr.Recording, len(session.items))
+	for i, it := range session.items {
+		before[i] = it.replay
+	}
+
+	if err := session.app.startSeekTxn(session.items, 6*time.Second); err != nil {
+		t.Fatalf("the first transaction did not start: %v", err)
+	}
+	<-openedOnce
+
+	newer := &seekTxn{event: 9 * time.Second}
+	session.app.seekMu.Lock()
+	session.app.seek = newer
+	session.app.seekMu.Unlock()
+	close(release)
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		allClosed := true
+		for _, player := range *opened {
+			if !player.closed {
+				allClosed = false
+			}
+		}
+		if allClosed && len(*opened) > 0 {
+			break
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatal("the replaced transaction kept its players")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	for i, it := range session.items {
+		if it.replay != before[i] {
+			t.Fatalf("source %d: the replaced transaction committed its recording", i+1)
+		}
+	}
+	session.app.seekMu.Lock()
+	holder := session.app.seek
+	session.app.seekMu.Unlock()
+	if holder != newer {
+		t.Fatal("the replaced transaction cleared the one that took over")
+	}
+}

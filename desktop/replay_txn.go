@@ -138,6 +138,12 @@ func (a *appState) startSeekTxn(items []*item, event time.Duration) error {
 // describes the session. Every exit either commits or gives back what it took.
 func (a *appState) prepareSeekTxn(txn *seekTxn) {
 	for _, step := range txn.steps {
+		// Ownership is re-read between sources: a newer transaction or a closing
+		// session gives the work back instead of spending more files on it.
+		if !a.holdsSeek(txn) {
+			a.abortSeekTxn(txn, "another replay transaction took the session over")
+			return
+		}
 		recording, lease, err := step.runner.recordAndHold(step.content)
 		if err != nil {
 			a.abortSeekTxn(txn, fmt.Sprintf("cut %s at %s: %v", a.name(step.item), shortDuration(step.content), err))
@@ -280,6 +286,13 @@ func (a *appState) commitSeekTxn(txn *seekTxn) {
 	// one turns out to have moved; checking everything first and installing
 	// afterwards is what makes the commit all-or-nothing.
 	a.seekOnMain(func() {
+		// The transaction only commits if it still owns the session. A newer
+		// transaction, a close or a shutdown can have taken it over while the
+		// files were being prepared.
+		if !a.holdsSeek(txn) {
+			refusal = fmt.Errorf("this replay transaction no longer owns the session")
+			return
+		}
 		if err := a.revalidateSeekTxn(txn); err != nil {
 			refusal = err
 			return
@@ -310,7 +323,7 @@ func (a *appState) commitSeekTxn(txn *seekTxn) {
 			a.leftLease()
 		}
 	}
-	a.clearSeek()
+	a.clearSeek(txn)
 	logf("seek", "committed %d recording(s) for event %s; each player is on the file cut for it, and the target sits %s into that file for the seek step",
 		len(txn.steps), shortDuration(txn.event), shortDuration(deepestPosition(txn.prepared)))
 }
@@ -319,29 +332,64 @@ func (a *appState) commitSeekTxn(txn *seekTxn) {
 // the players and leases they had, because the commit is the only step that
 // replaces them.
 func (a *appState) abortSeekTxn(txn *seekTxn, why string) {
-	for _, step := range txn.steps {
-		finished := false
-		step.finished.Do(func() {
-			finished = true
-			a.closeSeekPlayer(step.player)
-			if step.lease != nil {
-				if err := step.lease.Release(); err != nil {
-					logf("seek", "release %s: %v", step.recording.FileName(), err)
-				}
-				a.leftLease()
-			}
-		})
-		_ = finished
+	// Take whatever the transaction still owns out of its steps under the lock,
+	// then close it outside: a step reaches here at most once with resources
+	// attached, whether the abort comes from the transaction itself, a newer
+	// transaction taking over, or the session closing.
+	type owned struct {
+		player desktopPlayer
+		lease  *dvr.Lease
+		name   string
 	}
-	a.clearSeek()
+	var give []owned
+	a.seekMu.Lock()
+	for _, step := range txn.steps {
+		if step.player == nil && step.lease == nil {
+			continue
+		}
+		give = append(give, owned{player: step.player, lease: step.lease, name: step.recording.FileName()})
+		step.player = nil
+		step.lease = nil
+	}
+	a.seekMu.Unlock()
+	for _, item := range give {
+		a.closeSeekPlayer(item.player)
+		if item.lease != nil {
+			if err := item.lease.Release(); err != nil {
+				logf("seek", "release %s: %v", item.name, err)
+			}
+			a.leftLease()
+		}
+	}
+	a.clearSeek(txn)
 	logf("seek", "rolled back the replay for event %s: %s", shortDuration(txn.event), why)
 }
 
-// clearSeek drops the transaction from the window's view once it is over.
-func (a *appState) clearSeek() {
+// seekInFlight returns the transaction the window is preparing, if any.
+func (a *appState) seekInFlight() *seekTxn {
 	a.seekMu.Lock()
+	defer a.seekMu.Unlock()
+	return a.seek
+}
+
+// holdsSeek reports whether this transaction is still the one in flight.
+func (a *appState) holdsSeek(txn *seekTxn) bool {
+	a.seekMu.Lock()
+	defer a.seekMu.Unlock()
+	return a.seek == txn
+}
+
+// clearSeek drops the transaction from the window's view once it is over, and
+// only if it is still the transaction the window holds: a transaction that was
+// replaced must not clear the one that replaced it.
+func (a *appState) clearSeek(txn *seekTxn) bool {
+	a.seekMu.Lock()
+	defer a.seekMu.Unlock()
+	if a.seek != txn {
+		return false
+	}
 	a.seek = nil
-	a.seekMu.Unlock()
+	return true
 }
 
 // openSeekPlayer opens the file a recording published. The test seam stands in

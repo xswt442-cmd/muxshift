@@ -50,8 +50,8 @@ go build .
 Web client:
 
 ```sh
-go run ./web -media-root testplace/media \
-  -media /media/hls-vod/index.m3u8 -media /media/hls-sync-a/index.m3u8
+go run ./web -media-root <media directory> \
+  -media /media/hls-vod/index.m3u8 -media /media/hls-vod/second.m3u8
 ```
 
 It prints `http://127.0.0.1:<port>/?token=<token>`. The token appears once, the page swaps it for an HttpOnly cookie and removes it from the address bar.

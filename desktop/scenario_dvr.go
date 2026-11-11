@@ -137,8 +137,8 @@ func runDVR(window *mygo.Window, a *appState, dir string) {
 
 	// The buffer proved it keeps growing while the output is paused, and the
 	// recording now takes the picture in the session's own window: a player
-	// created on the drawing thread can be shown at any time, which is what the
-	// earlier runs of this scenario measured as "never ready".
+	// created on the drawing thread can be shown at any time. The runs of this
+	// scenario before players moved to the drawing thread measured "never ready".
 	step(window, a, dir, scenario, "", "resume the group before opening the recording", func(a *appState) {
 		logGroup(scenario, "resume", a.playAll())
 	})

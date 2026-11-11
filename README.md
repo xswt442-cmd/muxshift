@@ -50,8 +50,8 @@ go build .
 Web 端：
 
 ```sh
-go run ./web -media-root testplace/media \
-  -media /media/hls-vod/index.m3u8 -media /media/hls-sync-a/index.m3u8
+go run ./web -media-root <媒体目录> \
+  -media /media/hls-vod/index.m3u8 -media /media/hls-vod/second.m3u8
 ```
 
 它会打印一个带令牌的 `http://127.0.0.1:<端口>/?token=<令牌>`；令牌只出现这一次，页面立刻把它换成 HttpOnly cookie 并从地址栏移除。

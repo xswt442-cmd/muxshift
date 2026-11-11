@@ -448,7 +448,20 @@ func (a *appState) settleSeekTxn(txn *seekTxn) error {
 			player.Seek(target)
 		})
 	}
+	// A seek issued while a player is still settling can be dropped by the
+	// engine; the player then keeps the position it had. Re-issuing the request
+	// a few times is what makes the wait describe "never arrived" instead of
+	// "the first request was ignored", and each attempt is still held to the
+	// same two consecutive samples within tolerance.
+	const settleAttempts = 4
+	const retryAfter = 1200 * time.Millisecond
 	deadline := time.Now().Add(handoverWait)
+	issued := make([]time.Time, len(txn.steps))
+	attempts := make([]int, len(txn.steps))
+	for i := range issued {
+		issued[i] = time.Now()
+		attempts[i] = 1
+	}
 	stable := 0
 	for {
 		short := ""
@@ -465,6 +478,17 @@ func (a *appState) settleSeekTxn(txn *seekTxn) error {
 				break
 			}
 			if absDuration(frame.position-step.offset) > seekSettleTolerance {
+				if attempts[i] < settleAttempts && time.Since(issued[i]) >= retryAfter {
+					attempts[i]++
+					issued[i] = time.Now()
+					logf("seek", "%s did not take the first request; asking again (%d/%d)",
+						a.name(step.item), attempts[i], settleAttempts)
+					a.seekOnMain(func() {
+						step.player.Pause()
+						step.player.Seek(step.offset)
+					})
+					stable = 0
+				}
 				short = fmt.Sprintf("%s reports %s, %s away from the %s it was asked for",
 					a.name(step.item), frame.position, absDuration(frame.position-step.offset), step.offset)
 				break

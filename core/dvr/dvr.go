@@ -437,6 +437,33 @@ func (b *Buffer) last() *Segment {
 }
 
 // Ranges returns every contiguous stretch of stored media time, oldest first.
+// BufferState is what one buffer holds at one moment. It is read under one
+// lock, so the instance, the epoch and the ranges cannot come from three
+// different moments: a decision that names them has to name one state, not a
+// mixture of two.
+type BufferState struct {
+	Instance string
+	Epoch    uint64
+	Ranges   []Range
+}
+
+// State reads the buffer's identity and ranges together.
+func (b *Buffer) State() BufferState {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return BufferState{Instance: b.instance, Epoch: b.epoch, Ranges: b.ranges()}
+}
+
+// Containing returns the one contiguous range that holds at, if there is one.
+func (s BufferState) Containing(at time.Duration) (Range, bool) {
+	for _, span := range s.Ranges {
+		if span.Start <= at && at < span.End {
+			return span, true
+		}
+	}
+	return Range{}, false
+}
+
 // A gap ends one range and starts the next, so a caller never mistakes the
 // window for one unbroken stretch.
 func (b *Buffer) Ranges() []Range {

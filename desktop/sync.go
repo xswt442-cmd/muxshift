@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/xswt442-cmd/muxshift/core"
+	"github.com/xswt442-cmd/muxshift/core/dvr"
 )
 
 // syncState is the shared event clock and the per-track offsets that map it to
@@ -32,12 +33,42 @@ type syncState struct {
 	// set the first time a synchronised command runs and is not derived from
 	// the scene again, so changing what is shown cannot change who pauses.
 	group core.SyncGroupID
+	// origins records where each track's offset came from. A replay decision
+	// has to say whether an offset was established or merely defaulted, and
+	// the timeline stores the number without its provenance.
+	origins map[core.TrackID]dvr.Basis
 }
 
 // newSyncState starts paused at the origin with no track aligned, which is what
 // Core's zero values mean.
 func newSyncState() *syncState {
-	return &syncState{timeline: core.NewTimeline(), playhead: core.NewPlayhead()}
+	return &syncState{
+		timeline: core.NewTimeline(),
+		playhead: core.NewPlayhead(),
+		origins:  make(map[core.TrackID]dvr.Basis),
+	}
+}
+
+// place records where a track's offset came from. Replacing an offset replaces
+// its origin too, so a number left over from an earlier calibration cannot
+// borrow the authority of a later measurement.
+func (s *syncState) place(track core.TrackID, basis dvr.Basis) {
+	if s == nil || track == "" {
+		return
+	}
+	if s.origins == nil {
+		s.origins = make(map[core.TrackID]dvr.Basis)
+	}
+	s.origins[track] = basis
+}
+
+// originOf returns the recorded origin of a track's offset.
+func (s *syncState) originOf(track core.TrackID) (dvr.Basis, bool) {
+	if s == nil {
+		return dvr.BasisNone, false
+	}
+	basis, ok := s.origins[track]
+	return basis, ok && basis != dvr.BasisNone
 }
 
 // replaySource is one source's replay buffer, paired with the index of its item
@@ -339,6 +370,7 @@ func (a *appState) anchor(index int) error {
 		if err := a.sync.timeline.SetShift(track, 0); err != nil {
 			return err
 		}
+		a.sync.place(track, dvr.BasisSharedStart)
 	}
 	a.apply()
 	return nil
@@ -441,6 +473,10 @@ func (a *appState) nudge(index int, delta time.Duration) (string, error) {
 		if _, err := a.sync.timeline.AdjustShift(other, delta); err != nil {
 			return "", err
 		}
+	}
+	// Both tracks of one player moved together, so they share one origin.
+	for _, other := range []core.TrackID{it.video, it.audio} {
+		a.sync.place(other, dvr.BasisManual)
 	}
 
 	outcome := seekAndMeasure(it.player, target)

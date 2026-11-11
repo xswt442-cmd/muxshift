@@ -38,7 +38,9 @@ func fixtureBufferOptions(t *testing.T, opts dvr.Options) (*dvr.Buffer, func(seq
 	t.Cleanup(server.Close)
 	opts.Dir = t.TempDir()
 	opts.RecordingsDir = t.TempDir()
-	opts.Source = "fixture"
+	if opts.Source == "" {
+		opts.Source = "fixture"
+	}
 	buffer, err := dvr.New(opts)
 	if err != nil {
 		t.Fatalf("new buffer: %v", err)

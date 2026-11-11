@@ -278,3 +278,31 @@ func TestPlanSeekRefusesMidJoinWindowsThatOnlyLookAligned(t *testing.T) {
 		t.Errorf("err = %v, want it to name the window", err)
 	}
 }
+
+func TestPlanSeekRefusesAnAnchorForAnotherSource(t *testing.T) {
+	source := seekSource("source-1", 1, "buf-a", 1466667*time.Microsecond, 0, 30*time.Second)
+	// The numbers were measured on another source's buffer clock.
+	source.Anchor.Source = "source-2"
+
+	_, err := PlanSeek(6*time.Second, []SeekSource{source})
+	if !errors.Is(err, ErrNotAuthorized) {
+		t.Fatalf("err = %v, want ErrNotAuthorized", err)
+	}
+	if !strings.Contains(err.Error(), "source-2") || !strings.Contains(err.Error(), "source-1") {
+		t.Errorf("err = %v, want it to name both sources", err)
+	}
+}
+
+func TestPlanSeekRefusesARangeFromAnotherEpoch(t *testing.T) {
+	source := seekSource("source-1", 1, "buf-a", 1466667*time.Microsecond, 0, 30*time.Second)
+	// The stretch of media was taken in epoch 2, but the buffer is in epoch 1.
+	source.Range.Epoch = 2
+
+	_, err := PlanSeek(6*time.Second, []SeekSource{source})
+	if !errors.Is(err, ErrNotAuthorized) {
+		t.Fatalf("err = %v, want ErrNotAuthorized", err)
+	}
+	if !strings.Contains(err.Error(), "epoch") {
+		t.Errorf("err = %v, want it to name the epoch", err)
+	}
+}

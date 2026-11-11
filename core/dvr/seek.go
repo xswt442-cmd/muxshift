@@ -203,13 +203,25 @@ func planHop(event time.Duration, source SeekSource) (SeekHop, error) {
 	}, nil
 }
 
-// sameClock checks that the anchor and the recording describe the same buffer,
-// the same epoch and the same source. Any of the three moving means the
-// numbers were measured in a different clock and must not be mixed.
+// sameClock checks that the anchor, the range and the recording all describe
+// the same buffer, the same epoch and the same source. Any of them moving means
+// the numbers were measured in a different clock and must not be mixed. The
+// anchor's own source is checked too: its interval alone can cover the same
+// numbers while having been measured somewhere else.
 func sameClock(source SeekSource) error {
 	recording := source.Recording
 	if recording.Source != source.Source {
 		return fmt.Errorf("the recording belongs to %s, not to %s", recording.Source, source.Source)
+	}
+	if source.Anchor.Source == "" {
+		return fmt.Errorf("the anchor names no source, so it cannot vouch for %s", source.Source)
+	}
+	if source.Anchor.Source != source.Source {
+		return fmt.Errorf("the anchor belongs to %s, not to %s", source.Anchor.Source, source.Source)
+	}
+	if source.Range.Epoch != source.Epoch {
+		return fmt.Errorf("the range was taken in epoch %d, but the buffer is in epoch %d",
+			source.Range.Epoch, source.Epoch)
 	}
 	if source.Anchor.Epoch != source.Epoch {
 		return fmt.Errorf("the anchor was measured in epoch %d, but the buffer is in epoch %d",

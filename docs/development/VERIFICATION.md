@@ -52,5 +52,5 @@ Scenario captures, logs and notes live in the Git-ignored `testplace/` directory
 ## 5. Known gaps in coverage
 
 - CI runs both modules' checks (`go vet`, `go build` and `go test` at the root and inside `desktop/`, on Ubuntu and Windows); no scenario runs there, because they need a window and media that CI does not have.
-- No test covers a session open for hours, or a second source opened while another one is being switched (P16.5 notes it for a later phase).
+- No test covers a session open for hours, or a second source opened while another one is being switched. Both belong to P16's own continuous-run acceptance, not to the P16.5 hygiene phase, which only recorded the gap.
 - Windows is the only platform with real-window evidence; the other platforms are covered by package tests only.

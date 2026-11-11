@@ -101,6 +101,21 @@ Conversion and refusal:
 - Two files with the same content but different container timestamps convert to the same event time (measured: two sources four seconds apart in the container both put content 6s at event 6s). That shift stays in the file-position conversion and never becomes a track offset; giving the second source a four-second `TrackOffset` would falsify what a track offset means in the product.
 - A shared window is a candidate intersection: it lies in content time, but `Position()` settling still does not mean the target frame is on screen (steady playback lags by a bounded 35ms in an MP4 and about 720ms in a TS recording), so it only becomes a seekable range under P16.4's authorization contract.
 
+### The replay authorisation contract (P16.4a)
+
+`PlanSeek` in `core/dvr` turns one replay request into an immutable `SeekPlan`: the target event time, the recording and file position each source would have to open, and the identities the decision was made from (source, buffer instance, epoch, recording id). It only decides — it opens no player, changes no scene and moves no lease — so it is provable with unit tests alone.
+
+Every condition is checked separately, and any failure returns an error wrapping `ErrNotAuthorized` that names the source and the condition:
+
+- An offset must state **where it came from** (`Alignment{Basis}`); `measured`, `manual` and `shared-start` count as confirmed, while an empty basis does not, not even for a zero offset — two buffers that joined a live stream at different moments both report `ContentTime=0s`, and equal numbers are not evidence of the same frame.
+- `event + offset` must not overflow, and the content time must not be negative.
+- The target must lie inside the **one contiguous range** the buffer holds; a gap, a skipped segment or an evicted range is refused rather than clamped.
+- The anchor must be measured, name the recording's source, the same buffer instance and the same epoch, and state an interval covering the time.
+- The recording must really cover the target content time (`[StartBufferTime, EndBufferTime)`, the right edge being half-open).
+- The file position is content time minus `StartBufferTime`, so a file cut mid-buffer starts at 0 instead of at the requested time.
+
+`SeekPlan.Matches` compares again before anything is opened: a rebuilt buffer, a moved epoch, another recording or a withdrawn offset makes the old decision stale, and the answer says which source changed instead of reusing it. This layer only answers "where may we logically go"; whether a position settles, and whether the target frame is on screen, belong to P16.4b/c and are not pretended here.
+
 ## Web client
 
 `web/` is one Go package (`package main`) plus three static files. A single process serves the embedded page, exposes one Core session as JSON to that page, and serves the test media under `/media/`. It binds a loopback address only (`-addr` is refused unless it is loopback) and prints an address carrying a token at startup. The token appears once in that bootstrap address, becomes an HttpOnly `SameSite=Strict` cookie, and the page strips it from the address bar; the native host sends it as `X-MuxShift-Token`. `/api/` and `/media/` both require it. A request that changes state must also pass two checks: the body must be JSON, which a plain HTML form cannot send, and `Origin`, when present, must equal the request host, so another page cannot drive the session with the cookie the browser holds. Every request must name a loopback `Host`, so a name that resolves to this machine still cannot reach the session. Responses carry no CORS header. Media is opened through `os.OpenRoot`, so `..`, a symbolic link, or a junction inside `-media-root` cannot escape it, and a scene change applies in full or is rejected in full, leaving the previous scene untouched when a volume is invalid.

@@ -281,6 +281,14 @@ func (r *dvrRunner) bufferAnchor(window dvr.Range) (dvr.Anchor, error) {
 		return dvr.Anchor{}, fmt.Errorf("the window starts at %s, before the measured segment at %s",
 			window.Start, anchor.Interval.Start)
 	}
+	// The anchor says which buffer time the media clock was measured at, not
+	// that the buffer holds one unbroken stretch from there onwards. A skipped
+	// segment inside the same epoch ends the range without moving the epoch, so
+	// extending the interval over it would claim media the buffer never stored.
+	if _, ok := r.buffer.RangeContaining(anchor.Interval.Start, window.End); !ok {
+		return dvr.Anchor{}, fmt.Errorf("the window %s..%s is not in the same continuous range as the segment measured at %s; a gap or a skipped segment separates them",
+			window.Start, window.End, anchor.Interval.Start)
+	}
 	if window.End > anchor.Interval.End {
 		anchor.Interval.End = window.End
 	}

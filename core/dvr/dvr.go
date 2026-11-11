@@ -473,6 +473,27 @@ func (b *Buffer) Available() (Range, bool) {
 	return ranges[len(ranges)-1], true
 }
 
+// RangeContaining reports the one contiguous range that holds every buffer time
+// in [from, to). It answers a different question than Ranges does: Ranges lists
+// what is stored, while this says whether a stretch a caller is about to use is
+// in one piece. A gap, a skipped segment or a discontinuity splits the stored
+// media, and a caller that extrapolates across that split would claim replayable
+// time the buffer cannot produce. Both readings happen under one lock, so a
+// caller cannot validate a window against ranges that moved in between.
+func (b *Buffer) RangeContaining(from, to time.Duration) (Range, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if to <= from {
+		return Range{}, false
+	}
+	for _, span := range b.ranges() {
+		if span.Start <= from && to <= span.End {
+			return span, true
+		}
+	}
+	return Range{}, false
+}
+
 // ClockPoint is the oldest stored segment together with the clock identity it
 // belongs to. Measuring a segment and naming its epoch are two readings of the
 // same state, so a caller that wants both has to take them under one lock: a

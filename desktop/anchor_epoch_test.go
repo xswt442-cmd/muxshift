@@ -191,6 +191,101 @@ func TestFailedAnchorRetriesAfterNextSegmentInSameEpoch(t *testing.T) {
 	}
 }
 
+// TestFailedAnchorFallsBackToTheNewestSegment runs the other half of the retry
+// policy: after the same segment fails twice, the runner stops insisting on it
+// and measures what the buffer has, because the older media may simply be
+// unreadable. The replacement anchor starts where that segment started, so every
+// window before it has to be refused instead of extrapolated backwards.
+func TestFailedAnchorFallsBackToTheNewestSegment(t *testing.T) {
+	buffer, add := fixtureBuffer(t)
+	original := probeFirstMediaTime
+	t.Cleanup(func() { probeFirstMediaTime = original })
+	probeFirstMediaTime = func(ctx context.Context, path string) (time.Duration, error) {
+		if strings.HasSuffix(path, "seg-00000003.ts") {
+			return 100 * time.Second, nil
+		}
+		return 0, errors.New("ffprobe could not read the segment")
+	}
+
+	runner := &dvrRunner{buffer: buffer, source: "fixture"}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	runner.refreshAnchor()
+	if _, err := runner.waitAnchor(ctx); err == nil {
+		t.Fatal("the first measurement reported no error, want the probe's")
+	}
+	add(2, false)
+	runner.refreshAnchor()
+	if _, err := runner.waitAnchor(ctx); err == nil {
+		t.Fatal("the retry reported no error, want the probe's")
+	}
+
+	// Third attempt: the first segment could not be read twice, so the newest
+	// segment becomes the measurement point.
+	add(3, false)
+	runner.refreshAnchor()
+	anchor, err := runner.waitAnchor(ctx)
+	if err != nil {
+		t.Fatalf("falling back to the newest segment: %v", err)
+	}
+	if anchor.BufferStart != 4*time.Second {
+		t.Fatalf("the replacement anchor starts at buffer %s, want the newest segment's 4s", anchor.BufferStart)
+	}
+	if anchor.MediaStart != 100*time.Second {
+		t.Fatalf("the replacement anchor measured %s, want 100s", anchor.MediaStart)
+	}
+	if got, err := runner.bufferAnchor(dvr.Range{Start: 0, End: 4 * time.Second}); err == nil {
+		t.Fatalf("a window before the replacement anchor was authorised: %+v", got)
+	}
+	if _, err := runner.bufferAnchor(dvr.Range{Start: 4 * time.Second, End: 6 * time.Second}); err != nil {
+		t.Fatalf("a window at the replacement anchor: %v", err)
+	}
+}
+
+// TestBufferAnchorRefusesAWindowAcrossASkippedSegment is the same-epoch hazard:
+// the playlist skips segments, the buffer splits into two ranges, and the epoch
+// does not move. A window that reaches across the hole can only be authorised if
+// one continuous range holds all of it, which is exactly what the split denies.
+func TestBufferAnchorRefusesAWindowAcrossASkippedSegment(t *testing.T) {
+	buffer, add := fixtureBuffer(t)
+	// Segment 1 fills 0s..2s; segment 4 skips 2 and 3, which ends that range and
+	// starts the next one where the skipped media would have been.
+	add(4, false)
+	ranges := buffer.Ranges()
+	if len(ranges) != 2 {
+		t.Fatalf("ranges = %v, want two after the skipped segments", ranges)
+	}
+	stubProbe(t, 50*time.Second, nil)
+
+	runner := &dvrRunner{buffer: buffer, source: "fixture"}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	// The measurement follows the buffer's current range, so the anchor belongs
+	// to the media after the skipped segment.
+	anchor, err := runner.waitBufferAnchor(ctx, dvr.Range{Start: 2 * time.Second, End: 4 * time.Second})
+	if err != nil {
+		t.Fatalf("the current range: %v", err)
+	}
+	if anchor.BufferStart != 2*time.Second {
+		t.Fatalf("the anchor starts at buffer %s, want the current range's 2s", anchor.BufferStart)
+	}
+
+	// Nothing measured before the gap can explain the hole, so a window that
+	// spans it is refused rather than extended over it.
+	crossed, err := runner.bufferAnchor(dvr.Range{Start: 0, End: 4 * time.Second})
+	if err == nil {
+		t.Fatalf("a window across the skipped segments was authorised: %+v", crossed)
+	}
+	if !strings.Contains(err.Error(), "before the measured segment") &&
+		!strings.Contains(err.Error(), "continuous range") {
+		t.Fatalf("the refusal reads %q, want it to point at the range", err)
+	}
+	if anchor, err := runner.bufferAnchor(dvr.Range{Start: 2 * time.Second, End: 4 * time.Second}); err != nil {
+		t.Fatalf("a window inside the measured range: %v (anchor %+v)", err, anchor)
+	}
+}
+
 // TestCurrentSegmentFollowsTheClock guards the choice of measurement point: after
 // a jump the oldest segment is old media, so the buffer has to offer the first
 // segment of the range it is filling now.
@@ -236,11 +331,11 @@ func TestBufferAnchorDoesNotWaitForTheMeasurement(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	anchor, err := runner.waitBufferAnchor(ctx, dvr.Range{Start: 0, End: 12 * time.Second})
+	anchor, err := runner.waitBufferAnchor(ctx, dvr.Range{Start: 0, End: 2 * time.Second})
 	if err != nil {
 		t.Fatalf("waiting for the measurement: %v", err)
 	}
-	if anchor.MediaStart != 100*time.Second || anchor.Interval.End != 12*time.Second {
+	if anchor.MediaStart != 100*time.Second || anchor.Interval.End != 2*time.Second {
 		t.Fatalf("the anchor measures %s and covers to %s", anchor.MediaStart, anchor.Interval.End)
 	}
 }

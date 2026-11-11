@@ -201,20 +201,27 @@ func TestBufferAnchorWidensOnlyForward(t *testing.T) {
 		t.Fatalf("waiting for the measurement: %v", err)
 	}
 
-	// A window starting at the measured segment is explained, and the interval
-	// widens to cover it: buffer time moves with media time within one epoch.
-	got, err := runner.bufferAnchor(dvr.Range{Start: 0, End: 12 * time.Second})
+	// A window inside the measured range is explained as it stands: the interval
+	// already covers the media the buffer holds.
+	got, err := runner.bufferAnchor(dvr.Range{Start: 0, End: 2 * time.Second})
 	if err != nil {
 		t.Fatalf("a window at the measured segment was refused: %v", err)
 	}
-	if got.Interval.End != 12*time.Second {
-		t.Fatalf("the returned interval ends at %s, not at the window's %s", got.Interval.End, 12*time.Second)
+	if got.Interval.Start != 0 || got.Interval.End != 2*time.Second {
+		t.Fatalf("the returned interval is %s..%s, want the stored 0s..2s", got.Interval.Start, got.Interval.End)
 	}
 
 	// A window that starts before it cannot be blamed on the measurement.
-	if _, err := runner.bufferAnchor(dvr.Range{Start: -time.Second, End: 9 * time.Second}); err == nil ||
+	if _, err := runner.bufferAnchor(dvr.Range{Start: -time.Second, End: 2 * time.Second}); err == nil ||
 		!strings.Contains(err.Error(), "before the measured segment") {
 		t.Fatalf("a window before the measured segment reports %v, want a refusal", err)
+	}
+
+	// A window that reaches past what the buffer stored has no media behind it,
+	// even in the same epoch, so it is refused rather than extended.
+	if _, err := runner.bufferAnchor(dvr.Range{Start: 0, End: 12 * time.Second}); err == nil ||
+		!strings.Contains(err.Error(), "continuous range") {
+		t.Fatalf("a window past the stored media reports %v, want a refusal", err)
 	}
 }
 

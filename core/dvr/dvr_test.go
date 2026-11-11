@@ -355,6 +355,48 @@ func TestJoinStartsAtTheAskedSegment(t *testing.T) {
 	}
 }
 
+// TestRangeContainingRefusesAStretchAcrossASkippedSegment checks the question a
+// caller asks before extending an anchor: is all of this window in one piece of
+// stored media? A skipped segment splits the buffer, so the stretch spanning the
+// split has no single range that holds it.
+func TestRangeContainingRefusesAStretchAcrossASkippedSegment(t *testing.T) {
+	server := vodServer(t)
+	buffer, err := New(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("new buffer: %v", err)
+	}
+	t.Cleanup(func() { _ = buffer.Close() })
+	info := readPlaylist(t, server.URL+"/vod/index.m3u8")
+	if len(info.Segments) < 2 {
+		t.Fatalf("the fixture playlist has %d segments, want at least two", len(info.Segments))
+	}
+
+	if _, err := buffer.Add(context.Background(), server.Client(), info.Segments[0]); err != nil {
+		t.Fatalf("add the first segment: %v", err)
+	}
+	skipped := info.Segments[1]
+	skipped.Sequence = 4 // segments 2 and 3 never arrive
+	if _, err := buffer.Add(context.Background(), server.Client(), skipped); err != nil {
+		t.Fatalf("add the segment after the skip: %v", err)
+	}
+	if ranges := buffer.Ranges(); len(ranges) != 2 {
+		t.Fatalf("ranges = %v, want two", ranges)
+	}
+
+	if span, ok := buffer.RangeContaining(0, 2*time.Second); !ok || span.Start != 0 || span.End != 2*time.Second {
+		t.Fatalf("the stored range itself = %v, %v", span, ok)
+	}
+	if span, ok := buffer.RangeContaining(0, 3*time.Second); ok {
+		t.Fatalf("a stretch across the skipped segment was reported as one range: %v", span)
+	}
+	if _, ok := buffer.RangeContaining(2*time.Second, 4*time.Second); !ok {
+		t.Fatal("the range after the skip is not reported")
+	}
+	if _, ok := buffer.RangeContaining(4*time.Second, 4*time.Second); ok {
+		t.Fatal("an empty stretch was reported as a range")
+	}
+}
+
 func TestBufferIdentityAndEpoch(t *testing.T) {
 	first, server, info := recBuffer(t, "source-3")
 	second, err := New(Options{Dir: t.TempDir(), Source: "source-3"})

@@ -134,6 +134,9 @@ type appState struct {
 	seek    *seekTxn
 	seekMu  sync.Mutex
 	settled []seekLanding
+	// seekStart serialises the decision to start a transaction, so two requests
+	// that arrive together cannot both find the field empty and both plan.
+	seekStart sync.Mutex
 	// seekMain runs the commit step where players may be touched. Tests run
 	// without a window and call the step directly.
 	seekMain func(func())

@@ -89,6 +89,9 @@ func (a *appState) startSeekTxn(items []*item, event time.Duration) error {
 	if len(items) == 0 {
 		return fmt.Errorf("no source was offered for the replay seek")
 	}
+	a.seekStart.Lock()
+	defer a.seekStart.Unlock()
+
 	a.seekMu.Lock()
 	busy := a.seek != nil
 	a.seekMu.Unlock()

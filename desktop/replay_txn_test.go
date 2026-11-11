@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -339,6 +342,111 @@ func TestSeekTxnRecordsThePositionThePlayerReported(t *testing.T) {
 	for _, it := range session.items {
 		if it.replay == nil || it.replay.StartBufferTime != 2*time.Second {
 			t.Fatalf("%s: the file start is %v, want 2s", it.source.ID, it.replay)
+		}
+	}
+}
+
+func TestStartSeekTxnRefusesASecondRequest(t *testing.T) {
+	session, _ := seekTxnFixture(t)
+	release := make(chan struct{})
+	opened := make(chan struct{}, 4)
+	inner := session.app.openSeek
+	session.app.openSeek = func(recording dvr.Recording) (desktopPlayer, error) {
+		opened <- struct{}{}
+		<-release
+		return inner(recording)
+	}
+
+	if err := session.app.startSeekTxn(session.items, 6*time.Second); err != nil {
+		t.Fatalf("the first transaction did not start: %v", err)
+	}
+	<-opened // the first one is inside its preparation
+	err := session.app.startSeekTxn(session.items, 6*time.Second)
+	if err == nil {
+		t.Fatal("a second transaction started while the first was still preparing")
+	}
+	if !strings.Contains(err.Error(), "already being prepared") {
+		t.Fatalf("the refusal did not explain itself: %v", err)
+	}
+	close(release)
+	waitSeekTxn(t, session.app)
+}
+
+// Two requests that arrive together must not both find the transaction field
+// empty and both plan; the start decision is serialised.
+func TestStartSeekTxnHandlesRequestsThatArriveTogether(t *testing.T) {
+	session, _ := seekTxnFixture(t)
+	release := make(chan struct{})
+	opened := make(chan struct{}, 8)
+	inner := session.app.openSeek
+	session.app.openSeek = func(recording dvr.Recording) (desktopPlayer, error) {
+		opened <- struct{}{}
+		<-release
+		return inner(recording)
+	}
+
+	var started, refused atomic.Int32
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := session.app.startSeekTxn(session.items, 6*time.Second); err != nil {
+				refused.Add(1)
+				return
+			}
+			started.Add(1)
+		}()
+	}
+	<-opened
+	close(release)
+	wg.Wait()
+	if started.Load() != 1 {
+		t.Fatalf("%d transactions started, want exactly one", started.Load())
+	}
+	if refused.Load() != 3 {
+		t.Fatalf("%d requests were refused, want three", refused.Load())
+	}
+	waitSeekTxn(t, session.app)
+}
+
+// A runner replaced between the plan and the commit is a different buffer
+// underneath the same item; the commit must refuse and change nothing.
+func TestSeekTxnRefusesWhenTheRunnerIsReplacedBeforeTheCommit(t *testing.T) {
+	session, opened := seekTxnFixture(t)
+	before := make([]*dvr.Recording, len(session.items))
+	beforePlayers := make([]desktopPlayer, len(session.items))
+	for i, it := range session.items {
+		before[i] = it.replay
+		beforePlayers[i] = it.player
+	}
+	// The buffer is created outside the hook: the hook runs on the transaction's
+	// goroutine, where t.Fatalf would end that goroutine without failing the test.
+	second, err := dvr.New(dvr.Options{Dir: t.TempDir(), Source: session.items[0].source.ID})
+	if err != nil {
+		t.Fatalf("a second buffer: %v", err)
+	}
+	session.app.beforeSeekCommit = func() {
+		session.app.runners[0].runner = &dvrRunner{source: session.items[0].source.ID, buffer: second}
+	}
+
+	if err := session.app.startSeekTxn(session.items, 6*time.Second); err != nil {
+		t.Fatalf("the transaction did not start: %v", err)
+	}
+	waitSeekTxn(t, session.app)
+	for i, it := range session.items {
+		if it.replay != before[i] {
+			t.Fatalf("source %d: its recording changed although the runner was replaced", i+1)
+		}
+		if it.player != beforePlayers[i] {
+			t.Fatalf("source %d: its player changed although the runner was replaced", i+1)
+		}
+	}
+	// openPlayers counts through the window, which a unit test does not have;
+	// the players the transaction opened are all this test needs to look at.
+	for _, player := range *opened {
+		if !player.closed {
+			t.Fatalf("%s is still open after the refusal", player.name)
 		}
 	}
 }

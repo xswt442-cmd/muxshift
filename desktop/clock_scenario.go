@@ -52,7 +52,7 @@ func clockBody(window *mygo.Window, a *appState, dir, scenario string) {
 	it, err := a.at(0)
 	if err != nil {
 		logf(scenario, "%v", err)
-		finishClock(a)
+		finishScenario(a)
 		return
 	}
 	opened := time.Now()
@@ -64,7 +64,7 @@ func clockBody(window *mygo.Window, a *appState, dir, scenario string) {
 		if time.Since(opened) > 30*time.Second {
 			logf(scenario, "the player never became ready")
 			check(false, "the player never became ready")
-			finishClock(a)
+			finishScenario(a)
 			return
 		}
 		time.Sleep(150 * time.Millisecond)
@@ -99,7 +99,7 @@ func clockBody(window *mygo.Window, a *appState, dir, scenario string) {
 		logf(scenario, "reverse seek %d: asked for %s, player reported %s", index+1, sceneClock(target), sceneClock(position))
 	}
 	logf(scenario, "checks failed: %d", failures)
-	finishClock(a)
+	finishScenario(a)
 }
 
 // insideFile keeps a sample away from the very end of a file.
@@ -187,7 +187,7 @@ func stableCapture(window *mygo.Window, a *appState, it *item, dir, name, scenar
 	return before, after, ready, buffering, 12
 }
 
-func finishClock(a *appState) {
+func finishScenario(a *appState) {
 	mygoRunOnMain(func() {
 		a.release()
 		mygo.App.Quit()

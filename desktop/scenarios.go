@@ -58,4 +58,5 @@ var scenarios = map[string]scenario{
 	"midjoin":          runMidJoin,
 	"frames":           runFrames,
 	"clock":            runClock,
+	"playthrough":      runPlayThrough,
 }

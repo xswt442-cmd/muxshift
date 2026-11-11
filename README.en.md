@@ -34,7 +34,10 @@ Go 1.27 or newer.
 
 ```sh
 go test ./...
+cd desktop && go test ./...
 ```
+
+What each check covers, and what only runs in a real window, is in the [verification index](docs/development/VERIFICATION.md).
 
 Desktop (Windows, opens a real window):
 

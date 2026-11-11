@@ -34,7 +34,10 @@
 
 ```sh
 go test ./...
+cd desktop && go test ./...
 ```
+
+哪些检查覆盖了什么、哪些只能在真窗口里跑，见[验证索引](docs/development/VERIFICATION.md)。
 
 桌面端（Windows，会打开真实窗口）：
 

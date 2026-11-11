@@ -17,6 +17,6 @@ Read this file and any nearer module-specific `AGENTS.md` before changing code. 
 - Document only behavior and constraints that actually exist. Keep `README.md` and `README.en.md` consistent; pair detailed Chinese/English development guides when maintained.
 - Keep tracked files portable: no personal absolute paths, local service addresses, private keys, logs, temporary investigations, or per-task notes.
 - Put local drafts, experiments, handoffs, and non-product agent notes in the Git-ignored `testplace/` directory.
-- Run `go test ./...` for Go source changes. Run client-specific checks only after the corresponding clients and scripts exist; report tests not run or unavailable accurately.
+- Run `go test ./...` for Go source changes. `desktop/` is a separate Go module, so run `go test ./...` inside it too; what each check covers is in [the verification index](docs/development/VERIFICATION.md). Run client-specific checks only after the corresponding clients and scripts exist; report tests not run or unavailable accurately.
 - Daily work belongs on `dev`; `main` is updated only through reviewed PRs. Follow `.github/REVIEW_POLICY.md` for phase pushes, the combined three-request limit for manual bot reviews per PR, and rate-limit handling.
 - Do not commit, push, switch branches, reset, restore, publish, or alter remote Git state without explicit authorization. A scoped phase task may authorize focused commits and one push per completed phase; it does not authorize a PR merge or deployment.

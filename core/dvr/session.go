@@ -466,14 +466,19 @@ func readMarker(path string) (marker, error) {
 
 // confirmOwnDirectory reports why a directory with a session name is not the
 // directory it claims to be. Links and junctions are resolved and the result
-// must be the same name: a session directory that points somewhere else is not
-// this package's to delete.
+// must sit in the same parent under the same name: a session directory that
+// points somewhere else is not this package's to delete.
 func confirmOwnDirectory(dir string) string {
 	resolved, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		return "the entry cannot be resolved: " + err.Error()
 	}
-	if !samePath(resolved, dir) {
+	// The two spellings are compared through their 8.3 form: on Windows a
+	// temporary directory can arrive as RUNNER~1 while resolution answers with
+	// runneradmin, and comparing the strings would call an ordinary directory a
+	// link. A junction or symlink still fails, because its short form names the
+	// place it leads to rather than itself.
+	if !samePath(shortForm(dir), shortForm(resolved)) {
 		return "the entry resolves to " + resolved + ", so it is not the directory it claims to be"
 	}
 	return ""

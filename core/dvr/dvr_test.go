@@ -447,3 +447,40 @@ func TestBufferIdentityAndEpoch(t *testing.T) {
 		t.Fatalf("a recording of the range after the jump has epoch %d, want 2", newer.SourceMediaEpoch)
 	}
 }
+
+func TestOldestSegmentKeepsItsOwnEpoch(t *testing.T) {
+	buffer, server, info := recBuffer(t, "source-4")
+	jump := info.Segments[len(info.Segments)-1]
+	jump.Discontinuity = true
+	if _, err := buffer.Add(context.Background(), server.Client(), jump); err != nil {
+		t.Fatalf("add segment after the jump: %v", err)
+	}
+	if got := buffer.Epoch(); got != 2 {
+		t.Fatalf("epoch after the jump = %d, want 2", got)
+	}
+
+	// The oldest segment is still media of the first clock, so the identity it
+	// is reported with has to be that clock even though the buffer has moved on.
+	point, err := buffer.OldestSegment()
+	if err != nil {
+		t.Fatalf("oldest segment: %v", err)
+	}
+	if point.Epoch != 1 {
+		t.Fatalf("the oldest segment was stored in epoch %d, want 1", point.Epoch)
+	}
+	if point.BufferInstance != buffer.Instance() {
+		t.Fatalf("the point names buffer %q, want %q", point.BufferInstance, buffer.Instance())
+	}
+	if point.Segment.Start != 0 {
+		t.Fatalf("the oldest segment starts at %s, want 0s", point.Segment.Start)
+	}
+
+	empty, err := New(Options{Dir: t.TempDir(), Source: "source-4"})
+	if err != nil {
+		t.Fatalf("new empty buffer: %v", err)
+	}
+	t.Cleanup(func() { _ = empty.Close() })
+	if _, err := empty.OldestSegment(); !errors.Is(err, ErrNoRange) {
+		t.Fatalf("an empty buffer reports %v, want ErrNoRange", err)
+	}
+}

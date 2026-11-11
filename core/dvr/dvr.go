@@ -473,6 +473,29 @@ func (b *Buffer) Available() (Range, bool) {
 	return ranges[len(ranges)-1], true
 }
 
+// ClockPoint is the oldest stored segment together with the clock identity it
+// belongs to. Measuring a segment and naming its epoch are two readings of the
+// same state, so a caller that wants both has to take them under one lock: a
+// discontinuity between the two reads would pair a segment with an epoch that
+// arrived after it.
+type ClockPoint struct {
+	Segment Segment
+	// Epoch is the media-clock epoch the segment belongs to.
+	Epoch uint64
+	// BufferInstance is the buffer that stored the segment.
+	BufferInstance string
+}
+
+// OldestSegment returns the oldest stored segment and the clock it belongs to.
+func (b *Buffer) OldestSegment() (ClockPoint, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, segment := range b.segments {
+		return ClockPoint{Segment: segment, Epoch: segment.epoch, BufferInstance: b.instance}, nil
+	}
+	return ClockPoint{}, fmt.Errorf("%w: the buffer holds no segment", ErrNoRange)
+}
+
 // Locate returns the stored segment whose media time contains at, so a replay
 // can start at the segment boundary at or before it.
 func (b *Buffer) Locate(at time.Duration) (Segment, error) {

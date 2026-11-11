@@ -25,7 +25,10 @@ import (
 // probeFirstMediaTime reports the media time of a file's first frame by asking
 // ffprobe for the stream's start time. Video wins when the file has both, because
 // that is the track whose picture a viewer compares against.
-func probeFirstMediaTime(ctx context.Context, path string) (time.Duration, error) {
+// probeFirstMediaTime is a variable so a test can hold the measurement open
+// while the buffer moves on, which is exactly what the epoch check has to
+// survive.
+var probeFirstMediaTime = func(ctx context.Context, path string) (time.Duration, error) {
 	ffprobe, err := exec.LookPath("ffprobe")
 	if err != nil {
 		return 0, fmt.Errorf("ffprobe is not on PATH: %w", err)
@@ -110,14 +113,19 @@ func (r *dvrRunner) startAnchorMeasurement() {
 	})
 }
 
-// measureAnchor reads the buffer's first stored segment and measures the pair
+// measureAnchor reads the buffer's oldest stored segment and measures the pair
 // that ties the buffer's clock to the source's media clock there.
+//
+// The segment and the clock identity are taken under one lock, before the
+// measurement runs: ffprobe can take a second, and a discontinuity arriving in
+// the meantime would otherwise have the anchor name an epoch that its segment
+// does not belong to.
 func (r *dvrRunner) measureAnchor() (*dvr.Anchor, error) {
-	ranges := r.buffer.Ranges()
-	if len(ranges) == 0 || len(ranges[0].Segments) == 0 {
-		return nil, fmt.Errorf("the buffer holds no segment to measure")
+	point, err := r.buffer.OldestSegment()
+	if err != nil {
+		return nil, err
 	}
-	first := ranges[0].Segments[0]
+	first := point.Segment
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	media, err := probeFirstMediaTime(ctx, first.Path)
@@ -126,8 +134,8 @@ func (r *dvrRunner) measureAnchor() (*dvr.Anchor, error) {
 	}
 	return &dvr.Anchor{
 		Source:         r.source,
-		Epoch:          r.buffer.Epoch(),
-		BufferInstance: r.buffer.Instance(),
+		Epoch:          point.Epoch,
+		BufferInstance: point.BufferInstance,
 		BufferStart:    first.Start,
 		MediaStart:     media,
 		Interval:       dvr.Range{Start: first.Start, End: first.End},

@@ -76,6 +76,9 @@ type seekTxn struct {
 	// noticeOnce keeps one account per transaction: the first ending wins, and
 	// a later abort of the same transaction cannot rewrite it.
 	noticeOnce sync.Once
+	// stopped is set by abortSeekTxn. A drawing-thread step that was posted
+	// before the stop still runs after it, and must then do nothing.
+	stopped bool
 
 	steps []*seekTxnStep
 
@@ -426,7 +429,20 @@ func (a *appState) awaitSeekTxn(txn *seekTxn, timeout time.Duration) bool {
 	}
 }
 
+// seekStepAllowed reports whether a posted drawing-thread step may still act.
+// It is not the same question as ownership: the commit asks who owns the
+// session, while a seek step only cares whether the transaction it belongs to
+// has been stopped and its players given back.
+func (a *appState) seekStepAllowed(txn *seekTxn) bool {
+	a.seekMu.Lock()
+	defer a.seekMu.Unlock()
+	return !txn.stopped
+}
+
 func (a *appState) abortSeekTxn(txn *seekTxn, why string) {
+	a.seekMu.Lock()
+	txn.stopped = true
+	a.seekMu.Unlock()
 	if txn.cancel != nil {
 		txn.cancel()
 	}
@@ -535,6 +551,9 @@ func (a *appState) settleSeekTxn(txn *seekTxn) error {
 		target := step.offset
 		player := step.player
 		if !a.seekOnMain(func() {
+			if !a.seekStepAllowed(txn) {
+				return
+			}
 			step.wasPlaying = player.Playing()
 			player.Pause()
 			player.Seek(target)
@@ -578,6 +597,9 @@ func (a *appState) settleSeekTxn(txn *seekTxn) error {
 					logf("seek", "%s did not take the first request; asking again (%d/%d)",
 						a.name(step.item), attempts[i], settleAttempts)
 					if !a.seekOnMain(func() {
+						if !a.seekStepAllowed(txn) {
+							return
+						}
 						step.player.Pause()
 						step.player.Seek(step.offset)
 					}) {
@@ -602,7 +624,12 @@ func (a *appState) settleSeekTxn(txn *seekTxn) error {
 					continue
 				}
 				player := step.player
-				if !a.seekOnMain(func() { player.Play() }) {
+				if !a.seekOnMain(func() {
+					if !a.seekStepAllowed(txn) {
+						return
+					}
+					player.Play()
+				}) {
 					logf("seek", "%s was not played again: the session did not run the step within %s",
 						a.name(step.item), seekDispatchWait)
 				}
@@ -672,6 +699,9 @@ type seekFrame struct {
 func (a *appState) seekFrameOf(player desktopPlayer) seekFrame {
 	var frame seekFrame
 	if !a.seekOnMain(func() {
+		if player == nil {
+			return
+		}
 		frame = seekFrame{
 			position:  player.Position(),
 			ready:     player.Ready(),
@@ -728,11 +758,17 @@ func (a *appState) seekOnMain(fn func()) bool {
 			close(done)
 		})
 	}
-	if a.seekMain != nil {
-		a.seekMain(run)
-	} else {
+	// The post itself can block: mygoRunOnMain waits for the drawing thread to
+	// run the callback, and a close that is waiting for this transaction is
+	// standing on that very thread. Post from a goroutine of our own so the
+	// budget below applies to the post too, not only to the callback.
+	go func() {
+		if a.seekMain != nil {
+			a.seekMain(run)
+			return
+		}
 		mygoRunOnMain(run)
-	}
+	}()
 	select {
 	case <-done:
 		return true

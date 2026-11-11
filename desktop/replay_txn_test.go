@@ -728,9 +728,13 @@ func TestShutdownWaitsPastTheBudgetForAnOpeningPlayer(t *testing.T) {
 // the step gives up, the preparation ends, and the close can finish.
 func TestAClosedSessionDoesNotWaitForADrawingThreadItIsBlocking(t *testing.T) {
 	session, opened := seekTxnFixture(t)
+	blocked := make(chan struct{})
+	defer close(blocked)
 	session.app.seekMain = func(func()) {
-		// The drawing thread is inside the close that waits for this
-		// transaction, so nothing it posts will run while it waits.
+		// This is what mygoRunOnMain does: it waits for the drawing thread to
+		// run the callback. Here the drawing thread is inside the close that
+		// waits for this transaction, so the post itself never returns.
+		<-blocked
 	}
 	if err := session.app.startSeekTxn(session.items, 7*time.Second); err != nil {
 		t.Fatalf("the transaction did not start: %v", err)

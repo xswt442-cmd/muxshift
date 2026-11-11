@@ -15,7 +15,6 @@ package main
 
 import (
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -210,10 +209,6 @@ func (a *appState) prepareSeekTxn(txn *seekTxn) {
 	if a.beforeSeekCommit != nil {
 		a.beforeSeekCommit()
 	}
-	if err := a.revalidateSeekTxn(txn); err != nil {
-		a.abortSeekTxn(txn, err.Error())
-		return
-	}
 	a.commitSeekTxn(txn)
 }
 
@@ -275,14 +270,19 @@ func (a *appState) commitSeekTxn(txn *seekTxn) {
 		lease  *dvr.Lease
 	}
 	var previous []released
-	ok := true
+	var refusal error
+	// Everything the commit depends on is checked in the same drawing-thread
+	// step that installs the new resources. Checking source by source while
+	// installing them would leave the first source committed when the second
+	// one turns out to have moved; checking everything first and installing
+	// afterwards is what makes the commit all-or-nothing.
 	a.seekOnMain(func() {
+		if err := a.revalidateSeekTxn(txn); err != nil {
+			refusal = err
+			return
+		}
 		for _, step := range txn.steps {
 			it := step.item
-			if it.generation != step.generation {
-				ok = false
-				return
-			}
 			previous = append(previous, released{player: it.player, lease: it.replayLease})
 			recording := step.recording
 			anchor := step.anchor
@@ -294,8 +294,8 @@ func (a *appState) commitSeekTxn(txn *seekTxn) {
 			it.generation++
 		}
 	})
-	if !ok {
-		a.abortSeekTxn(txn, "the item changed while the recordings were committing")
+	if refusal != nil {
+		a.abortSeekTxn(txn, refusal.Error())
 		return
 	}
 	for _, old := range previous {
@@ -365,26 +365,21 @@ func (a *appState) seekPlayerStarted(player desktopPlayer) bool {
 	return player.Ready() && !player.Buffering()
 }
 
-// seekFrame is what a replacement player reports in one drawing-thread pass.
-type seekFrame struct {
-	position  time.Duration
-	ready     bool
-	buffering bool
-}
-
 // seekSettleTolerance is how far from the requested position a player may be
 // and still count as having arrived. It is the same tolerance the sampling
 // checks use: roughly a frame at 30fps plus the engine's own reporting step.
 const seekSettleTolerance = 40 * time.Millisecond
 
 // settleSeekTxn asks every replacement for the target position inside its own
-// file and waits until each reports it. It runs before the commit so that a
-// player which never arrives is rolled back with the rest of the transaction.
+// file and waits until each reports a position close to it. It runs before the
+// commit so that a player which never arrives is rolled back with the rest of
+// the transaction.
 //
 // What this proves is a position, not a picture: the player reports where it
 // was asked to go, and the engine has no reliable way to say that the frame at
 // that position is the one on screen. The transaction therefore records the
-// position it settled at and never claims a confirmed frame.
+// position each player actually reported, together with what was requested and
+// what is left between them, and never claims a confirmed frame.
 func (a *appState) settleSeekTxn(txn *seekTxn) error {
 	for _, step := range txn.steps {
 		target := step.offset
@@ -399,46 +394,61 @@ func (a *appState) settleSeekTxn(txn *seekTxn) error {
 	stable := 0
 	for {
 		short := ""
-		frame := seekFrame{}
-		for _, step := range txn.steps {
-			frame = a.seekFrameOf(step.player)
+		frames := make([]seekFrame, len(txn.steps))
+		for i, step := range txn.steps {
+			frames[i] = a.seekFrameOf(step.player)
+			frame := frames[i]
+			if frame.err != nil {
+				short = fmt.Sprintf("%s reports an engine error: %v", a.name(step.item), frame.err)
+				break
+			}
 			if !frame.ready || frame.buffering {
 				short = fmt.Sprintf("%s is not ready yet", a.name(step.item))
 				break
 			}
 			if absDuration(frame.position-step.offset) > seekSettleTolerance {
-				short = fmt.Sprintf("%s reports %s, not %s", a.name(step.item), shortDuration(frame.position), shortDuration(step.offset))
+				short = fmt.Sprintf("%s reports %s, %s away from the %s it was asked for",
+					a.name(step.item), frame.position, absDuration(frame.position-step.offset), step.offset)
 				break
 			}
 		}
 		if short == "" {
 			stable++
-			if stable >= 2 {
-				for _, step := range txn.steps {
-					player := step.player
-					if step.wasPlaying {
-						a.seekOnMain(func() { player.Play() })
-					}
-				}
-				a.seekMu.Lock()
-				for _, step := range txn.steps {
-					step.settled = step.offset
-				}
-				positions := make([]string, 0, len(txn.steps))
-				for _, step := range txn.steps {
-					positions = append(positions, shortDuration(step.settled))
-				}
-				a.seekMu.Unlock()
-				logf("seek", "every replacement reports its target position (%s); that is a position, not a confirmed frame",
-					strings.Join(positions, ", "))
-				return nil
-			}
 		} else {
 			stable = 0
 		}
+		if short == "" && stable >= 2 {
+			for _, step := range txn.steps {
+				if !step.wasPlaying {
+					continue
+				}
+				player := step.player
+				a.seekOnMain(func() { player.Play() })
+			}
+			landings := make([]seekLanding, 0, len(txn.steps))
+			for i, step := range txn.steps {
+				landings = append(landings, seekLanding{
+					source:    step.item.source.ID,
+					requested: step.offset,
+					reported:  frames[i].position,
+					residual:  frames[i].position - step.offset,
+				})
+				step.settled = frames[i].position
+			}
+			a.seekMu.Lock()
+			a.settled = landings
+			a.seekMu.Unlock()
+			for _, landing := range landings {
+				logf("seek", "%s requested %s, reported %s, residual %s",
+					landing.source, landing.requested, landing.reported, landing.residual)
+			}
+			logf("seek", "every replacement reports a position within %s of the target; that is a position, not a confirmed frame",
+				seekSettleTolerance)
+			return nil
+		}
 		if !time.Now().Before(deadline) {
 			if short == "" {
-				short = fmt.Sprintf("a player reports %s, not %s", shortDuration(frame.position), shortDuration(frame.position))
+				short = "the players did not hold a position"
 			}
 			return fmt.Errorf("did not settle on the target within %s: %s", handoverWait, short)
 		}
@@ -446,11 +456,44 @@ func (a *appState) settleSeekTxn(txn *seekTxn) error {
 	}
 }
 
+// seekLanding is what one replacement reported when it settled: what it was
+// asked for, where it says it is, and what is left between the two. The
+// residual is reported rather than hidden, because a player within the
+// tolerance has not necessarily moved at all.
+type seekLanding struct {
+	source    core.SourceID
+	requested time.Duration
+	reported  time.Duration
+	residual  time.Duration
+}
+
+// seekLandings returns what the last settled transaction reported.
+func (a *appState) seekLandings() []seekLanding {
+	a.seekMu.Lock()
+	defer a.seekMu.Unlock()
+	return append([]seekLanding(nil), a.settled...)
+}
+
+// seekFrame is what one player reports on the drawing thread. The error is read
+// too: a player can be ready and not buffering while the engine is holding an
+// error, and that is not a settled position.
+type seekFrame struct {
+	position  time.Duration
+	ready     bool
+	buffering bool
+	err       error
+}
+
 // seekFrameOf reads one player's state on the drawing thread.
 func (a *appState) seekFrameOf(player desktopPlayer) seekFrame {
 	var frame seekFrame
 	a.seekOnMain(func() {
-		frame = seekFrame{position: player.Position(), ready: player.Ready(), buffering: player.Buffering()}
+		frame = seekFrame{
+			position:  player.Position(),
+			ready:     player.Ready(),
+			buffering: player.Buffering(),
+			err:       player.Err(),
+		}
 	})
 	return frame
 }

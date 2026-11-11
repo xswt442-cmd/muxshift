@@ -197,9 +197,20 @@ func seekTxnBody(window *mygo.Window, a *appState, dir string) {
 		if it.player == nil {
 			continue
 		}
-		snapshot := runOnMainValue(func() seekFrame { return seekFrame{position: it.player.Position(), ready: it.player.Ready()} })
-		logf(scenario, "source %d reports %s with the target at %s into its file (a position, not a confirmed frame)",
-			index+1, sceneClock(snapshot.position), sceneClock(wantOffset))
+		landing := landingFor(a, it.source.ID)
+		snapshot := runOnMainValue(func() seekFrame {
+			return seekFrame{position: it.player.Position(), ready: it.player.Ready(), err: it.player.Err()}
+		})
+		logf(scenario, "source %d requested %s, was told %s, reported %s now (residual %s); a position, not a confirmed frame",
+			index+1, sceneClock(landing.requested), sceneClock(landing.reported), sceneClock(snapshot.position), sceneClock(landing.residual))
+		// The second source carries the 10ms nudge, so its position inside the
+		// file is that much further in; the request must follow the offset.
+		expected := wantOffset
+		if index == 1 {
+			expected += 10 * time.Millisecond
+		}
+		check(landing.requested == expected, "source %d: the transaction asked for %s, want %s", index+1, sceneClock(landing.requested), sceneClock(expected))
+		check(snapshot.err == nil, "source %d: the player reports %v", index+1, snapshot.err)
 		check(snapshot.position >= wantOffset, "source %d: the player reports %s, before the target at %s", index+1, sceneClock(snapshot.position), sceneClock(wantOffset))
 		check(snapshot.position < wantOffset+5*time.Second, "source %d: the player ran to %s, well past the target at %s", index+1, sceneClock(snapshot.position), sceneClock(wantOffset))
 		check(snapshot.ready, "source %d: the player is not ready after the transaction", index+1)
@@ -229,4 +240,16 @@ func shortName(index int) string {
 		return "one"
 	}
 	return "two"
+}
+
+// landingFor returns what the transaction recorded as the player's arrival for
+// one source, so the check reports the position the player really gave rather
+// than the one it was asked for.
+func landingFor(a *appState, source core.SourceID) seekLanding {
+	for _, landing := range a.seekLandings() {
+		if landing.source == source {
+			return landing
+		}
+	}
+	return seekLanding{}
 }

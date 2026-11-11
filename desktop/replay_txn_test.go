@@ -259,3 +259,86 @@ func TestSeekTxnRollsBackWhenAPlayerNeverSettles(t *testing.T) {
 		t.Fatalf("leases open=%d after a failed settle, want 0", open)
 	}
 }
+
+func TestSeekTxnCommitsNothingWhenTheLastSourceMoves(t *testing.T) {
+	session, opened := seekTxnFixture(t)
+	before := make([]*dvr.Recording, len(session.items))
+	players := make([]desktopPlayer, len(session.items))
+	for index, it := range session.items {
+		before[index] = it.replay
+		players[index] = it.player
+	}
+	session.app.beforeSeekCommit = func() {
+		// The second source is replaced after the first one has already been
+		// validated. A commit that validated and installed source by source
+		// would leave the first one changed; this one must change neither.
+		session.items[1].generation++
+	}
+	if err := session.app.startSeekTxn(session.items, 6*time.Second); err != nil {
+		t.Fatalf("starting: %v", err)
+	}
+	waitSeekTxn(t, session.app)
+
+	for index, it := range session.items {
+		if it.replay != before[index] {
+			t.Fatalf("%s: its recording changed although the transaction was refused", it.source.ID)
+		}
+		if it.player != players[index] {
+			t.Fatalf("%s: its player changed although the transaction was refused", it.source.ID)
+		}
+		// Only the hook's own change is allowed through: the refused commit
+		// must not have bumped anything itself.
+		want := 2
+		if index == 1 {
+			want = 3
+		}
+		if it.generation != want {
+			t.Fatalf("%s: generation=%d after a refusal, want %d", it.source.ID, it.generation, want)
+		}
+	}
+	for _, player := range *opened {
+		if !player.closed {
+			t.Fatalf("%s was left open by a refused commit", player.name)
+		}
+	}
+	if open, _ := session.app.leaseStats(); open != 0 {
+		t.Fatalf("leases open=%d after a refused commit, want 0", open)
+	}
+}
+
+func TestSeekTxnRecordsThePositionThePlayerReported(t *testing.T) {
+	session, opened := seekTxnFixture(t)
+	// A player that opens and draws but never moves. Asked for 10ms it reports
+	// 0s: inside the tolerance, so the commit is allowed, but the transaction
+	// must record 0s and the 10ms it is short rather than claiming the target.
+	session.app.openSeek = func(recording dvr.Recording) (desktopPlayer, error) {
+		player := &fakeSeekPlayer{name: recording.FileName(), ready: true}
+		*opened = append(*opened, player)
+		return player, nil
+	}
+	if err := session.app.startSeekTxn(session.items, 2*time.Second+10*time.Millisecond); err != nil {
+		t.Fatalf("starting: %v", err)
+	}
+	waitSeekTxn(t, session.app)
+
+	landings := session.app.seekLandings()
+	if len(landings) != 2 {
+		t.Fatalf("recorded %d landings, want 2", len(landings))
+	}
+	for _, landing := range landings {
+		if landing.requested != 10*time.Millisecond {
+			t.Fatalf("%s requested %s, want 10ms", landing.source, landing.requested)
+		}
+		if landing.reported != 0 {
+			t.Fatalf("%s reported %s, want the position the player really gave (0s)", landing.source, landing.reported)
+		}
+		if landing.residual != -10*time.Millisecond {
+			t.Fatalf("%s residual %s, want -10ms", landing.source, landing.residual)
+		}
+	}
+	for _, it := range session.items {
+		if it.replay == nil || it.replay.StartBufferTime != 2*time.Second {
+			t.Fatalf("%s: the file start is %v, want 2s", it.source.ID, it.replay)
+		}
+	}
+}

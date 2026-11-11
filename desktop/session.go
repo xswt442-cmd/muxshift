@@ -131,8 +131,9 @@ type appState struct {
 
 	// seek is the replay transaction in flight, nil when none is running. The
 	// window keeps the player it has until that transaction commits.
-	seek   *seekTxn
-	seekMu sync.Mutex
+	seek    *seekTxn
+	seekMu  sync.Mutex
+	settled []seekLanding
 	// seekMain runs the commit step where players may be touched. Tests run
 	// without a window and call the step directly.
 	seekMain func(func())

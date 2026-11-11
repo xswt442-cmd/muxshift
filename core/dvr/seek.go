@@ -104,9 +104,16 @@ type SeekHop struct {
 // out, and Hops returns a copy, so a caller cannot rewrite a decision after it
 // was made.
 type SeekPlan struct {
-	Event      time.Duration
+	event      time.Duration
 	hops       []SeekHop
 	identities []sourceIdentity
+}
+
+// Event returns the event time the plan was made for. It is read-only: the
+// field is private, so a plan that was decided for one time cannot be
+// rewritten to claim another one.
+func (p SeekPlan) Event() time.Duration {
+	return p.event
 }
 
 // Hops returns a copy of every hop in the plan.
@@ -140,7 +147,7 @@ func PlanSeek(event time.Duration, sources []SeekSource) (SeekPlan, error) {
 		return SeekPlan{}, fmt.Errorf("%w: no source was offered", ErrNotAuthorized)
 	}
 	plan := SeekPlan{
-		Event:      event,
+		event:      event,
 		hops:       make([]SeekHop, 0, len(sources)),
 		identities: make([]sourceIdentity, 0, len(sources)),
 	}
@@ -173,13 +180,17 @@ func (p SeekPlan) Matches(sources []SeekSource) error {
 	if len(sources) == 0 {
 		return fmt.Errorf("%w: no source was offered", ErrNotAuthorized)
 	}
-	fresh, err := PlanSeek(p.Event, sources)
+	fresh, err := PlanSeek(p.event, sources)
 	if err != nil {
 		return fmt.Errorf("the plan no longer holds: %w", err)
 	}
 	if len(fresh.identities) != len(p.identities) {
 		return fmt.Errorf("the plan no longer holds: it named %d sources, %d are offered",
 			len(p.identities), len(fresh.identities))
+	}
+	if len(fresh.hops) != len(p.hops) {
+		return fmt.Errorf("the plan no longer holds: it decided %d hops, %d are needed",
+			len(p.hops), len(fresh.hops))
 	}
 	for _, was := range p.identities {
 		now, ok := fresh.identity(was.Source)
@@ -188,6 +199,11 @@ func (p SeekPlan) Matches(sources []SeekSource) error {
 		}
 		if now != was {
 			return fmt.Errorf("the plan no longer holds: %s %s", was.Source, explainIdentity(was, now))
+		}
+	}
+	for index, was := range p.hops {
+		if fresh.hops[index] != was {
+			return fmt.Errorf("the plan no longer holds: the hop for %s was recalculated", was.Source)
 		}
 	}
 	return nil
@@ -258,6 +274,9 @@ func planHop(event time.Duration, source SeekSource) (SeekHop, error) {
 // numbers while having been measured somewhere else.
 func sameClock(source SeekSource) error {
 	recording := source.Recording
+	if source.Instance == "" {
+		return fmt.Errorf("the buffer has no name, so an anchor and a recording cannot be proven to come from it")
+	}
 	if recording.Source != source.Source {
 		return fmt.Errorf("the recording belongs to %s, not to %s", recording.Source, source.Source)
 	}

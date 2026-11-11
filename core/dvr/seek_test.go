@@ -52,8 +52,8 @@ func TestPlanSeekPutsOneEventOnBothContentClocks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PlanSeek: %v", err)
 	}
-	if plan.Event != 6*time.Second {
-		t.Fatalf("event = %s, want 6s", plan.Event)
+	if plan.Event() != 6*time.Second {
+		t.Fatalf("event = %s, want 6s", plan.Event())
 	}
 	for _, source := range []core.SourceID{"source-1", "source-2"} {
 		hop, ok := plan.Hop(source)
@@ -424,5 +424,54 @@ func TestSeekPlanHopsAreACopy(t *testing.T) {
 	}
 	if len(plan.Hops()) != 1 {
 		t.Fatalf("plan grew to %d hops through the copy", len(plan.Hops()))
+	}
+}
+
+func TestSeekPlanEventCannotBeChanged(t *testing.T) {
+	source := seekSource("source-1", 1, "buf-a", 2*time.Second, 0, 30*time.Second)
+	plan, err := PlanSeek(5*time.Second, []SeekSource{source})
+	if err != nil {
+		t.Fatalf("PlanSeek: %v", err)
+	}
+	if plan.Event() != 5*time.Second {
+		t.Fatalf("event = %s, want 5s", plan.Event())
+	}
+	hop, ok := plan.Hop("source-1")
+	if !ok {
+		t.Fatal("the plan has no hop for source-1")
+	}
+	if hop.Content != 5*time.Second || hop.Position != 5*time.Second {
+		t.Fatalf("hop = content %s position %s, want 5s/5s", hop.Content, hop.Position)
+	}
+
+	// The target is not a field a caller can substitute: a plan decided for
+	// another event is a different decision with its own hops.
+	other, err := PlanSeek(6*time.Second, []SeekSource{source})
+	if err != nil {
+		t.Fatalf("PlanSeek 6s: %v", err)
+	}
+	if other.Event() == plan.Event() {
+		t.Fatalf("two decisions report the same target %s", plan.Event())
+	}
+	if plan.identities == nil || other.identities == nil {
+		t.Fatal("a decided plan must name its identities")
+	}
+
+	// A plan that was never decided cannot be used as one.
+	var forged SeekPlan
+	if err := forged.Matches([]SeekSource{source}); err == nil {
+		t.Fatal("the zero plan matched")
+	}
+}
+
+func TestPlanSeekRefusesAnUnnamedBufferInstance(t *testing.T) {
+	// Three blanks are equal, but nothing proves they are the same buffer.
+	source := seekSource("source-1", 1, "", 2*time.Second, 0, 30*time.Second)
+	_, err := PlanSeek(5*time.Second, []SeekSource{source})
+	if !errors.Is(err, ErrNotAuthorized) {
+		t.Fatalf("err = %v, want ErrNotAuthorized", err)
+	}
+	if !strings.Contains(err.Error(), "no name") {
+		t.Fatalf("err = %v, want a refusal naming the missing buffer", err)
 	}
 }

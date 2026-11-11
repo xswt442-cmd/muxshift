@@ -103,7 +103,7 @@ Conversion and refusal:
 
 ### The replay authorisation contract (P16.4a)
 
-`PlanSeek` in `core/dvr` turns one replay request into an immutable `SeekPlan`: the target event time, the recording and file position each source would have to open, and the identities the decision was made from (source, buffer instance, epoch, recording id). It only decides — it opens no player, changes no scene and moves no lease — so it is provable with unit tests alone.
+`PlanSeek` in `core/dvr` turns one replay request into an immutable `SeekPlan`: the target event time (private, read through `Event()`), the recording and file position each source would have to open, and the identities the decision was made from (source, buffer instance, epoch, player generation, recording id). Every buffer, anchor and recording must set a non-empty instance: three blanks compare equal yet prove nothing about which buffer produced them. It only decides — it opens no player, changes no scene and moves no lease — so it is provable with unit tests alone.
 
 Every condition is checked separately, and any failure returns an error wrapping `ErrNotAuthorized` that names the source and the condition:
 

@@ -14,6 +14,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -82,6 +83,12 @@ type seekTxn struct {
 	// session waits on it so the files and players the work opened are given
 	// back before the buffers they were cut from are closed.
 	done chan struct{}
+
+	// ctx bounds the work this transaction started: stopping it cancels a
+	// probe or an open that is still running, so a closing session does not
+	// have to wait for a call that no longer matters.
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // stepFor returns the step preparing a source, or nil when the transaction does
@@ -125,6 +132,7 @@ func (a *appState) startSeekTxn(items []*item, event time.Duration) (err error) 
 		return err
 	}
 	txn := &seekTxn{event: event, plan: plan, done: make(chan struct{}), id: replaySeq.Add(1)}
+	txn.ctx, txn.cancel = context.WithCancel(context.Background())
 	for _, hop := range plan.Hops() {
 		it, _, err := a.itemBySource(hop.Source)
 		if err != nil {
@@ -180,7 +188,7 @@ func (a *appState) prepareSeekTxn(txn *seekTxn) {
 		step.lease = lease
 		a.seekMu.Unlock()
 
-		anchor, anchorErr := measureRecordingAnchor(recording)
+		anchor, anchorErr := measureRecordingAnchorIn(txn.ctx, recording)
 		if anchorErr != nil {
 			a.abortSeekTxn(txn, fmt.Sprintf("measure %s: %v", recording.FileName(), anchorErr))
 			return
@@ -319,7 +327,7 @@ func (a *appState) commitSeekTxn(txn *seekTxn) {
 	// installing them would leave the first source committed when the second
 	// one turns out to have moved; checking everything first and installing
 	// afterwards is what makes the commit all-or-nothing.
-	a.seekOnMain(func() {
+	ran := a.seekOnMain(func() {
 		// The decision to commit and the installation it authorises happen under
 		// the same lock. Ownership cannot change between "this transaction still
 		// owns the session" and the step that acts on it, and the slot is given
@@ -351,6 +359,10 @@ func (a *appState) commitSeekTxn(txn *seekTxn) {
 		a.seek = nil
 		a.seekMu.Unlock()
 	})
+	if !ran {
+		a.abortSeekTxn(txn, "the session did not run the commit step in time")
+		return
+	}
 	if refusal != nil {
 		a.abortSeekTxn(txn, refusal.Error())
 		return
@@ -415,6 +427,9 @@ func (a *appState) awaitSeekTxn(txn *seekTxn, timeout time.Duration) bool {
 }
 
 func (a *appState) abortSeekTxn(txn *seekTxn, why string) {
+	if txn.cancel != nil {
+		txn.cancel()
+	}
 	// Take whatever the transaction still owns out of its steps under the lock,
 	// then close it outside: a step reaches here at most once with resources
 	// attached, whether the abort comes from the transaction itself, a newer
@@ -519,11 +534,13 @@ func (a *appState) settleSeekTxn(txn *seekTxn) error {
 	for _, step := range txn.steps {
 		target := step.offset
 		player := step.player
-		a.seekOnMain(func() {
+		if !a.seekOnMain(func() {
 			step.wasPlaying = player.Playing()
 			player.Pause()
 			player.Seek(target)
-		})
+		}) {
+			return fmt.Errorf("the session did not run the seek step within %s", seekDispatchWait)
+		}
 	}
 	// A seek issued while a player is still settling can be dropped by the
 	// engine; the player then keeps the position it had. Re-issuing the request
@@ -560,10 +577,13 @@ func (a *appState) settleSeekTxn(txn *seekTxn) error {
 					issued[i] = time.Now()
 					logf("seek", "%s did not take the first request; asking again (%d/%d)",
 						a.name(step.item), attempts[i], settleAttempts)
-					a.seekOnMain(func() {
+					if !a.seekOnMain(func() {
 						step.player.Pause()
 						step.player.Seek(step.offset)
-					})
+					}) {
+						short = fmt.Sprintf("the session did not run the seek step within %s", seekDispatchWait)
+						break
+					}
 					stable = 0
 				}
 				short = fmt.Sprintf("%s reports %s, %s away from the %s it was asked for",
@@ -582,7 +602,10 @@ func (a *appState) settleSeekTxn(txn *seekTxn) error {
 					continue
 				}
 				player := step.player
-				a.seekOnMain(func() { player.Play() })
+				if !a.seekOnMain(func() { player.Play() }) {
+					logf("seek", "%s was not played again: the session did not run the step within %s",
+						a.name(step.item), seekDispatchWait)
+				}
 			}
 			landings := make([]seekLanding, 0, len(txn.steps))
 			for i, step := range txn.steps {
@@ -648,14 +671,16 @@ type seekFrame struct {
 // seekFrameOf reads one player's state on the drawing thread.
 func (a *appState) seekFrameOf(player desktopPlayer) seekFrame {
 	var frame seekFrame
-	a.seekOnMain(func() {
+	if !a.seekOnMain(func() {
 		frame = seekFrame{
 			position:  player.Position(),
 			ready:     player.Ready(),
 			buffering: player.Buffering(),
 			err:       player.Err(),
 		}
-	})
+	}) {
+		frame.err = fmt.Errorf("the session did not report the player's state within %s", seekDispatchWait)
+	}
 	return frame
 }
 
@@ -681,14 +706,39 @@ func (a *appState) waitSeekPlayers(txn *seekTxn) error {
 	}
 }
 
-// seekOnMain runs a step on the drawing thread. Tests replace it with a direct
-// call, because they run without a window.
-func (a *appState) seekOnMain(fn func()) {
-	if a.seekMain != nil {
-		a.seekMain(fn)
-		return
+// seekDispatchWait bounds how long a preparation waits for the drawing thread.
+//
+// The drawing thread can itself be waiting for the preparation: a window that
+// closes while a transaction is preparing stops the transaction and waits for
+// its work to return, and that wait happens in a close listener on the drawing
+// thread. A dispatch that waited without a bound would then hold the thread the
+// preparation needs, and neither side could move. Giving up after this budget
+// lets the preparation end; the step it posted is guarded by the transaction's
+// ownership, so it does nothing when it finally runs.
+const seekDispatchWait = 2 * time.Second
+
+// seekOnMain runs a step on the drawing thread and reports whether it ran.
+// Tests replace it with a direct call, because they run without a window.
+func (a *appState) seekOnMain(fn func()) bool {
+	done := make(chan struct{})
+	var once sync.Once
+	run := func() {
+		once.Do(func() {
+			fn()
+			close(done)
+		})
 	}
-	mygoRunOnMain(fn)
+	if a.seekMain != nil {
+		a.seekMain(run)
+	} else {
+		mygoRunOnMain(run)
+	}
+	select {
+	case <-done:
+		return true
+	case <-time.After(seekDispatchWait):
+		return false
+	}
 }
 
 // closeSeekPlayer closes a replacement player, engine players through the

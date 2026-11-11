@@ -720,3 +720,42 @@ func TestShutdownWaitsPastTheBudgetForAnOpeningPlayer(t *testing.T) {
 		}
 	}
 }
+
+// TestAClosedSessionDoesNotWaitForADrawingThreadItIsBlocking is the deadlock
+// case: a window closes while a transaction is preparing, so the drawing thread
+// stops the transaction and waits for it, while the transaction is waiting for
+// the drawing thread to run its next step. Bounded dispatch breaks the cycle:
+// the step gives up, the preparation ends, and the close can finish.
+func TestAClosedSessionDoesNotWaitForADrawingThreadItIsBlocking(t *testing.T) {
+	session, opened := seekTxnFixture(t)
+	session.app.seekMain = func(func()) {
+		// The drawing thread is inside the close that waits for this
+		// transaction, so nothing it posts will run while it waits.
+	}
+	if err := session.app.startSeekTxn(session.items, 7*time.Second); err != nil {
+		t.Fatalf("the transaction did not start: %v", err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for len(*opened) == 0 {
+		if !time.Now().Before(deadline) {
+			t.Fatal("no replacement player was opened")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	start := time.Now()
+	if !session.app.shutdownReplayTxn() {
+		t.Fatal("the close reported that it could not stop the transaction")
+	}
+	if elapsed := time.Since(start); elapsed > 3*seekDispatchWait {
+		t.Fatalf("the close waited %s for a step the drawing thread could not run", elapsed)
+	}
+	for _, player := range *opened {
+		if !player.closed {
+			t.Fatal("a player opened by the stopped transaction stayed open")
+		}
+	}
+	if report, ok := session.app.lastReport(); !ok || report.Phase != replayRolledBack {
+		t.Fatalf("the stopped transaction ended as %q, want rolled back", report.Phase)
+	}
+}

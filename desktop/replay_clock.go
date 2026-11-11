@@ -84,10 +84,17 @@ var probeFirstMediaTime = func(ctx context.Context, path string) (time.Duration,
 // content clock begins where the buffer stored its first segment, which the
 // recording carries because the file alone cannot state it.
 func measureRecordingAnchor(recording dvr.Recording) (dvr.Anchor, error) {
+	return measureRecordingAnchorIn(context.Background(), recording)
+}
+
+// measureRecordingAnchorIn measures the same pair under a caller's lifetime, so
+// a transaction that is being stopped can cancel a probe that is still running
+// instead of making the session wait for it.
+func measureRecordingAnchorIn(parent context.Context, recording dvr.Recording) (dvr.Anchor, error) {
 	if err := recording.Valid(); err != nil {
 		return dvr.Anchor{}, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
 	defer cancel()
 	media, err := probeFirstMediaTime(ctx, recording.Path)
 	if err != nil {

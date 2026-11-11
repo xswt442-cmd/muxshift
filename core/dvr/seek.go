@@ -242,3 +242,16 @@ func addTime(one, two time.Duration) (time.Duration, bool) {
 	}
 	return sum, true
 }
+
+// subTime subtracts one duration from another and reports whether the result
+// fits, so a mapping cannot wrap around and look like an ordinary time.
+func subTime(one, two time.Duration) (time.Duration, bool) {
+	difference := one - two
+	if (two > 0 && difference > one) || (two < 0 && difference < one) {
+		return 0, false
+	}
+	if one < 0 && two > 0 && one < math.MinInt64+two {
+		return 0, false
+	}
+	return difference, true
+}

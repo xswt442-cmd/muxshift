@@ -127,6 +127,28 @@ func (r Recording) Position(at time.Duration) (time.Duration, error) {
 	return at - r.StartBufferTime, nil
 }
 
+// clockMatch checks that the anchor was measured for this very recording's
+// source, buffer instance and epoch. Both mappings run it, because an anchor
+// from another clock can cover the same numbers and produce a plausible time.
+func (r Recording) clockMatch(anchor Anchor) error {
+	if anchor.Source == "" || r.Source == "" {
+		return fmt.Errorf("%w: %s has no anchor that ties its buffer clock to a source",
+			ErrNoAnchor, r.name())
+	}
+	if anchor.Source != r.Source {
+		return fmt.Errorf("%w: the anchor belongs to %s, not %s", ErrNoAnchor, anchor.Source, r.Source)
+	}
+	if anchor.BufferInstance != r.BufferInstance || anchor.BufferInstance == "" {
+		return fmt.Errorf("%w: the anchor was measured on %s, %s was cut from %s",
+			ErrNoAnchor, orUnknown(anchor.BufferInstance), r.name(), orUnknown(r.BufferInstance))
+	}
+	if anchor.Epoch != r.SourceMediaEpoch {
+		return fmt.Errorf("%w: the anchor is for epoch %d of %s, %s was cut in epoch %d",
+			ErrNoAnchor, anchor.Epoch, r.Source, r.name(), r.SourceMediaEpoch)
+	}
+	return nil
+}
+
 // SourceMediaTime maps a position inside the file to the source's media clock.
 // It refuses without a measured anchor for this very source: assuming the
 // buffer starts at zero would silently shift a live buffer that began mid-stream.
@@ -135,20 +157,8 @@ func (r Recording) SourceMediaTime(position time.Duration, anchor Anchor) (time.
 	if err != nil {
 		return 0, err
 	}
-	if anchor.Source == "" || r.Source == "" {
-		return 0, fmt.Errorf("%w: %s has no anchor that ties its buffer clock to a source",
-			ErrNoAnchor, r.name())
-	}
-	if anchor.Source != r.Source {
-		return 0, fmt.Errorf("%w: the anchor belongs to %s, not %s", ErrNoAnchor, anchor.Source, r.Source)
-	}
-	if anchor.BufferInstance != r.BufferInstance || anchor.BufferInstance == "" {
-		return 0, fmt.Errorf("%w: the anchor was measured on %s, %s was cut from %s",
-			ErrNoAnchor, orUnknown(anchor.BufferInstance), r.name(), orUnknown(r.BufferInstance))
-	}
-	if anchor.Epoch != r.SourceMediaEpoch {
-		return 0, fmt.Errorf("%w: the anchor is for epoch %d of %s, %s was cut in epoch %d",
-			ErrNoAnchor, anchor.Epoch, r.Source, r.name(), r.SourceMediaEpoch)
+	if err := r.clockMatch(anchor); err != nil {
+		return 0, err
 	}
 	return anchor.MediaTime(at)
 }
@@ -227,11 +237,29 @@ func orUnknown(instance string) string {
 // explicitly container-domain mapping a caller uses when it needs to open the
 // file at a timestamp rather than place a frame on the timeline.
 func (r Recording) EventTime(position time.Duration, anchor Anchor, offset time.Duration) (time.Duration, error) {
-	content, err := anchor.ContentTime(r.StartBufferTime + position)
+	buffer, err := r.BufferTime(position)
 	if err != nil {
 		return 0, err
 	}
-	return content - offset, nil
+	// The last instant of the file is not inside it: the recording covers
+	// [StartBufferTime, EndBufferTime), so the frame at the end is gone.
+	if buffer < r.StartBufferTime || buffer >= r.EndBufferTime {
+		return 0, fmt.Errorf("%w: buffer time %s in %s is outside a recording of %s..%s",
+			ErrNoRange, buffer.Round(time.Millisecond), r.name(),
+			r.StartBufferTime.Round(time.Millisecond), r.EndBufferTime.Round(time.Millisecond))
+	}
+	if err := r.clockMatch(anchor); err != nil {
+		return 0, err
+	}
+	content, err := anchor.ContentTime(buffer)
+	if err != nil {
+		return 0, err
+	}
+	event, ok := subTime(content, offset)
+	if !ok {
+		return 0, fmt.Errorf("content %s minus offset %s cannot be represented", content, offset)
+	}
+	return event, nil
 }
 
 // Valid reports whether the file still matches the recording. It detects a file

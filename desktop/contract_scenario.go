@@ -122,7 +122,7 @@ func runContract(window *mygo.Window, a *appState, dir string) {
 			logf(scenario, "event time with offset %s: %v", offset, err)
 			continue
 		}
-		logf(scenario, "offset %+dms: content %s -> event %s", offset.Milliseconds(), event+offset, shifted)
+		logf(scenario, "offset %+dms: content %s -> event %s", offset.Milliseconds(), mid.StartBufferTime+inside, shifted)
 	}
 	if _, err := mid.SourceMediaTime(0, dvr.Anchor{}); err == nil {
 		logf(scenario, "a recording without an anchor was mapped anyway, which it must not be")

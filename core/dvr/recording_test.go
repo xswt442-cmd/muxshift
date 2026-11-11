@@ -3,6 +3,7 @@ package dvr
 import (
 	"context"
 	"errors"
+	"math"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -361,5 +362,67 @@ func anchorFor(recording Recording, bufferStart, mediaStart time.Duration) Ancho
 		// The buffer still held a second past the file when the anchor was taken.
 		Interval:   Range{Start: recording.StartBufferTime, End: recording.EndBufferTime + time.Second},
 		MeasuredAt: time.Now(),
+	}
+}
+
+// TestEventTimeRefusesAForeignClockOrAnImpossiblePosition pins the checks that
+// moved to the content domain: an anchor from another source, buffer or epoch
+// can cover the same numbers and produce a plausible time, and a position
+// outside the file must be refused before any arithmetic happens.
+func TestEventTimeRefusesAForeignClockOrAnImpossiblePosition(t *testing.T) {
+	recording := Recording{
+		ID:               "rec-right",
+		Path:             "rec-right.ts",
+		Source:           "right",
+		SourceMediaEpoch: 1,
+		BufferInstance:   "buf-right",
+		StartBufferTime:  0,
+		EndBufferTime:    4 * time.Second,
+	}
+	valid := func(mutate func(*Anchor)) Anchor {
+		anchor := Anchor{
+			Source:         "right",
+			Epoch:          1,
+			BufferInstance: "buf-right",
+			BufferStart:    0,
+			MediaStart:     2 * time.Second,
+			Interval:       Range{Start: 0, End: 10 * time.Second},
+			MeasuredAt:     time.Now(),
+		}
+		if mutate != nil {
+			mutate(&anchor)
+		}
+		return anchor
+	}
+
+	for _, test := range []struct {
+		name     string
+		position time.Duration
+		anchor   Anchor
+		want     error
+	}{
+		{"another source", 0, valid(func(a *Anchor) { a.Source = "wrong" }), ErrNoAnchor},
+		{"another instance", 0, valid(func(a *Anchor) { a.BufferInstance = "buf-wrong" }), ErrNoAnchor},
+		{"another epoch", 0, valid(func(a *Anchor) { a.Epoch = 9 }), ErrNoAnchor},
+		{"a negative position", -time.Second, valid(nil), ErrNoRange},
+		{"past the last frame", 5 * time.Second, valid(nil), ErrNoRange},
+		{"on the closing edge", 4 * time.Second, valid(nil), ErrNoRange},
+	} {
+		_, err := recording.EventTime(test.position, test.anchor, 0)
+		if !errors.Is(err, test.want) {
+			t.Errorf("%s: err = %v, want %v", test.name, err, test.want)
+		}
+	}
+
+	// A position inside the file still converts, and the offset keeps its sign.
+	event, err := recording.EventTime(2*time.Second, valid(nil), 500*time.Millisecond)
+	if err != nil {
+		t.Fatalf("event time inside the file: %v", err)
+	}
+	if event != 1500*time.Millisecond {
+		t.Fatalf("event = %s, want 1.5s", event)
+	}
+	if _, err := recording.EventTime(0, valid(nil), math.MinInt64); err == nil {
+		t.Fatal("EventTime accepted an offset that wraps around")
 	}
 }

@@ -86,6 +86,12 @@ type Segment struct {
 	// not contiguous with it, either because media is missing or because the
 	// playlist said the timestamps jump.
 	split bool
+	// epoch is the media-clock epoch this segment belongs to, taken when it was
+	// stored. It is older than the buffer's epoch as soon as the playlist
+	// declares a discontinuity, which is why a recording has to inherit the
+	// epoch of the range it was cut from rather than whatever the buffer says
+	// now.
+	epoch uint64
 }
 
 // Gap is a stretch of media time the buffer cannot replay.
@@ -117,6 +123,9 @@ type Range struct {
 	End time.Duration
 	// Segments are the stored segments making up the range, in order.
 	Segments []Segment
+	// Epoch is the media-clock epoch the whole range belongs to. A range is cut
+	// where the clock was rebuilt, so every segment in it shares this epoch.
+	Epoch uint64
 }
 
 // Contains reports whether a media time falls inside the range. The end is
@@ -369,6 +378,7 @@ func (b *Buffer) Add(ctx context.Context, client *http.Client, segment hls.Segme
 		ProgramDateTime:    segment.ProgramDateTime,
 		HasProgramDateTime: segment.HasProgramDateTime,
 		split:              split,
+		epoch:              b.epoch,
 	}
 	b.segments = append(b.segments, stored)
 	b.bytes += stored.Bytes
@@ -440,11 +450,11 @@ func (b *Buffer) ranges() []Range {
 		return nil
 	}
 	out := make([]Range, 0, 1)
-	current := Range{Start: b.segments[0].Start}
+	current := Range{Start: b.segments[0].Start, Epoch: b.segments[0].epoch}
 	for _, segment := range b.segments {
 		if len(current.Segments) > 0 && (segment.split || segment.Start != current.End) {
 			out = append(out, current)
-			current = Range{Start: segment.Start}
+			current = Range{Start: segment.Start, Epoch: segment.epoch}
 		}
 		current.Segments = append(current.Segments, segment)
 		current.End = segment.End
@@ -590,7 +600,7 @@ func (b *Buffer) recordLocked(from time.Duration) (Recording, int, error) {
 		ID:                  id,
 		Path:                path,
 		Source:              b.opts.Source,
-		SourceMediaEpoch:    b.epoch,
+		SourceMediaEpoch:    chosen.Epoch,
 		BufferInstance:      b.instance,
 		RequestedBufferTime: from,
 		JoinedAt:            time.Now(),

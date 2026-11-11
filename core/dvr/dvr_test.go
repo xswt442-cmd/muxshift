@@ -417,4 +417,28 @@ func TestBufferIdentityAndEpoch(t *testing.T) {
 		t.Fatalf("an older recording changed: epoch %d instance %s",
 			before.SourceMediaEpoch, before.BufferInstance)
 	}
+
+	// Cutting the stretch the jump left behind still belongs to the old clock:
+	// the buffer has moved on, but this media has not.
+	ranges := first.Ranges()
+	if len(ranges) != 2 {
+		t.Fatalf("a discontinuity gives two ranges, got %d", len(ranges))
+	}
+	if ranges[0].Epoch != 1 || ranges[1].Epoch != 2 {
+		t.Fatalf("range epochs = %d and %d, want 1 and 2", ranges[0].Epoch, ranges[1].Epoch)
+	}
+	older, err := first.Record(ranges[0].Start)
+	if err != nil {
+		t.Fatalf("cut the range before the jump: %v", err)
+	}
+	if older.SourceMediaEpoch != 1 {
+		t.Fatalf("a recording of the range before the jump has epoch %d, want 1", older.SourceMediaEpoch)
+	}
+	newer, err := first.Record(ranges[1].Start)
+	if err != nil {
+		t.Fatalf("cut the range after the jump: %v", err)
+	}
+	if newer.SourceMediaEpoch != 2 {
+		t.Fatalf("a recording of the range after the jump has epoch %d, want 2", newer.SourceMediaEpoch)
+	}
 }

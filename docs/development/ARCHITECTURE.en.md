@@ -107,14 +107,15 @@ Conversion and refusal:
 
 Every condition is checked separately, and any failure returns an error wrapping `ErrNotAuthorized` that names the source and the condition:
 
-- An offset must state **where it came from** (`Alignment{Basis}`); `measured`, `manual` and `shared-start` count as confirmed, while an empty basis does not, not even for a zero offset — two buffers that joined a live stream at different moments both report `ContentTime=0s`, and equal numbers are not evidence of the same frame.
+- An offset must state **where it came from** (`Alignment{Basis}`); only `measured`, `manual` and `shared-start` count, while an undefined basis or an empty one does not, not even for a zero offset — two buffers that joined a live stream at different moments both report `ContentTime=0s`, and equal numbers are not evidence of the same frame.
 - `event + offset` must not overflow, and the content time must not be negative.
 - The target must lie inside the **one contiguous range** the buffer holds; a gap, a skipped segment or an evicted range is refused rather than clamped.
-- The anchor must be measured, name the recording's source, the same buffer instance and the same epoch, and state an interval covering the time.
-- The recording must really cover the target content time (`[StartBufferTime, EndBufferTime)`, the right edge being half-open).
+- The anchor must be measured, name the recording's source, the same buffer instance and the same epoch, and state an interval covering the time; **the segment it measured must still be inside the range the buffer holds**, so an evicted measurement stops authorising anything.
+- The recording must really cover the target content time (`[StartBufferTime, EndBufferTime)`, the right edge being half-open) and have an identity to open (a non-empty id and path).
 - The file position is content time minus `StartBufferTime`, so a file cut mid-buffer starts at 0 instead of at the requested time.
+- The plan binds the **player generation**: replacing the player invalidates it even when the source, instance, epoch and recording did not move.
 
-`SeekPlan.Matches` compares again before anything is opened: a rebuilt buffer, a moved epoch, another recording or a withdrawn offset makes the old decision stale, and the answer says which source changed instead of reusing it. This layer only answers "where may we logically go"; whether a position settles, and whether the target frame is on screen, belong to P16.4b/c and are not pretended here.
+`SeekPlan.Matches` compares again before anything is opened, and it compares the **whole identity snapshot** (source, buffer instance, epoch, player generation, offset and its basis, contiguous range, anchor measurement, recording identity) rather than the projected file position: a re-measured anchor or a replaced player can land on exactly the same position and still not be the same decision. A rebuilt buffer, a moved epoch, another recording, a withdrawn offset or a replaced player makes the old decision stale, and the answer says which source changed. The plan's hops are private and `Hops()` hands out a copy, so a decision cannot be rewritten after it was made. This layer only answers "where may we logically go"; whether a position settles, and whether the target frame is on screen, belong to P16.4b/c and are not pretended here.
 
 ## Web client
 

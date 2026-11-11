@@ -306,3 +306,123 @@ func TestPlanSeekRefusesARangeFromAnotherEpoch(t *testing.T) {
 		t.Errorf("err = %v, want it to name the epoch", err)
 	}
 }
+
+func TestConfirmedAcceptsOnlyNamedBases(t *testing.T) {
+	for _, basis := range []Basis{BasisManual, BasisMeasured, BasisSharedStart} {
+		if !(Alignment{Offset: 0, Basis: basis}).Confirmed() {
+			t.Errorf("basis %q was not accepted although it names an origin", basis)
+		}
+	}
+	for _, basis := range []Basis{BasisNone, Basis("invented"), Basis("manual ")} {
+		if (Alignment{Offset: 0, Basis: basis}).Confirmed() {
+			t.Errorf("basis %q was accepted although nobody defined it", basis)
+		}
+	}
+	source := seekSource("source-1", 1, "buf-a", 1466667*time.Microsecond, 0, 30*time.Second)
+	source.Alignment = Alignment{Basis: Basis("invented")}
+	if _, err := PlanSeek(6*time.Second, []SeekSource{source}); !errors.Is(err, ErrNotAuthorized) {
+		t.Fatalf("err = %v, want ErrNotAuthorized", err)
+	}
+}
+
+func TestPlanSeekRefusesWhenTheMeasuredSegmentIsGone(t *testing.T) {
+	source := seekSource("source-1", 1, "buf-a", 1466667*time.Microsecond, 0, 30*time.Second)
+	// The buffer evicted the media before 2s, so the anchor's measurement at
+	// 0s no longer describes anything the buffer holds.
+	source.Range.Start = 2 * time.Second
+
+	_, err := PlanSeek(5*time.Second, []SeekSource{source})
+	if !errors.Is(err, ErrNotAuthorized) {
+		t.Fatalf("err = %v, want ErrNotAuthorized", err)
+	}
+	if !strings.Contains(err.Error(), "evicted") {
+		t.Errorf("err = %v, want it to say the measured media is gone", err)
+	}
+}
+
+func TestPlanSeekRefusesAnUnidentifiedRecording(t *testing.T) {
+	source := seekSource("source-1", 1, "buf-a", 1466667*time.Microsecond, 0, 30*time.Second)
+	source.Recording.ID = ""
+	source.Recording.Path = ""
+
+	_, err := PlanSeek(6*time.Second, []SeekSource{source})
+	if !errors.Is(err, ErrNotAuthorized) {
+		t.Fatalf("err = %v, want ErrNotAuthorized", err)
+	}
+	if !strings.Contains(err.Error(), "no identity") {
+		t.Errorf("err = %v, want it to say the file has no identity", err)
+	}
+}
+
+func TestSeekPlanGoesStaleWhenTheAnchorIsRemeasured(t *testing.T) {
+	source := seekSource("source-1", 1, "buf-a", 1466667*time.Microsecond, 0, 30*time.Second)
+	plan, err := PlanSeek(6*time.Second, []SeekSource{source})
+	if err != nil {
+		t.Fatalf("PlanSeek: %v", err)
+	}
+	// Same buffer, same file, same projected position, but the mapping was
+	// measured again against a different container start.
+	source.Anchor.MediaStart += time.Second
+
+	// The projections are unchanged, which is exactly why comparing them would
+	// have accepted the stale plan.
+	moved, err := PlanSeek(6*time.Second, []SeekSource{source})
+	if err != nil {
+		t.Fatalf("PlanSeek after re-measuring: %v", err)
+	}
+	wasHop, _ := plan.Hop("source-1")
+	nowHop, _ := moved.Hop("source-1")
+	if wasHop != nowHop {
+		t.Fatalf("the projection changed (%+v -> %+v), so this case no longer tests identity", wasHop, nowHop)
+	}
+
+	err = plan.Matches([]SeekSource{source})
+	if err == nil {
+		t.Fatal("Matches accepted a plan whose anchor was re-measured")
+	}
+	if !strings.Contains(err.Error(), "re-measured") {
+		t.Errorf("err = %v, want it to say the anchor was re-measured", err)
+	}
+}
+
+func TestSeekPlanGoesStaleWhenThePlayerIsReplaced(t *testing.T) {
+	source := seekSource("source-1", 1, "buf-a", 1466667*time.Microsecond, 0, 30*time.Second)
+	source.PlayerGeneration = 3
+	plan, err := PlanSeek(6*time.Second, []SeekSource{source})
+	if err != nil {
+		t.Fatalf("PlanSeek: %v", err)
+	}
+	source.PlayerGeneration = 4
+
+	err = plan.Matches([]SeekSource{source})
+	if err == nil {
+		t.Fatal("Matches accepted a plan made for a player that was replaced")
+	}
+	if !strings.Contains(err.Error(), "player generation") {
+		t.Errorf("err = %v, want it to name the player generation", err)
+	}
+	if hop, ok := plan.Hop("source-1"); !ok || hop.Generation != 3 {
+		t.Errorf("hop generation = %d, want the 3 the plan was made for", hop.Generation)
+	}
+}
+
+func TestSeekPlanHopsAreACopy(t *testing.T) {
+	source := seekSource("source-1", 1, "buf-a", 1466667*time.Microsecond, 0, 30*time.Second)
+	plan, err := PlanSeek(6*time.Second, []SeekSource{source})
+	if err != nil {
+		t.Fatalf("PlanSeek: %v", err)
+	}
+	before, _ := plan.Hop("source-1")
+	hops := plan.Hops()
+	hops[0].Position = 99 * time.Second
+	hops[0].Content = 99 * time.Second
+	hops = append(hops, SeekHop{Source: "source-9"})
+
+	after, _ := plan.Hop("source-1")
+	if after != before {
+		t.Fatalf("the plan changed through its copy: %+v -> %+v", before, after)
+	}
+	if len(plan.Hops()) != 1 {
+		t.Fatalf("plan grew to %d hops through the copy", len(plan.Hops()))
+	}
+}

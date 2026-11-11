@@ -132,7 +132,11 @@ func runDVR(window *mygo.Window, a *appState, dir string) {
 	if windowErr != nil {
 		logf(scenario, "common window: %v", windowErr)
 	} else {
-		logf(scenario, "common window on the shared event clock: %s..%s", start, end)
+		// commonReplay converts each source's buffer window through its measured
+		// anchor and then subtracts the confirmed offsets, but the numbers it
+		// returns are container timestamps, not a seekable range: P16.4 may not
+		// use them until the player clock is verified across segments.
+		logf(scenario, "common window in container timestamps: %s..%s", start, end)
 	}
 
 	// The buffer proved it keeps growing while the output is paused, and the

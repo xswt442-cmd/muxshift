@@ -435,6 +435,18 @@ func TestBufferIdentityAndEpoch(t *testing.T) {
 		t.Fatalf("recording identity = %s epoch %d, want %s epoch 1",
 			before.BufferInstance, before.SourceMediaEpoch, first.Instance())
 	}
+	// Buffer time already is the content clock: it counts from the first segment
+	// the buffer stored, not from the container's own start. What the anchor
+	// still has to enforce is that it only answers for the media it actually
+	// measured, so a time past the recording is refused rather than mapped.
+	cut := anchorFor(before, before.StartBufferTime, 0)
+	if content, err := cut.ContentTime(before.StartBufferTime); err != nil || content != before.StartBufferTime {
+		t.Fatalf("the recording's start is content %s (err %v), want its own buffer time %s",
+			content, err, before.StartBufferTime)
+	}
+	if _, err := cut.ContentTime(before.EndBufferTime + time.Second); !errors.Is(err, ErrNoAnchor) {
+		t.Fatalf("a time past the recording gave %v, want ErrNoAnchor", err)
+	}
 
 	jump := info.Segments[len(info.Segments)-1]
 	jump.Discontinuity = true

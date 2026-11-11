@@ -87,18 +87,18 @@ P14 把引擎细节收进一层适配：`desktop/player.go` 只暴露受控播�
 
 | 时间域 | 谁产生 | 用途与规则 |
 | --- | --- | --- |
-| `ContainerPTS` | ffprobe 读出的容器时间戳（含 mux delay） | 只作取证与识别基准；不能直接交给播放器，也不能当作 Core 的媒体时间 |
-| `SourceMediaTime` | 播放器能定位的媒体时间，与 Core 时间轴同义 | 由 `Anchor` 实测的容器时间经 `mediaClock` 转换而来；Core 的 `media = event + offset` 就建立在它上面 |
-| `EventTime` | Core 时间轴 | `SourceMediaTime` 减去该轨**已确认**的偏移；零偏移合法，未确认的零偏移不合法 |
+| `ContainerPTS` | ffprobe 读出的容器时间戳（含 mux delay） | 只作取证与识别基准；也用于把文件位置交给播放器（`MediaTime`/`playerWindow`），但**不能**当作 Core 的媒体时间 |
+| `ContentTime`（缓冲时间） | DVR 缓冲自己的时钟，从它存下的第一个分片起算 | 就是 Core 时间轴使用的 `SourceMediaTime`：`commonReplay`、`ReplayEventTime` 都建立在它上面 |
+| `EventTime` | Core 时间轴 | `ContentTime` 减去该轨**已确认**的偏移；零偏移合法，未确认的零偏移不合法 |
 
 换算与拒绝：
 
-- `B = R + StartBufferTime`（缓冲时间），`M = Anchor.MediaStart + (B − Anchor.BufferStart)`（媒体时间），`E = M − 已确认偏移`（事件时间）。
+- `B = R + StartBufferTime`（文件内位置 → 缓冲时间），`E = B − 已确认偏移`（事件时间）。容器时间不进入这条链路。
+- 打开播放器需要另一条换算：`M = Anchor.MediaStart + (B − Anchor.BufferStart)`（容器时间），再经 `playerWindow` 换算成播放器窗口。
 - 锚点必须实测（`MeasuredAt` 非零），且与录制同源、同缓冲区实例、同 epoch，并声明覆盖被换算位置的连续区间；任一条不满足就返回 `ErrNoAnchor`，不做外推。
-- 一个文件内的位置 `p` 是**文件内位置**，不是缓冲时间；`Recording.EventTime` 自己会加 `StartBufferTime`，调用方不要再加一次。
-- 缓冲窗口交给播放器之前必须经 `playerWindow`（`desktop/replay_clock.go`）转换：在缓冲起点切出的文件从 `anchor.BufferStart` 起播，容器起点在转换中抵消。
-- 同内容、仅容器时间戳平移的两份文件转换后落在同一个播放器窗口；平移只能留在转换层，不能变成轨道偏移。
-- 共同窗口目前是诊断值：在「容器时间与播放器时间」的关系被逐分片验证（P16.3d-3.1d）之前，不得当作可 Seek 的授权区间（P16.4）。
+- 一个文件内的位置 `p` 是**文件内位置**，不是缓冲时间；`Recording.EventTime` 自己会加 `StartBufferTime`，调用方不要再加一次。反向换算用 `replayPosition`。
+- 同内容、仅容器时间戳平移的两份文件换算到事件时间后相等（实测：容器差 4 秒的两路在内容 6s 处都是事件 6s），平移只能留在文件位置换算里，不能变成轨道偏移；给第二路填 4 秒 `TrackOffset` 会篡改产品里的内容同步语义。
+- 共同窗口目前是候选交集：它是内容时间域上的交集，但「`Position()` 落位 = 目标帧已呈现」仍不成立（连续播放有每文件约 35ms / 720ms 的有界滞后），因此要等 P16.4 的授权契约才能当作可 Seek 区间。
 
 ## Web 客户端
 

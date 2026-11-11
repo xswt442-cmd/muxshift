@@ -93,6 +93,7 @@ func finalBody(window *mygo.Window, a *appState, dir string) {
 	}
 	anchors := make([]dvr.Anchor, 2)
 	mediaStarts := make([]time.Duration, 2)
+	contentStarts := make([]time.Duration, 2)
 	for index, runner := range runners {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		stored, err := runner.waitBufferAnchor(ctx, windows[index])
@@ -102,15 +103,23 @@ func finalBody(window *mygo.Window, a *appState, dir string) {
 			return
 		}
 		anchors[index] = stored
+		// Media time is the container's clock, which the files disagree on; the
+		// content clock is what the timeline holds, and it must agree.
 		media, err := stored.MediaTime(windows[index].Start)
 		if err != nil {
 			logf(scenario, "source %d: place the window on media time: %v", index+1, err)
 			return
 		}
 		mediaStarts[index] = media
-		logf(scenario, "source %d measured: media %s at buffer %s (epoch %d, %s)",
-			index+1, sceneClock(anchors[index].MediaStart), sceneClock(anchors[index].BufferStart),
-			anchors[index].Epoch, anchors[index].BufferInstance)
+		content, err := stored.ContentTime(windows[index].Start)
+		if err != nil {
+			logf(scenario, "source %d: place the window on content time: %v", index+1, err)
+			return
+		}
+		contentStarts[index] = content
+		logf(scenario, "source %d measured: media %s (content %s) at buffer %s (epoch %d, %s)",
+			index+1, sceneClock(anchors[index].MediaStart), sceneClock(content),
+			sceneClock(anchors[index].BufferStart), anchors[index].Epoch, anchors[index].BufferInstance)
 	}
 	// The content offset of the fixture is zero: only the container timestamps
 	// were shifted, and the player clock conversion below removes that. The
@@ -143,15 +152,45 @@ func finalBody(window *mygo.Window, a *appState, dir string) {
 	if windowErr != nil {
 		check(false, "no shared window for two sources of the same event: %v", windowErr)
 	} else {
-		wantStart := mediaStarts[0]
-		if mediaStarts[1] > wantStart {
-			wantStart = mediaStarts[1]
+		wantStart := contentStarts[0]
+		if contentStarts[1] > wantStart {
+			wantStart = contentStarts[1]
 		}
-		logf(scenario, "shared window on the event clock: %s..%s; the measured anchors put the event start at %s",
-			sceneClock(start), sceneClock(end), sceneClock(wantStart))
+		logf(scenario, "shared window on the event clock: %s..%s; the content clocks put the event start at %s (the containers would say %s and %s)",
+			sceneClock(start), sceneClock(end), sceneClock(wantStart), sceneClock(mediaStarts[0]), sceneClock(mediaStarts[1]))
 		check(absDuration(start-wantStart) <= 100*time.Millisecond,
-			"the shared window starts at %s, but the anchors put the event at %s", sceneClock(start), sceneClock(wantStart))
+			"the shared window starts at %s, but the content clocks put the event at %s", sceneClock(start), sceneClock(wantStart))
 		check(end-start >= 8*time.Second, "the shared window covers only %s", sceneClock(end-start))
+
+		// The invariant of this stage: one content position, one event time, even
+		// though the two files state it four seconds apart in their containers.
+		// Going through the container instead put exactly that difference into the
+		// event time, which is what the previous run reported as a shared window.
+		const proofContent = 6 * time.Second
+		events := make([]time.Duration, len(anchors))
+		for index := range anchors {
+			content, err := anchors[index].ContentTime(windows[index].Start + proofContent)
+			if err != nil {
+				check(false, "source %d: content at %s: %v", index+1, sceneClock(proofContent), err)
+				continue
+			}
+			event, err := eventFromMedia(content, 0)
+			if err != nil {
+				check(false, "source %d: event for content %s: %v", index+1, sceneClock(content), err)
+				continue
+			}
+			events[index] = event
+			// The reverse, as P16.4 will need it: content minus the file's start
+			// is the position to ask this particular player for.
+			position := content - windows[index].Start
+			logf(scenario, "source %d: content %s is event %s; in a file cut at %s that is position %s",
+				index+1, sceneClock(proofContent), sceneClock(event), sceneClock(windows[index].Start), sceneClock(position))
+			check(absDuration(position-proofContent) <= time.Millisecond,
+				"source %d: event %s went back to %s, want %s",
+				index+1, sceneClock(event), sceneClock(position), sceneClock(proofContent))
+		}
+		check(events[0] == events[1],
+			"the same content is event %s in one file and %s in the other", sceneClock(events[0]), sceneClock(events[1]))
 	}
 
 	// Each window has to become a player position through its own measured

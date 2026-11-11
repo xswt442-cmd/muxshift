@@ -88,18 +88,18 @@ Three time domains are named separately, and none of them may stand in for anoth
 
 | Domain | Produced by | Rule |
 | --- | --- | --- |
-| `ContainerPTS` | ffprobe's container timestamps, mux delay included | Evidence and basis identification only; never handed to a player, never treated as Core media time |
-| `SourceMediaTime` | The media time a player can seek to; the same clock Core's timeline uses | Produced from a measured container anchor through `mediaClock`; Core's `media = event + offset` is built on it |
-| `EventTime` | The Core timeline | `SourceMediaTime` minus the track's **confirmed** offset; zero is legal only when confirmed |
+| `ContainerPTS` | ffprobe's container timestamps, mux delay included | Evidence and basis identification; also what turns a file position into a player window (`MediaTime`/`playerWindow`), but never Core media time |
+| `ContentTime` (buffer time) | The DVR buffer's own clock, counted from the first segment it stored | This is the `SourceMediaTime` Core's timeline uses: `commonReplay` and `ReplayEventTime` are both built on it |
+| `EventTime` | The Core timeline | `ContentTime` minus the track's **confirmed** offset; zero is legal only when confirmed |
 
 Conversion and refusal:
 
-- `B = R + StartBufferTime` (buffer time), `M = Anchor.MediaStart + (B − Anchor.BufferStart)` (media time), `E = M − the confirmed offset` (event time).
+- `B = R + StartBufferTime` (file position to buffer time), `E = B − the confirmed offset` (event time). The container takes no part in this chain.
+- Opening a player is a different conversion: `M = Anchor.MediaStart + (B − Anchor.BufferStart)` (container time), then `playerWindow` turns that into a player window.
 - An anchor must be measured (`MeasuredAt` non-zero), name the recording's source, the same buffer instance and the same epoch, and state an interval that covers the position being converted; anything else returns `ErrNoAnchor` instead of extrapolating.
-- A position inside a recording is a **file position**, not buffer time; `Recording.EventTime` adds `StartBufferTime` itself, so callers must not add it again.
-- A buffered window must go through `playerWindow` (`desktop/replay_clock.go`) before it reaches a player: a file cut at the buffer start opens at `anchor.BufferStart`, and the container origin cancels in the conversion.
-- Two files with the same content but different container timestamps land on the same player window; that shift stays in the conversion and never becomes a track offset.
-- A shared window is diagnostic for now: until the container-to-player relation is checked across segments (P16.3d-3.1d), it is not an authorized seek range (P16.4).
+- A position inside a recording is a **file position**, not buffer time; `Recording.EventTime` adds `StartBufferTime` itself, so callers must not add it again. The reverse goes through `replayPosition`.
+- Two files with the same content but different container timestamps convert to the same event time (measured: two sources four seconds apart in the container both put content 6s at event 6s). That shift stays in the file-position conversion and never becomes a track offset; giving the second source a four-second `TrackOffset` would falsify what a track offset means in the product.
+- A shared window is a candidate intersection: it lies in content time, but `Position()` settling still does not mean the target frame is on screen (steady playback lags by a bounded 35ms in an MP4 and about 720ms in a TS recording), so it only becomes a seekable range under P16.4's authorization contract.
 
 ## Web client
 

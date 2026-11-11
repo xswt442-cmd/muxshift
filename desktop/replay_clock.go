@@ -1,4 +1,4 @@
-// The replay clock: measuring where a recording sits on its source's media
+﻿// The replay clock: measuring where a recording sits on its source's media
 // clock, and converting a position inside it to shared event time.
 //
 // The buffer's clock starts at the first segment the buffer stored; the source's
@@ -78,6 +78,11 @@ var probeFirstMediaTime = func(ctx context.Context, path string) (time.Duration,
 // container timestamp is the media time there. The anchor names the source,
 // epoch and buffer instance the recording was cut from, so a later cut, a
 // reopened source or a discontinuity makes it refuse instead of drifting.
+// measureRecordingAnchor measures a published recording against the content
+// clock of the buffer it was cut from. The file's first frame is the recording's
+// start buffer time and its container timestamp is the media time there; the
+// content clock begins where the buffer stored its first segment, which the
+// recording carries because the file alone cannot state it.
 func measureRecordingAnchor(recording dvr.Recording) (dvr.Anchor, error) {
 	if err := recording.Valid(); err != nil {
 		return dvr.Anchor{}, err
@@ -421,6 +426,37 @@ func bufferName(instance string) string {
 // track has no confirmed offset in the Core timeline: a zero offset that was
 // never confirmed is not the same thing as a measured zero.
 func (a *appState) replayEventTime(it *item, position time.Duration) (time.Duration, error) {
+	offset, err := a.confirmedShift(it)
+	if err != nil {
+		return 0, err
+	}
+	// The player's position is content, not container: its zero is the file's
+	// first frame. Reaching shared event time means the file's position becomes
+	// buffer time (the recording's start plus the position), buffer time becomes
+	// content time (minus the buffer's origin), and only then does the confirmed
+	// offset apply. Going through the container instead would carry each file's
+	// mux delay into the event clock: two files of the same content sit four
+	// seconds apart there, and every shared window would inherit the difference.
+	file, err := replayFileFor(*it.replay, *it.replayAnchor)
+	if err != nil {
+		return 0, err
+	}
+	buffer := it.replay.StartBufferTime + position
+	content, err := it.replayAnchor.ContentTime(buffer)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", file.file, err)
+	}
+	event, err := eventFromMedia(content, offset)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", file.file, err)
+	}
+	return event, nil
+}
+
+// confirmedShift is the one offset every replay conversion uses. A track with no
+// confirmed offset is refused rather than treated as zero, and the offset always
+// applies to content time -- never to the container's own timestamps.
+func (a *appState) confirmedShift(it *item) (time.Duration, error) {
 	if it.replay == nil {
 		return 0, fmt.Errorf("%s is not showing a recording", shortURI(it.uri))
 	}
@@ -441,18 +477,28 @@ func (a *appState) replayEventTime(it *item, position time.Duration) (time.Durat
 	if !ok {
 		return 0, fmt.Errorf("%s: %w", track, core.ErrNotAligned)
 	}
-	// EventTime takes a position inside the file, which is what the player
-	// reports: its zero is the file's first frame. The recording adds its own
-	// start to reach buffer time, so passing the position here is the whole
-	// conversion -- and doing it through `file` is what proves the anchor
-	// describes the file the player actually opened.
+	return shift.Offset, nil
+}
+
+// replayPosition maps a shared event time back to a position inside the open
+// recording, the reverse of replayEventTime. It says where the file would have
+// to be asked to go; it does not say that the frame there is on screen, which is
+// a separate state the player has to be measured for.
+func (a *appState) replayPosition(it *item, event time.Duration) (time.Duration, error) {
+	offset, err := a.confirmedShift(it)
+	if err != nil {
+		return 0, err
+	}
 	file, err := replayFileFor(*it.replay, *it.replayAnchor)
 	if err != nil {
 		return 0, err
 	}
-	event, err := it.replay.EventTime(position, *it.replayAnchor, shift.Offset)
-	if err != nil {
-		return 0, fmt.Errorf("%s: %w", file.file, err)
+	content := event + offset
+	position := content - it.replay.StartBufferTime
+	length := it.replay.EndBufferTime - it.replay.StartBufferTime
+	if position < 0 || position >= length {
+		return 0, fmt.Errorf("%s: %s is at %s into the recording, which runs %s",
+			file.file, event.Round(time.Millisecond), position.Round(time.Millisecond), length.Round(time.Millisecond))
 	}
-	return event, nil
+	return position, nil
 }

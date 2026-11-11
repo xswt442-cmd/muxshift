@@ -69,6 +69,15 @@ func TestMeasureRecordingAnchorReadsTheFilesFirstFrame(t *testing.T) {
 	if at != anchor.MediaStart {
 		t.Fatalf("the measured start converts to %s, not back to the measured %s", at, anchor.MediaStart)
 	}
+	// And the content clock is buffer time, not the container's: the measured
+	// start is the content time the recording itself names.
+	if content, err := anchor.ContentTime(anchor.BufferStart); err != nil || content != recording.StartBufferTime {
+		t.Fatalf("the measured start is content %s (err %v), want %s",
+			content, err, recording.StartBufferTime)
+	}
+	if _, err := anchor.ContentTime(recording.EndBufferTime); !errors.Is(err, dvr.ErrNoAnchor) {
+		t.Fatalf("a time past the recording gave %v, want ErrNoAnchor", err)
+	}
 }
 
 func TestReplayEventTimeRefusesWhatItCannotProve(t *testing.T) {
@@ -129,8 +138,10 @@ func TestReplayEventTimeRefusesWhatItCannotProve(t *testing.T) {
 		t.Fatalf("an unaligned track gave %v, want ErrNotAligned", err)
 	}
 
-	// With a confirmed offset the conversion runs through the measured anchor and
-	// Core's sign: event = media - offset.
+	// With a confirmed offset the conversion runs through the buffer's content
+	// clock and Core's sign: event = content - offset. Position 1s inside a
+	// recording that starts at buffer 5s is content 6s, and minus the 400ms
+	// offset 5.6s. The container's own timestamp (100s) never enters it.
 	if err := a.sync.timeline.SetShift("track-1", 400*time.Millisecond); err != nil {
 		t.Fatalf("aligning the track: %v", err)
 	}
@@ -138,9 +149,7 @@ func TestReplayEventTimeRefusesWhatItCannotProve(t *testing.T) {
 	if err != nil {
 		t.Fatalf("converting a measured position: %v", err)
 	}
-	// position 1s inside a recording that starts at buffer 5s is media 101s;
-	// minus the 400ms offset that is 100.6s.
-	if want := 100*time.Second + 600*time.Millisecond; event != want {
+	if want := 5600 * time.Millisecond; event != want {
 		t.Fatalf("position 1s converted to event %s, want %s", event, want)
 	}
 }
@@ -261,5 +270,114 @@ func TestMediaClockKeepsAPtsShiftOutOfThePlayerClock(t *testing.T) {
 	shifted := playerWindow(second, dvr.Range{Start: second.BufferStart + 5*time.Second, End: second.BufferStart + 15*time.Second})
 	if shifted.Start != 5*time.Second || shifted.End != 15*time.Second {
 		t.Fatalf("a window cut later converts to %s..%s, want 5s..15s", shifted.Start, shifted.End)
+	}
+}
+
+// replayFixture builds an item showing a recording that starts at buffer 0 and
+// carries the container timestamp media at its first frame.
+func replayFixture(track core.TrackID, instance string, media time.Duration) *item {
+	source := core.SourceID(instance)
+	return &item{
+		uri:   "http://example.invalid/" + instance + ".m3u8",
+		video: track,
+		replay: &dvr.Recording{
+			Source:           source,
+			SourceMediaEpoch: 1,
+			BufferInstance:   instance,
+			StartBufferTime:  0,
+			EndBufferTime:    30 * time.Second,
+		},
+		replayAnchor: &dvr.Anchor{
+			Source:         source,
+			Epoch:          1,
+			BufferInstance: instance,
+			BufferStart:    0,
+			MediaStart:     media,
+			Interval:       dvr.Range{Start: 0, End: 30 * time.Second},
+			MeasuredAt:     time.Now(),
+		},
+	}
+}
+
+// TestOneEventTimeHoldsAcrossContainerStarts is the invariant the replay clock
+// exists for: two files carrying the same frames, but a different mux delay in
+// their container timestamps, must give the same event time for the same
+// content. Converting through the container instead put the fixture's four
+// seconds straight into the event clock.
+func TestOneEventTimeHoldsAcrossContainerStarts(t *testing.T) {
+	first := replayFixture("track-1", "buf-a", 1466667*time.Microsecond)
+	second := replayFixture("track-2", "buf-b", 5466667*time.Microsecond)
+	a := &appState{sync: newSyncState()}
+	// The content is the same, so both tracks are confirmed at offset zero; only
+	// the containers differ.
+	for _, track := range []core.TrackID{"track-1", "track-2"} {
+		if err := a.sync.timeline.SetShift(track, 0); err != nil {
+			t.Fatalf("confirming %s: %v", track, err)
+		}
+	}
+
+	const content = 6 * time.Second
+	firstEvent, err := a.replayEventTime(first, content)
+	if err != nil {
+		t.Fatalf("converting the first file: %v", err)
+	}
+	secondEvent, err := a.replayEventTime(second, content)
+	if err != nil {
+		t.Fatalf("converting the second file: %v", err)
+	}
+	if firstEvent != secondEvent {
+		t.Fatalf("content %s is event %s in one file and %s in the other, %s apart",
+			content, firstEvent, secondEvent, secondEvent-firstEvent)
+	}
+
+	// And back: the one event time has to name the same place in both files.
+	for _, tc := range []struct {
+		name string
+		it   *item
+	}{{"first", first}, {"second", second}} {
+		position, err := a.replayPosition(tc.it, firstEvent)
+		if err != nil {
+			t.Fatalf("%s file: going back from event %s: %v", tc.name, firstEvent, err)
+		}
+		if position != content {
+			t.Fatalf("the %s file put event %s at %s, want %s", tc.name, firstEvent, position, content)
+		}
+	}
+}
+
+// TestContentTimeCountsFromTheBufferStart covers a buffer that joined a stream
+// mid-flight: its clock starts where its first segment was, so a file cut from it
+// later carries that start, and a position inside the file is measured from it.
+func TestContentTimeCountsFromTheBufferStart(t *testing.T) {
+	it := replayFixture("track-1", "buf-a", 120*time.Second)
+	it.replay.StartBufferTime = 20 * time.Second
+	it.replay.EndBufferTime = 40 * time.Second
+	it.replayAnchor.BufferStart = 20 * time.Second
+	it.replayAnchor.Interval = dvr.Range{Start: 20 * time.Second, End: 40 * time.Second}
+	a := &appState{sync: newSyncState()}
+	if err := a.sync.timeline.SetShift("track-1", 0); err != nil {
+		t.Fatalf("confirming the track: %v", err)
+	}
+
+	const position = 6 * time.Second
+	event, err := a.replayEventTime(it, position)
+	if err != nil {
+		t.Fatalf("converting the position: %v", err)
+	}
+	// The buffer joined the stream at 20s of its own clock, so 6s into the file
+	// is content 26s, not 6s.
+	if want := 26 * time.Second; event != want {
+		t.Fatalf("a recording cut %s into its buffer put position %s at event %s, want %s",
+			20*time.Second, position, event, want)
+	}
+	back, err := a.replayPosition(it, event)
+	if err != nil {
+		t.Fatalf("going back from the event: %v", err)
+	}
+	if back != position {
+		t.Fatalf("event %s went back to %s, want %s", event, back, position)
+	}
+	if _, err := a.replayPosition(it, 46*time.Second); err == nil {
+		t.Fatal("an event past the recording was mapped anyway")
 	}
 }

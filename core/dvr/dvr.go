@@ -190,6 +190,7 @@ type Buffer struct {
 	next     time.Duration
 	expected int
 	seen     bool
+
 	pending  *Gap
 	closed   bool
 	dirOwned bool

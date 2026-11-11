@@ -84,29 +84,30 @@ func (a *appState) commonReplay(sources []replaySource) (time.Duration, time.Dur
 		if !ok {
 			return 0, 0, fmt.Errorf("source %d (%s) has no playable buffered range", source.index+1, shortURI(it.uri))
 		}
-		// The buffer's clock is not the source's media clock: the buffer
-		// started at whichever segment it stored first, and a recording says
-		// where that was. Converting through the measured anchor keeps a
-		// window whose first segment is not media time zero honest — the
-		// guessing version shifted the whole history by that difference.
+		// The buffer's clock is not the source's media clock, and the source's
+		// media clock in the container is not the content clock the timeline
+		// holds: the container carries a mux delay that differs between files of
+		// the same content. ContentTime removes that delay (it counts from the
+		// buffer's origin), so two sources showing the same frame land on the
+		// same event time instead of four seconds apart.
 		anchor, err := source.runner.bufferAnchor(window)
 		if err != nil {
 			return 0, 0, fmt.Errorf("source %d (%s): %w", source.index+1, shortURI(it.uri), err)
 		}
-		mediaStart, err := anchor.MediaTime(window.Start)
+		contentStart, err := anchor.ContentTime(window.Start)
 		if err != nil {
 			return 0, 0, fmt.Errorf("source %d (%s): %w", source.index+1, shortURI(it.uri), err)
 		}
-		// Only the start is measured. Buffer time and media time advance
+		// Only the start is measured. Buffer time and content time advance
 		// together within one epoch, so the length of the window carries over
 		// unchanged and the end is a limit of that relation, not a second
 		// sample. See bufferAnchor.
-		mediaEnd := mediaStart + (window.End - window.Start)
-		eventStart, err := eventFromMedia(mediaStart, shift.Offset)
+		contentEnd := contentStart + (window.End - window.Start)
+		eventStart, err := eventFromMedia(contentStart, shift.Offset)
 		if err != nil {
 			return 0, 0, fmt.Errorf("source %d (%s): %w", source.index+1, shortURI(it.uri), err)
 		}
-		eventEnd, err := eventFromMedia(mediaEnd, shift.Offset)
+		eventEnd, err := eventFromMedia(contentEnd, shift.Offset)
 		if err != nil {
 			return 0, 0, fmt.Errorf("source %d (%s): %w", source.index+1, shortURI(it.uri), err)
 		}

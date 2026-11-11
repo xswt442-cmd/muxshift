@@ -79,7 +79,10 @@ type Anchor struct {
 	BufferInstance string
 	// BufferStart is the buffer time the anchor was measured at.
 	BufferStart time.Duration
-	// MediaStart is the source media time observed at BufferStart.
+	// MediaStart is the source media time observed at BufferStart, in the
+	// container's timestamps. It calibrates the file against the buffer; it is
+	// not the content clock, because a mux delay carried by every timestamp
+	// would otherwise move every event time.
 	MediaStart time.Duration
 	// Interval is the contiguous buffer range that was available when the
 	// anchor was measured. A time outside it is not explained by this anchor:
@@ -166,6 +169,31 @@ func (a Anchor) MediaTime(at time.Duration) (time.Duration, error) {
 		return 0, fmt.Errorf("%w: %v", ErrNoAnchor, err)
 	}
 	return a.MediaStart + (at - a.BufferStart), nil
+}
+
+// ContentTime maps a buffer time to the source's content clock, which is what
+// the Core timeline holds. Buffer time already is that clock: a buffer counts
+// from the first segment it stored, not from the source's own start, so the
+// container's mux delay never enters it. Two files carrying the same frames but
+// a different mux delay therefore give the same content time for the same frame.
+// A caller that needs the container's timestamps, for example to open the file
+// at a position, uses MediaTime or playerWindow instead.
+//
+// The checks are the point of the method: it refuses a time the anchor cannot
+// explain, so a caller cannot turn "this anchor does not cover that" into a
+// number.
+func (a Anchor) ContentTime(at time.Duration) (time.Duration, error) {
+	if a.Source == "" {
+		return 0, fmt.Errorf("%w: the anchor names no source", ErrNoAnchor)
+	}
+	if !a.Measured() {
+		return 0, fmt.Errorf("%w: the anchor for %s was not measured; a constructed mapping would shift the result by an unknown amount",
+			ErrNoAnchor, a.Source)
+	}
+	if err := a.explains(at); err != nil {
+		return 0, fmt.Errorf("%w: %v", ErrNoAnchor, err)
+	}
+	return at, nil
 }
 
 // explains reports whether the anchor covers a buffer time. The interval is the

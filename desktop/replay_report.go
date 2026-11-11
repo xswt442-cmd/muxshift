@@ -75,12 +75,12 @@ func (r replayReport) Line() string {
 	for _, source := range r.Sources {
 		if source.Settled {
 			parts = append(parts, fmt.Sprintf("%s requested %s reported %s (residual %s)",
-				source.Source, shortDuration(source.Requested), shortDuration(source.Reported), shortDuration(source.Residual)))
+				source.Source, source.Requested, source.Reported, source.Residual))
 			continue
 		}
-		parts = append(parts, fmt.Sprintf("%s requested %s, no position", source.Source, shortDuration(source.Requested)))
+		parts = append(parts, fmt.Sprintf("%s requested %s, no position", source.Source, source.Requested))
 	}
-	line := fmt.Sprintf("replay %d for event %s: %s", r.ID, shortDuration(r.Event), r.Phase)
+	line := fmt.Sprintf("replay %d for event %s: %s", r.ID, r.Event, r.Phase)
 	if r.Reason != "" {
 		line += ": " + r.Reason
 	}
@@ -103,7 +103,7 @@ func (txn *seekTxn) reportFor(phase replayPhase, reason string) replayReport {
 	report := replayReport{ID: txn.id, Event: txn.event, Phase: phase, Reason: reason}
 	for _, step := range txn.steps {
 		source := replayReportSource{Source: step.item.source.ID, Requested: step.offset}
-		if step.settled > 0 || step.reported != 0 {
+		if step.measured {
 			source.Reported = step.reported
 			source.Residual = step.reported - step.offset
 			source.Settled = true
@@ -114,11 +114,20 @@ func (txn *seekTxn) reportFor(phase replayPhase, reason string) replayReport {
 }
 
 // publishReport keeps the newest account for whatever presents replay state.
+// It never moves the session back to an older attempt: a transaction that
+// finished earlier may report later, and its line still belongs in the log,
+// but it must not replace the account of a request that came after it.
 func (a *appState) publishReport(report replayReport) {
 	a.seekMu.Lock()
-	a.notice = report
+	older := a.notice.ID != 0 && report.ID < a.notice.ID
+	if !older {
+		a.notice = report
+	}
 	a.seekMu.Unlock()
 	logf("seek", "%s", report.Line())
+	if older {
+		logf("seek", "replay %d is older than the newest attempt %d, so it stays out of the session's account", report.ID, a.notice.ID)
+	}
 }
 
 // lastReport returns the newest account, if any.

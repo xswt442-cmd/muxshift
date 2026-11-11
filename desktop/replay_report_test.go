@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/xswt442-cmd/muxshift/core"
+	"github.com/xswt442-cmd/muxshift/core/dvr"
 )
 
 // waitForReport waits until a report of the wanted phase has been published.
@@ -122,5 +123,51 @@ func TestReportIsASnapshot(t *testing.T) {
 	second, _ := session.app.lastReport()
 	if second.Sources[0].Reported == 99*time.Second {
 		t.Fatal("editing a returned report changed the session's account")
+	}
+}
+
+// TestReportKeepsAZeroPositionAsEvidence covers the case where the player
+// really reports zero: a small target inside the tolerance is a measurement,
+// and the report must keep it as one instead of reading the zero as "nothing
+// was measured".
+func TestReportKeepsAZeroPositionAsEvidence(t *testing.T) {
+	session, _ := seekTxnFixture(t)
+	session.app.openSeek = func(recording dvr.Recording) (desktopPlayer, error) {
+		return &fakeSeekPlayer{name: recording.FileName(), ready: true}, nil
+	}
+	if err := session.app.startSeekTxn(session.items, 10*time.Millisecond); err != nil {
+		t.Fatalf("the transaction did not start: %v", err)
+	}
+	report := waitForReport(t, session.app, replayCommitted)
+	if !report.Published() || report.FrameConfirmed() {
+		t.Fatalf("a committed report published=%v frame=%v", report.Published(), report.FrameConfirmed())
+	}
+	for _, source := range report.Sources {
+		if !source.Settled {
+			t.Fatalf("%s reported a real zero position and the report dropped it", source.Source)
+		}
+		if source.Requested != 10*time.Millisecond || source.Reported != 0 || source.Residual != -10*time.Millisecond {
+			t.Fatalf("%s requested %s reported %s residual %s, want 10ms/0s/-10ms",
+				source.Source, source.Requested, source.Reported, source.Residual)
+		}
+	}
+	if line := report.Line(); !strings.Contains(line, "reported 0s (residual -10ms)") {
+		t.Fatalf("the line lost the millisecond evidence: %s", line)
+	}
+}
+
+// TestLastReportDoesNotRegressToAnOlderAttempt holds the newest attempt even
+// when an older transaction publishes after it.
+func TestLastReportDoesNotRegressToAnOlderAttempt(t *testing.T) {
+	session, _ := seekTxnFixture(t)
+	session.app.publishReport(replayReport{ID: 2, Event: 7 * time.Second, Phase: replayRefused, Reason: "outside the buffer"})
+	session.app.publishReport(replayReport{ID: 1, Event: 7 * time.Second, Phase: replayCommitted})
+
+	report, ok := session.app.lastReport()
+	if !ok {
+		t.Fatal("no report was kept")
+	}
+	if report.ID != 2 || report.Phase != replayRefused {
+		t.Fatalf("the account went back to attempt %d (%s), want 2 (refused)", report.ID, report.Phase)
 	}
 }

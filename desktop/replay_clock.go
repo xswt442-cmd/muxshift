@@ -99,32 +99,88 @@ func measureRecordingAnchor(recording dvr.Recording) (dvr.Anchor, error) {
 	}, nil
 }
 
-// startAnchorMeasurement measures the buffer's anchor once, in the background,
-// as soon as the buffer holds a segment. Doing it early keeps the measurement
-// off the drawing thread: a caller that needs the anchor then finds it ready
-// instead of waiting for ffprobe.
-func (r *dvrRunner) startAnchorMeasurement() {
-	r.anchorOnce.Do(func() {
-		r.anchorDone = make(chan struct{})
-		go func() {
-			defer close(r.anchorDone)
-			r.anchor, r.anchorErr = r.measureAnchor()
-		}()
-	})
+// anchorAttempt is one measurement, named by the point it measured. Two
+// attempts are the same work only when they measure the same segment of the same
+// clock: after a discontinuity the buffer's current point moves, and a pair
+// measured at the old point no longer describes the clock the buffer is on.
+type anchorAttempt struct {
+	point  dvr.ClockPoint
+	done   chan struct{}
+	anchor *dvr.Anchor
+	err    error
 }
 
-// measureAnchor reads the buffer's oldest stored segment and measures the pair
-// that ties the buffer's clock to the source's media clock there.
-//
-// The segment and the clock identity are taken under one lock, before the
-// measurement runs: ffprobe can take a second, and a discontinuity arriving in
-// the meantime would otherwise have the anchor name an epoch that its segment
-// does not belong to.
-func (r *dvrRunner) measureAnchor() (*dvr.Anchor, error) {
-	point, err := r.buffer.OldestSegment()
+// refreshAnchor starts measuring the buffer's current point when nothing is
+// measuring it yet. It returns immediately: the measurement runs in the
+// background so ffprobe never makes a drawing pass wait.
+func (r *dvrRunner) refreshAnchor() {
+	point, err := r.buffer.CurrentSegment()
+	if err != nil {
+		return
+	}
+	r.anchorMu.Lock()
+	defer r.anchorMu.Unlock()
+	if attempt := r.attempt; attempt != nil && attempt.point.Epoch == point.Epoch &&
+		attempt.point.Segment.Start == point.Segment.Start {
+		return
+	}
+	attempt := &anchorAttempt{point: point, done: make(chan struct{})}
+	r.attempt = attempt
+	go func() {
+		defer close(attempt.done)
+		attempt.anchor, attempt.err = r.measureAnchor(point)
+	}()
+}
+
+// currentAttempt returns the measurement of the buffer's current point when one
+// has finished. It never waits; a caller on the drawing thread asks for what is
+// ready and comes back after the next segment.
+func (r *dvrRunner) currentAttempt() (*anchorAttempt, error) {
+	point, err := r.buffer.CurrentSegment()
 	if err != nil {
 		return nil, err
 	}
+	r.anchorMu.Lock()
+	attempt := r.attempt
+	r.anchorMu.Unlock()
+	if attempt == nil || attempt.point.Epoch != point.Epoch ||
+		attempt.point.Segment.Start != point.Segment.Start {
+		r.refreshAnchor()
+		return nil, fmt.Errorf("the buffer has not measured its clock yet; the next segment starts the measurement")
+	}
+	select {
+	case <-attempt.done:
+		return attempt, nil
+	default:
+		return nil, fmt.Errorf("the buffer is still measuring its clock; try again in a moment")
+	}
+}
+
+// waitAnchor blocks until the buffer's current point has been measured. It is
+// for callers that are not the drawing thread — scripted checks and tests — and
+// gives up when ctx is done.
+func (r *dvrRunner) waitAnchor(ctx context.Context) (*dvr.Anchor, error) {
+	for {
+		r.refreshAnchor()
+		if attempt, err := r.currentAttempt(); err == nil {
+			return attempt.anchor, attempt.err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// measureAnchor reads the point the buffer is on and measures the pair that ties
+// the buffer's clock to the source's media clock there.
+//
+// The segment and the clock identity were taken under one lock, before the
+// measurement runs: ffprobe can take a second, and a discontinuity arriving in
+// the meantime would otherwise have the anchor name an epoch that its segment
+// does not belong to.
+func (r *dvrRunner) measureAnchor(point dvr.ClockPoint) (*dvr.Anchor, error) {
 	first := point.Segment
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -149,13 +205,19 @@ func (r *dvrRunner) measureAnchor() (*dvr.Anchor, error) {
 // discontinuity moves the epoch, and a window that starts before the measured
 // segment cannot be explained by that measurement at all, so both are refused
 // rather than extrapolated.
+//
+// It does not wait for the measurement. A caller on the drawing thread gets an
+// error saying the clock is not measured yet and asks again later; a caller that
+// can afford to wait uses waitAnchor first.
 func (r *dvrRunner) bufferAnchor(window dvr.Range) (dvr.Anchor, error) {
-	r.startAnchorMeasurement()
-	<-r.anchorDone
-	if r.anchorErr != nil {
-		return dvr.Anchor{}, r.anchorErr
+	attempt, err := r.currentAttempt()
+	if err != nil {
+		return dvr.Anchor{}, err
 	}
-	anchor := *r.anchor
+	if attempt.err != nil {
+		return dvr.Anchor{}, attempt.err
+	}
+	anchor := *attempt.anchor
 	if epoch := r.buffer.Epoch(); anchor.Epoch != epoch {
 		return dvr.Anchor{}, fmt.Errorf("the buffer moved to epoch %d after the anchor was measured in epoch %d",
 			epoch, anchor.Epoch)
@@ -168,6 +230,30 @@ func (r *dvrRunner) bufferAnchor(window dvr.Range) (dvr.Anchor, error) {
 		anchor.Interval.End = window.End
 	}
 	return anchor, nil
+}
+
+// waitBufferAnchor waits for the measurement and then converts the window, which
+// is what a caller that is not the drawing thread wants: scripted checks, tests
+// and the probe route. It repeats the conversion because the buffer's point can
+// move while the measurement runs.
+func (r *dvrRunner) waitBufferAnchor(ctx context.Context, window dvr.Range) (dvr.Anchor, error) {
+	for {
+		if _, err := r.waitAnchor(ctx); err != nil {
+			return dvr.Anchor{}, err
+		}
+		anchor, err := r.bufferAnchor(window)
+		if err == nil {
+			return anchor, nil
+		}
+		if ctx.Err() != nil {
+			return dvr.Anchor{}, err
+		}
+		select {
+		case <-ctx.Done():
+			return dvr.Anchor{}, err
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 }
 
 // mediaClock converts between the two clocks a replay file has. The buffer

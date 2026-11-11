@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -190,32 +191,19 @@ func TestReplayFileRefusesAnAnchorForAnotherFile(t *testing.T) {
 	}
 }
 
-func TestBufferAnchorRefusesAWindowBeforeTheMeasuredSegment(t *testing.T) {
-	anchor := dvr.Anchor{
-		Source:         "fixture",
-		Epoch:          1,
-		BufferInstance: "buf-fixture",
-		BufferStart:    5 * time.Second,
-		MediaStart:     100 * time.Second,
-		Interval:       dvr.Range{Start: 5 * time.Second, End: 9 * time.Second},
-		MeasuredAt:     time.Now(),
+func TestBufferAnchorWidensOnlyForward(t *testing.T) {
+	buffer, _ := fixtureBuffer(t)
+	stubProbe(t, 100*time.Second, nil)
+	runner := &dvrRunner{buffer: buffer, source: "fixture"}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := runner.waitAnchor(ctx); err != nil {
+		t.Fatalf("waiting for the measurement: %v", err)
 	}
-	buffer, err := dvr.New(dvr.Options{Dir: t.TempDir(), Source: "fixture", SourceEpoch: 1})
-	if err != nil {
-		t.Fatalf("starting a buffer for the runner: %v", err)
-	}
-	t.Cleanup(func() { buffer.Close() })
-	runner := &dvrRunner{buffer: buffer}
-	// Mark the one-shot as spent: this test supplies the measurement instead of
-	// running ffprobe against a buffer it never filled.
-	runner.anchorOnce.Do(func() {})
-	runner.anchor = &anchor
-	runner.anchorDone = make(chan struct{})
-	close(runner.anchorDone)
 
 	// A window starting at the measured segment is explained, and the interval
 	// widens to cover it: buffer time moves with media time within one epoch.
-	got, err := runner.bufferAnchor(dvr.Range{Start: 5 * time.Second, End: 12 * time.Second})
+	got, err := runner.bufferAnchor(dvr.Range{Start: 0, End: 12 * time.Second})
 	if err != nil {
 		t.Fatalf("a window at the measured segment was refused: %v", err)
 	}
@@ -224,8 +212,9 @@ func TestBufferAnchorRefusesAWindowBeforeTheMeasuredSegment(t *testing.T) {
 	}
 
 	// A window that starts before it cannot be blamed on the measurement.
-	if _, err := runner.bufferAnchor(dvr.Range{Start: 2 * time.Second, End: 9 * time.Second}); err == nil {
-		t.Fatal("a window before the measured segment was accepted")
+	if _, err := runner.bufferAnchor(dvr.Range{Start: -time.Second, End: 9 * time.Second}); err == nil ||
+		!strings.Contains(err.Error(), "before the measured segment") {
+		t.Fatalf("a window before the measured segment reports %v, want a refusal", err)
 	}
 }
 

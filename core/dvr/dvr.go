@@ -496,6 +496,22 @@ func (b *Buffer) OldestSegment() (ClockPoint, error) {
 	return ClockPoint{}, fmt.Errorf("%w: the buffer holds no segment", ErrNoRange)
 }
 
+// CurrentSegment returns the first segment of the range the buffer is filling
+// now, with the clock it belongs to. That is the point an anchor has to be
+// measured at to describe the clock the buffer is on: after a discontinuity, the
+// oldest segment belongs to the clock that was replaced.
+func (b *Buffer) CurrentSegment() (ClockPoint, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	ranges := b.ranges()
+	if len(ranges) == 0 || len(ranges[len(ranges)-1].Segments) == 0 {
+		return ClockPoint{}, fmt.Errorf("%w: the buffer holds no segment", ErrNoRange)
+	}
+	current := ranges[len(ranges)-1]
+	segment := current.Segments[0]
+	return ClockPoint{Segment: segment, Epoch: current.Epoch, BufferInstance: b.instance}, nil
+}
+
 // Locate returns the stored segment whose media time contains at, so a replay
 // can start at the segment boundary at or before it.
 func (b *Buffer) Locate(at time.Duration) (Segment, error) {

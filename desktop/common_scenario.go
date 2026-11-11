@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -104,26 +105,22 @@ func commonBody(window *mygo.Window, a *appState, dir string) {
 	anchors := make([]dvr.Anchor, 2)
 	mediaStarts := make([]time.Duration, 2)
 	for index, runner := range runners {
-		index, runner := index, runner
-		var anchorErr error
-		mygoRunOnMain(func() {
-			stored, err := runner.bufferAnchor(windows[index])
-			if err != nil {
-				anchorErr = err
-				return
-			}
-			anchors[index] = stored
-			media, err := stored.MediaTime(windows[index].Start)
-			if err != nil {
-				anchorErr = err
-				return
-			}
-			mediaStarts[index] = media
-		})
-		if anchorErr != nil {
-			logf(scenario, "source %d: measure the anchor: %v", index+1, anchorErr)
+		// The measurement waits here, off the drawing thread: ffprobe runs in the
+		// background and the loop below only reads what it produced.
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		stored, err := runner.waitBufferAnchor(ctx, windows[index])
+		cancel()
+		if err != nil {
+			logf(scenario, "source %d: measure the anchor: %v", index+1, err)
 			return
 		}
+		anchors[index] = stored
+		media, err := stored.MediaTime(windows[index].Start)
+		if err != nil {
+			logf(scenario, "source %d: place the window on media time: %v", index+1, err)
+			return
+		}
+		mediaStarts[index] = media
 		logf(scenario, "source %d measured: media %s at buffer %s (epoch %d, %s)",
 			index+1, sceneClock(anchors[index].MediaStart), sceneClock(anchors[index].BufferStart),
 			anchors[index].Epoch, anchors[index].BufferInstance)

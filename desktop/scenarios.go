@@ -56,4 +56,6 @@ var scenarios = map[string]scenario{
 	"swap-two":         runSwapTwo,
 	"common":           runCommon,
 	"midjoin":          runMidJoin,
+	"frames":           runFrames,
+	"clock":            runClock,
 }

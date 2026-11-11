@@ -433,6 +433,13 @@ func (a *appState) stage(c *ui.Context) {
 				ui.Video(c, rawPlayer(it.previous)).Fill()
 				shown++
 			}
+			if pending := a.pendingSeekPlayer(it); pending != nil {
+				// The replacement is drawn for the same reason the swap
+				// candidate is: a player that is never drawn never produces its
+				// first frame, and the transaction waits for one. The source
+				// keeps its old picture until the commit.
+				ui.Video(c, rawPlayer(pending)).Fill().Hidden(!it.shown)
+			}
 			ui.Video(c, rawPlayer(it.player)).Fill().Hidden(!it.shown)
 			if it.shown {
 				shown++

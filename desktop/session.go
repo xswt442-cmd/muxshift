@@ -122,6 +122,21 @@ type appState struct {
 	openReplay    func(path string) (*ui.VideoPlayer, error)
 	replayStarted func(player *ui.VideoPlayer) bool
 
+	// The replay transaction has its own seams: a unit test drives it without a
+	// window, standing in for the file it opens, the picture that player would
+	// show, and the moment between preparing and committing.
+	openSeek         func(recording dvr.Recording) (desktopPlayer, error)
+	seekStarted      func(player desktopPlayer) bool
+	beforeSeekCommit func()
+
+	// seek is the replay transaction in flight, nil when none is running. The
+	// window keeps the player it has until that transaction commits.
+	seek   *seekTxn
+	seekMu sync.Mutex
+	// seekMain runs the commit step where players may be touched. Tests run
+	// without a window and call the step directly.
+	seekMain func(func())
+
 	// syncNote is the outcome of the last sync command, so a refused seek stays
 	// visible in the window instead of only in the log.
 	syncNote string

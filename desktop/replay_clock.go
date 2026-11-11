@@ -108,27 +108,83 @@ type anchorAttempt struct {
 	done   chan struct{}
 	anchor *dvr.Anchor
 	err    error
+	tries  int
 }
 
+// finished reports whether the measurement has put down its result.
+func (a *anchorAttempt) finished() bool {
+	select {
+	case <-a.done:
+		return true
+	default:
+		return false
+	}
+}
+
+// samePoint reports whether two measurements are of the same work: the same
+// segment of the same clock.
+func samePoint(a, b dvr.ClockPoint) bool {
+	return a.Epoch == b.Epoch && a.Segment.Start == b.Segment.Start
+}
+
+// covers reports whether a measurement at measured describes the buffer's clock
+// from current onwards. It is the same segment normally; after a segment proved
+// unreadable the runner measures a later one, whose buffer start still anchors
+// every later position (and leaves earlier ones unprovable).
+func covers(measured, current dvr.ClockPoint) bool {
+	return measured.Epoch == current.Epoch && measured.Segment.Start >= current.Segment.Start
+}
+
+// maxAnchorTries bounds how often one point is measured before the runner gives
+// up on that segment and measures the newest one the buffer holds instead. The
+// replacement anchor names the newer segment's own buffer start, so windows
+// before it are refused rather than extrapolated.
+const maxAnchorTries = 2
+
 // refreshAnchor starts measuring the buffer's current point when nothing is
-// measuring it yet. It returns immediately: the measurement runs in the
+// measuring it yet, and retries a measurement that failed once the buffer has
+// stored another segment. It returns immediately: the measurement runs in the
 // background so ffprobe never makes a drawing pass wait.
 func (r *dvrRunner) refreshAnchor() {
 	point, err := r.buffer.CurrentSegment()
 	if err != nil {
 		return
 	}
-	r.anchorMu.Lock()
-	defer r.anchorMu.Unlock()
-	if attempt := r.attempt; attempt != nil && attempt.point.Epoch == point.Epoch &&
-		attempt.point.Segment.Start == point.Segment.Start {
+	newest, err := r.buffer.NewestSegment()
+	if err != nil {
 		return
 	}
-	attempt := &anchorAttempt{point: point, done: make(chan struct{})}
+	r.anchorMu.Lock()
+	defer r.anchorMu.Unlock()
+
+	target := point
+	tries := 1
+	if attempt := r.attempt; attempt != nil && covers(attempt.point, point) {
+		if !attempt.finished() {
+			return
+		}
+		// A measurement that succeeded stands: a growing range does not make it
+		// stale. Only a failure is retried, and only once the buffer has stored a
+		// segment after the one that could not be read — retrying on every poll
+		// would hammer ffprobe for no new information.
+		if attempt.err == nil || newest.Segment.Start <= attempt.point.Segment.Start {
+			return
+		}
+		tries = attempt.tries + 1
+		if tries > maxAnchorTries {
+			// This segment cannot be read. Measure what the buffer has now; the
+			// anchor carries that segment's own buffer start, so anything before
+			// it stays unprovable.
+			target = newest
+			tries = 1
+		}
+	}
+
+	attempt := &anchorAttempt{point: target, done: make(chan struct{}), tries: tries}
 	r.attempt = attempt
 	go func() {
 		defer close(attempt.done)
-		attempt.anchor, attempt.err = r.measureAnchor(point)
+		attempt.anchor, attempt.err = r.measureAnchor(target)
 	}()
 }
 
@@ -143,8 +199,7 @@ func (r *dvrRunner) currentAttempt() (*anchorAttempt, error) {
 	r.anchorMu.Lock()
 	attempt := r.attempt
 	r.anchorMu.Unlock()
-	if attempt == nil || attempt.point.Epoch != point.Epoch ||
-		attempt.point.Segment.Start != point.Segment.Start {
+	if attempt == nil || !covers(attempt.point, point) {
 		r.refreshAnchor()
 		return nil, fmt.Errorf("the buffer has not measured its clock yet; the next segment starts the measurement")
 	}

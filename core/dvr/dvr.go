@@ -512,6 +512,23 @@ func (b *Buffer) CurrentSegment() (ClockPoint, error) {
 	return ClockPoint{Segment: segment, Epoch: current.Epoch, BufferInstance: b.instance}, nil
 }
 
+// NewestSegment returns the last segment the buffer has stored, with its clock.
+// It is the trigger for retrying a measurement that failed: the buffer's current
+// point stays the same while a range grows, so "is there newer media than the
+// segment that could not be read" is a different question from "which point does
+// the anchor describe".
+func (b *Buffer) NewestSegment() (ClockPoint, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	ranges := b.ranges()
+	if len(ranges) == 0 || len(ranges[len(ranges)-1].Segments) == 0 {
+		return ClockPoint{}, fmt.Errorf("%w: the buffer holds no segment", ErrNoRange)
+	}
+	current := ranges[len(ranges)-1]
+	segment := current.Segments[len(current.Segments)-1]
+	return ClockPoint{Segment: segment, Epoch: current.Epoch, BufferInstance: b.instance}, nil
+}
+
 // Locate returns the stored segment whose media time contains at, so a replay
 // can start at the segment boundary at or before it.
 func (b *Buffer) Locate(at time.Duration) (Segment, error) {

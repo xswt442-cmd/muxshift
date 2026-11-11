@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -108,6 +110,84 @@ func TestMeasureAnchorKeepsTheEpochOfItsSegment(t *testing.T) {
 	}
 	if fresh.Epoch != 2 {
 		t.Fatalf("the new anchor names epoch %d, want 2", fresh.Epoch)
+	}
+}
+
+// TestFailedAnchorRetriesAfterNextSegmentInSameEpoch pins the retry trigger. The
+// point an anchor describes does not move while a range grows, so "the buffer
+// stored another segment" is a different question from "which point is
+// measured". A failed measurement must be retried once new media arrives, must
+// not be retried on every poll, and a measurement that succeeded must stand.
+func TestFailedAnchorRetriesAfterNextSegmentInSameEpoch(t *testing.T) {
+	buffer, add := fixtureBuffer(t)
+	refused := errors.New("ffprobe could not read the segment")
+
+	var mu sync.Mutex
+	calls := 0
+	original := probeFirstMediaTime
+	t.Cleanup(func() { probeFirstMediaTime = original })
+	probeFirstMediaTime = func(ctx context.Context, path string) (time.Duration, error) {
+		mu.Lock()
+		calls++
+		first := calls == 1
+		mu.Unlock()
+		if first {
+			return 0, refused
+		}
+		return 100 * time.Second, nil
+	}
+	count := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return calls
+	}
+
+	runner := &dvrRunner{buffer: buffer, source: "fixture"}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	runner.refreshAnchor()
+	if _, err := runner.waitAnchor(ctx); !errors.Is(err, refused) {
+		t.Fatalf("waiting on a failed measurement reports %v, want the probe's error", err)
+	}
+	if anchor, err := runner.bufferAnchor(dvr.Range{Start: 0, End: 2 * time.Second}); err == nil {
+		t.Fatalf("a failed measurement produced an anchor: %+v", anchor)
+	}
+
+	// Nothing new has arrived, so nothing new can be learned: polling must not
+	// start another measurement.
+	after := count()
+	for i := 0; i < 5; i++ {
+		runner.refreshAnchor()
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := count(); got != after {
+		t.Fatalf("the buffer measured %d times without a new segment, want %d", got, after)
+	}
+
+	// A second segment in the same epoch is the trigger.
+	add(2, false)
+	anchor, err := runner.waitBufferAnchor(ctx, dvr.Range{Start: 0, End: 2 * time.Second})
+	if err != nil {
+		t.Fatalf("the retry after new media did not produce an anchor: %v", err)
+	}
+	if anchor.Epoch != 1 {
+		t.Fatalf("the retried anchor names epoch %d, want 1", anchor.Epoch)
+	}
+	if anchor.BufferStart != 0 {
+		t.Fatalf("the retried anchor starts at buffer %s, want the measured segment's 0s", anchor.BufferStart)
+	}
+	if got := count(); got != after+1 {
+		t.Fatalf("the retry measured %d times, want one more than %d", got, after)
+	}
+
+	// A measurement that succeeded stands: growing the range does not make it
+	// stale, and re-measuring would only cost another ffprobe.
+	add(3, false)
+	runner.refreshAnchor()
+	time.Sleep(50 * time.Millisecond)
+	if got := count(); got != after+1 {
+		t.Fatalf("a successful acquisition was measured again (%d calls, want %d)", got, after+1)
 	}
 }
 

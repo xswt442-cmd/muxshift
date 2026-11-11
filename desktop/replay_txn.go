@@ -382,16 +382,25 @@ const seekShutdownWait = 2 * time.Second
 // the work it started to return. A closing session runs this before it closes
 // the buffers those files were cut from, so a player opened at the last moment
 // is given back instead of outliving the session.
+//
+// The budget is a reporting threshold, not a licence to close underneath the
+// work: the goroutine may be inside a cut, an ffprobe or a player open, and it
+// still holds the buffer those calls read. Once the budget has passed the
+// waiting is logged and continues, because destroying a buffer while a
+// preparation is still reading it is worse than a slow close.
 func (a *appState) shutdownReplayTxn() bool {
 	txn := a.seekInFlight()
 	if txn == nil {
 		return true
 	}
 	a.abortSeekTxn(txn, "the session is closing")
-	if !a.awaitSeekTxn(txn, seekShutdownWait) {
-		logf("seek", "the replay preparation was still running %s after the session closed", seekShutdownWait)
-		return false
+	start := time.Now()
+	if a.awaitSeekTxn(txn, seekShutdownWait) {
+		return true
 	}
+	logf("seek", "the replay preparation is still running %s after the session closed; waiting for it to return before the buffers go", seekShutdownWait)
+	<-txn.done
+	logf("seek", "the replay preparation returned after %s, so the session can close", time.Since(start).Round(time.Millisecond))
 	return true
 }
 

@@ -676,3 +676,47 @@ func TestShutdownWaitsForAnOpeningPlayer(t *testing.T) {
 		t.Fatalf("leases were left open after the session closed: %v", pending)
 	}
 }
+
+// TestShutdownWaitsPastTheBudgetForAnOpeningPlayer pins the closing rule: the
+// budget is when the wait gets reported, not when the buffers may be destroyed.
+// A preparation that is still inside an engine call keeps running, and the
+// session waits for it to return instead of closing the buffer it is reading.
+func TestShutdownWaitsPastTheBudgetForAnOpeningPlayer(t *testing.T) {
+	session, opened := seekTxnFixture(t)
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	session.app.openSeek = func(recording dvr.Recording) (desktopPlayer, error) {
+		close(entered)
+		<-release
+		player := &fakeSeekPlayer{name: recording.FileName(), ready: true}
+		*opened = append(*opened, player)
+		return player, nil
+	}
+	if err := session.app.startSeekTxn(session.items, 7*time.Second); err != nil {
+		t.Fatalf("the transaction did not start: %v", err)
+	}
+	<-entered
+
+	closed := make(chan struct{})
+	go func() {
+		session.app.shutdownReplayTxn()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+		t.Fatal("the close returned while a player was still opening")
+	case <-time.After(seekShutdownWait + 400*time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the close did not return after the opening finished")
+	}
+	for _, player := range *opened {
+		if !player.closed {
+			t.Fatal("a player opened after the close began was left open")
+		}
+	}
+}

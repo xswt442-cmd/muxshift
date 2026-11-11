@@ -15,6 +15,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,6 +40,18 @@ type seekTxnStep struct {
 
 	lease  *dvr.Lease
 	player desktopPlayer
+
+	// offset is where the target sits inside the file that cutting produced,
+	// and settled is where the player reported it had arrived. They are two
+	// different facts: the second says the player is at that position, not that
+	// the frame there is on screen.
+	offset  time.Duration
+	settled time.Duration
+
+	// wasPlaying is the state the player was committed in. Settling it means
+	// stopping, asking for the position and letting it go again, so the state
+	// it had before is restored afterwards rather than left paused.
+	wasPlaying bool
 
 	// finished makes the lease and the player be given back by exactly one
 	// path: a rollback, a superseded run, or the commit that released them as
@@ -174,12 +187,23 @@ func (a *appState) prepareSeekTxn(txn *seekTxn) {
 				hop.Source, shortDuration(step.recording.StartBufferTime), shortDuration(want), shortDuration(hop.Position)))
 			return
 		}
+		a.seekMu.Lock()
+		step.offset = hop.Position
+		a.seekMu.Unlock()
 	}
 	txn.prepared = prepared
 
 	logf("seek", "prepared %d recording(s) for event %s; waiting for every replacement to show a picture",
 		len(txn.steps), shortDuration(txn.event))
 	if err := a.waitSeekPlayers(txn); err != nil {
+		a.abortSeekTxn(txn, err.Error())
+		return
+	}
+	// Position the replacements before the commit, while the players that are on
+	// screen still exist: a player that never reaches its position can then be
+	// given back with the rest of the transaction instead of leaving the session
+	// on a file that cannot show the requested moment.
+	if err := a.settleSeekTxn(txn); err != nil {
 		a.abortSeekTxn(txn, err.Error())
 		return
 	}
@@ -339,6 +363,96 @@ func (a *appState) seekPlayerStarted(player desktopPlayer) bool {
 		return a.seekStarted(player)
 	}
 	return player.Ready() && !player.Buffering()
+}
+
+// seekFrame is what a replacement player reports in one drawing-thread pass.
+type seekFrame struct {
+	position  time.Duration
+	ready     bool
+	buffering bool
+}
+
+// seekSettleTolerance is how far from the requested position a player may be
+// and still count as having arrived. It is the same tolerance the sampling
+// checks use: roughly a frame at 30fps plus the engine's own reporting step.
+const seekSettleTolerance = 40 * time.Millisecond
+
+// settleSeekTxn asks every replacement for the target position inside its own
+// file and waits until each reports it. It runs before the commit so that a
+// player which never arrives is rolled back with the rest of the transaction.
+//
+// What this proves is a position, not a picture: the player reports where it
+// was asked to go, and the engine has no reliable way to say that the frame at
+// that position is the one on screen. The transaction therefore records the
+// position it settled at and never claims a confirmed frame.
+func (a *appState) settleSeekTxn(txn *seekTxn) error {
+	for _, step := range txn.steps {
+		target := step.offset
+		player := step.player
+		a.seekOnMain(func() {
+			step.wasPlaying = player.Playing()
+			player.Pause()
+			player.Seek(target)
+		})
+	}
+	deadline := time.Now().Add(handoverWait)
+	stable := 0
+	for {
+		short := ""
+		frame := seekFrame{}
+		for _, step := range txn.steps {
+			frame = a.seekFrameOf(step.player)
+			if !frame.ready || frame.buffering {
+				short = fmt.Sprintf("%s is not ready yet", a.name(step.item))
+				break
+			}
+			if absDuration(frame.position-step.offset) > seekSettleTolerance {
+				short = fmt.Sprintf("%s reports %s, not %s", a.name(step.item), shortDuration(frame.position), shortDuration(step.offset))
+				break
+			}
+		}
+		if short == "" {
+			stable++
+			if stable >= 2 {
+				for _, step := range txn.steps {
+					player := step.player
+					if step.wasPlaying {
+						a.seekOnMain(func() { player.Play() })
+					}
+				}
+				a.seekMu.Lock()
+				for _, step := range txn.steps {
+					step.settled = step.offset
+				}
+				positions := make([]string, 0, len(txn.steps))
+				for _, step := range txn.steps {
+					positions = append(positions, shortDuration(step.settled))
+				}
+				a.seekMu.Unlock()
+				logf("seek", "every replacement reports its target position (%s); that is a position, not a confirmed frame",
+					strings.Join(positions, ", "))
+				return nil
+			}
+		} else {
+			stable = 0
+		}
+		if !time.Now().Before(deadline) {
+			if short == "" {
+				short = fmt.Sprintf("a player reports %s, not %s", shortDuration(frame.position), shortDuration(frame.position))
+			}
+			return fmt.Errorf("did not settle on the target within %s: %s", handoverWait, short)
+		}
+		time.Sleep(60 * time.Millisecond)
+	}
+}
+
+// seekFrameOf reads one player's state on the drawing thread.
+func (a *appState) seekFrameOf(player desktopPlayer) seekFrame {
+	var frame seekFrame
+	a.seekOnMain(func() {
+		frame = seekFrame{position: player.Position(), ready: player.Ready(), buffering: player.Buffering()}
+	})
+	return frame
 }
 
 // waitSeekPlayers gives every replacement the same handover budget a single

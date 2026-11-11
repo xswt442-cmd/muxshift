@@ -16,19 +16,30 @@ type fakeSeekPlayer struct {
 	name   string
 	ready  bool
 	closed bool
+
+	// honourSeek decides whether the player reports the position it was asked
+	// for. A player that does not move is what a failed seek looks like from
+	// here: the transaction must notice and give it back.
+	honourSeek bool
+	position   time.Duration
 }
 
-func (p *fakeSeekPlayer) Ready() bool                       { return p.ready }
-func (p *fakeSeekPlayer) Playing() bool                     { return false }
-func (p *fakeSeekPlayer) Buffering() bool                   { return false }
-func (p *fakeSeekPlayer) Position() time.Duration           { return 0 }
-func (p *fakeSeekPlayer) Duration() time.Duration           { return 0 }
-func (p *fakeSeekPlayer) Volume() float64                   { return 0 }
-func (p *fakeSeekPlayer) Muted() bool                       { return true }
-func (p *fakeSeekPlayer) Err() error                        { return nil }
-func (p *fakeSeekPlayer) Play()                             {}
-func (p *fakeSeekPlayer) Pause()                            {}
-func (p *fakeSeekPlayer) Seek(time.Duration)                {}
+func (p *fakeSeekPlayer) Ready() bool     { return p.ready }
+func (p *fakeSeekPlayer) Playing() bool   { return false }
+func (p *fakeSeekPlayer) Buffering() bool { return false }
+
+func (p *fakeSeekPlayer) Position() time.Duration { return p.position }
+func (p *fakeSeekPlayer) Duration() time.Duration { return 0 }
+func (p *fakeSeekPlayer) Volume() float64         { return 0 }
+func (p *fakeSeekPlayer) Muted() bool             { return true }
+func (p *fakeSeekPlayer) Err() error              { return nil }
+func (p *fakeSeekPlayer) Play()                   {}
+func (p *fakeSeekPlayer) Pause()                  {}
+func (p *fakeSeekPlayer) Seek(target time.Duration) {
+	if p.honourSeek {
+		p.position = target
+	}
+}
 func (p *fakeSeekPlayer) SetVolume(float64) *ui.VideoPlayer { return nil }
 func (p *fakeSeekPlayer) SetMuted(bool) *ui.VideoPlayer     { return nil }
 func (p *fakeSeekPlayer) Close()                            { p.closed = true }
@@ -47,7 +58,7 @@ func seekTxnFixture(t *testing.T) (replaySeekState, *[]*fakeSeekPlayer) {
 	opened := &[]*fakeSeekPlayer{}
 	session.app.seekMain = func(fn func()) { fn() }
 	session.app.openSeek = func(recording dvr.Recording) (desktopPlayer, error) {
-		player := &fakeSeekPlayer{name: recording.FileName(), ready: true}
+		player := &fakeSeekPlayer{name: recording.FileName(), ready: true, honourSeek: true}
 		*opened = append(*opened, player)
 		return player, nil
 	}
@@ -186,5 +197,65 @@ func TestSeekTxnRollsBackWhenAPlayerNeverShows(t *testing.T) {
 	}
 	if open, _ := session.app.leaseStats(); open != 0 {
 		t.Fatalf("leases open=%d after a failed handover, want 0", open)
+	}
+}
+
+func TestSeekTxnSettlesAPositionInsideTheFile(t *testing.T) {
+	session, opened := seekTxnFixture(t)
+	// A target that is not on a segment boundary: the file is cut at 6s, so
+	// 7s sits one second into it. The transaction must ask the player for that
+	// offset, not for the start of the file.
+	if err := session.app.startSeekTxn(session.items, 7*time.Second); err != nil {
+		t.Fatalf("starting: %v", err)
+	}
+	waitSeekTxn(t, session.app)
+
+	if len(*opened) != 2 {
+		t.Fatalf("opened %d players, want 2", len(*opened))
+	}
+	for _, player := range *opened {
+		if player.position != time.Second {
+			t.Fatalf("%s reports %s, want the target at 1s into its file", player.name, player.position)
+		}
+	}
+	for _, it := range session.items {
+		if it.replay.StartBufferTime != 6*time.Second {
+			t.Fatalf("%s: the file starts at %s, want 6s", it.source.ID, it.replay.StartBufferTime)
+		}
+	}
+}
+
+func TestSeekTxnRollsBackWhenAPlayerNeverSettles(t *testing.T) {
+	session, opened := seekTxnFixture(t)
+	previous := handoverWait
+	handoverWait = 300 * time.Millisecond
+	t.Cleanup(func() { handoverWait = previous })
+	session.app.openSeek = func(recording dvr.Recording) (desktopPlayer, error) {
+		// A player that opens and draws but never moves.
+		player := &fakeSeekPlayer{name: recording.FileName(), ready: true}
+		*opened = append(*opened, player)
+		return player, nil
+	}
+	before := make([]*dvr.Recording, len(session.items))
+	for index, it := range session.items {
+		before[index] = it.replay
+	}
+	if err := session.app.startSeekTxn(session.items, 7*time.Second); err != nil {
+		t.Fatalf("starting: %v", err)
+	}
+	waitSeekTxn(t, session.app)
+
+	for index, it := range session.items {
+		if it.replay != before[index] || it.player != nil {
+			t.Fatalf("%s: a player that never settled still committed", it.source.ID)
+		}
+	}
+	for _, player := range *opened {
+		if !player.closed {
+			t.Fatalf("%s was left open after it never settled", player.name)
+		}
+	}
+	if open, _ := session.app.leaseStats(); open != 0 {
+		t.Fatalf("leases open=%d after a failed settle, want 0", open)
 	}
 }

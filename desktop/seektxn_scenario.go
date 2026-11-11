@@ -157,7 +157,12 @@ func seekTxnBody(window *mygo.Window, a *appState, dir string) {
 		before[index] = it.generation
 	}
 
-	if err := a.startSeekTxn(a.items, 6*time.Second); err != nil {
+	// The target is 7s while the fixtures' segments are 2s long, so the
+	// recordings are cut at 6s and the target sits 1s into each file. A run
+	// that only asked for the start of a file would land one second short.
+	target := 7 * time.Second
+	wantOffset := time.Second
+	if err := a.startSeekTxn(a.items, target); err != nil {
 		logf(scenario, "start the replay transaction: %v", err)
 		return
 	}
@@ -189,6 +194,15 @@ func seekTxnBody(window *mygo.Window, a *appState, dir string) {
 			logf(scenario, "source %d now shows a recording cut at %s", index+1, sceneClock(it.replay.StartBufferTime))
 		}
 		check(it.player != nil, "source %d: no player after the transaction", index+1)
+		if it.player == nil {
+			continue
+		}
+		snapshot := runOnMainValue(func() seekFrame { return seekFrame{position: it.player.Position(), ready: it.player.Ready()} })
+		logf(scenario, "source %d reports %s with the target at %s into its file (a position, not a confirmed frame)",
+			index+1, sceneClock(snapshot.position), sceneClock(wantOffset))
+		check(snapshot.position >= wantOffset, "source %d: the player reports %s, before the target at %s", index+1, sceneClock(snapshot.position), sceneClock(wantOffset))
+		check(snapshot.position < wantOffset+5*time.Second, "source %d: the player ran to %s, well past the target at %s", index+1, sceneClock(snapshot.position), sceneClock(wantOffset))
+		check(snapshot.ready, "source %d: the player is not ready after the transaction", index+1)
 	}
 	open, given := a.leaseStats()
 	logf(scenario, "leases open=%d given=%d, players=%d", open, given, openPlayers(a))

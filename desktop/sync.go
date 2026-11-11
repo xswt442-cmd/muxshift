@@ -86,16 +86,53 @@ func (s *syncState) originOf(track core.TrackID) (origin, bool) {
 	return recorded, true
 }
 
-// bufferClock is the identity of the replay buffer this item reads, if it reads
-// one. A live source has no buffer, and the empty answer is what keeps its
-// placement from authorising a replay.
-func (a *appState) bufferClock(it *item) (string, uint64) {
+// calibrationAt says what a player's position means for a placement made now.
+// A player in front of a person reads its own file's zero: a recording cut from a
+// buffer begins StartBufferTime into that buffer, so the content position is the
+// file's position moved onto the buffer's clock. A recording from another buffer,
+// or one cut before the buffer's epoch moved, is a different clock and is refused
+// rather than guessed at.
+func calibrationAt(recording *dvr.Recording, buffer dvr.BufferState, position time.Duration) (content time.Duration, instance string, epoch uint64, ok bool) {
+	if recording == nil || buffer.Instance == "" {
+		return 0, "", 0, false
+	}
+	if recording.BufferInstance != buffer.Instance || recording.SourceMediaEpoch != buffer.Epoch {
+		return 0, "", 0, false
+	}
+	at, err := addDuration(recording.StartBufferTime, position)
+	if err != nil {
+		return 0, "", 0, false
+	}
+	return at, buffer.Instance, buffer.Epoch, true
+}
+
+// calibrationClock is calibrationAt against the live session. A live player runs
+// beside a DVR buffer, but nothing has shown that its position is that buffer's
+// content clock, so it has no identity to record and no placement made on it may
+// authorise a replay.
+func (a *appState) calibrationClock(it *item) (content time.Duration, instance string, epoch uint64, ok bool) {
+	if it == nil || it.player == nil || it.replay == nil {
+		return 0, "", 0, false
+	}
 	runner := a.runnerFor(it)
 	if runner == nil || runner.buffer == nil {
-		return "", 0
+		return 0, "", 0, false
 	}
-	state := runner.buffer.State()
-	return state.Instance, state.Epoch
+	return calibrationAt(it.replay, runner.buffer.State(), it.player.Position())
+}
+
+// playerPositionFor turns a content position into the position this item's player
+// can be asked for. A recording counts from its own first frame; a live player is
+// asked for its own clock, because no other mapping has been proven.
+func (a *appState) playerPositionFor(it *item, content time.Duration) (time.Duration, error) {
+	if it == nil || it.replay == nil {
+		return content, nil
+	}
+	position, err := offsetAfter(content, -it.replay.StartBufferTime)
+	if err != nil {
+		return 0, err
+	}
+	return position, nil
 }
 
 // replaySource is one source's replay buffer, paired with the index of its item
@@ -385,7 +422,16 @@ func (a *appState) anchor(index int) error {
 		return fmt.Errorf("source %d: %w", index+1, err)
 	}
 	position := it.player.Position()
-	if err := a.sync.playhead.Seek(position); err != nil {
+	// What the playhead should hold depends on the clock in front of the person:
+	// a recording reads its own file, whose first frame sits StartBufferTime into
+	// the buffer, so the playhead takes the content position; a live player's
+	// position is its own clock and stays what it is.
+	content, instance, epoch, proven := a.calibrationClock(it)
+	playheadAt := position
+	if proven {
+		playheadAt = content
+	}
+	if err := a.sync.playhead.Seek(playheadAt); err != nil {
 		return err
 	}
 	// The anchored source is the reference, so its tracks are on the timeline by
@@ -395,7 +441,11 @@ func (a *appState) anchor(index int) error {
 	// started on the same content frame, so it is recorded as a manual placement
 	// rather than a shared start. BasisSharedStart stays defined for a check this
 	// build does not perform; nothing here may claim it.
-	instance, epoch := a.bufferClock(it)
+	//
+	// The buffer identity is recorded only when the player was reading a
+	// recording of that buffer; a live player's position was never shown to be
+	// the buffer's content clock, so it records no identity and no replay may
+	// lean on it.
 	for _, track := range []core.TrackID{it.video, it.audio} {
 		if track == "" {
 			continue
@@ -507,16 +557,24 @@ func (a *appState) nudge(index int, delta time.Duration) (string, error) {
 			return "", err
 		}
 	}
+	// The target is a content position. A recording player counts from its own
+	// first frame, so it must be asked for the file's position; a live player is
+	// asked for its own clock, which is the only mapping anyone has for it.
+	position, err := a.playerPositionFor(it, target)
+	if err != nil {
+		return "", fmt.Errorf("source %d: %w", index+1, err)
+	}
 	// Both tracks of one player moved together, so they share one origin, and
 	// that origin belongs to the buffer this player is reading: the offset places
 	// a content position, and a different buffer counts that content from a
-	// different first frame.
-	instance, epoch := a.bufferClock(it)
+	// different first frame. A live player reads no recording of this buffer, so
+	// it records no identity and the placement cannot authorise a replay.
+	_, instance, epoch, _ := a.calibrationClock(it)
 	for _, other := range []core.TrackID{it.video, it.audio} {
 		a.sync.place(other, dvr.BasisManual, instance, epoch)
 	}
 
-	outcome := seekAndMeasure(it.player, target)
+	outcome := seekAndMeasure(it.player, position)
 	// The source now has a known offset, so the conservative mute can lift.
 	a.apply()
 	a.lastSeek = outcome

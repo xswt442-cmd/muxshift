@@ -397,8 +397,8 @@ func TestConfirmReplaySeekRefusesEveryKindOfDrift(t *testing.T) {
 			if _, err := session.app.sync.timeline.AdjustShift("track-1", 200*time.Millisecond); err != nil {
 				t.Fatalf("moving the offset: %v", err)
 			}
-			instance, epoch := session.app.bufferClock(session.items[0])
-			session.app.sync.place("track-1", dvr.BasisManual, instance, epoch)
+			state := session.app.runnerFor(session.items[0]).buffer.State()
+			session.app.sync.place("track-1", dvr.BasisManual, state.Instance, state.Epoch)
 		}},
 		{"basis withdrawn", func(session replaySeekState) {
 			delete(session.app.sync.origins, "track-1")
@@ -427,5 +427,68 @@ func TestConfirmReplaySeekRefusesEveryKindOfDrift(t *testing.T) {
 				t.Fatalf("%s: a refused confirmation queued a player for closing", tc.name)
 			}
 		})
+	}
+}
+
+func TestReplaySeekRefusesAnOriginPlacedOnTheLivePlayer(t *testing.T) {
+	session := replaySeekSession(t)
+	// A live player runs beside a DVR buffer, but no one has shown that its
+	// position is that buffer's content clock. Such a placement records no
+	// identity, and a replay may not lean on it.
+	session.app.sync.place("track-1", dvr.BasisManual, "", 0)
+
+	_, err := session.app.planReplaySeek(6*time.Second, session.items[:1])
+	if err == nil {
+		t.Fatal("an offset placed on the live player authorised a replay")
+	}
+	if !containsAll(err.Error(), "was not reading this buffer's recording") {
+		t.Fatalf("the refusal did not say which clock was missing: %v", err)
+	}
+}
+
+func TestACalibrationCountsOnTheBufferClockOfTheFileItReads(t *testing.T) {
+	recording := &dvr.Recording{
+		Source:           "source-1",
+		BufferInstance:   "buf-one",
+		SourceMediaEpoch: 2,
+		StartBufferTime:  2 * time.Second,
+		EndBufferTime:    12 * time.Second,
+	}
+	matching := dvr.BufferState{Instance: "buf-one", Epoch: 2}
+
+	content, instance, epoch, ok := calibrationAt(recording, matching, time.Second)
+	if !ok || content != 3*time.Second || instance != "buf-one" || epoch != 2 {
+		t.Fatalf("a file cut 2s into its buffer puts position 1s at content %s (ok=%v, %s epoch %d)", content, ok, instance, epoch)
+	}
+
+	foreign := dvr.BufferState{Instance: "buf-other", Epoch: 2}
+	if _, _, _, ok := calibrationAt(recording, foreign, time.Second); ok {
+		t.Fatal("a recording of another buffer placed this buffer's content clock")
+	}
+	moved := dvr.BufferState{Instance: "buf-one", Epoch: 3}
+	if _, _, _, ok := calibrationAt(recording, moved, time.Second); ok {
+		t.Fatal("a recording from before the epoch moved placed the new clock")
+	}
+	if _, _, _, ok := calibrationAt(nil, matching, time.Second); ok {
+		t.Fatal("no recording placed a buffer clock")
+	}
+}
+
+func TestARecordingPlayerIsAskedForItsOwnZero(t *testing.T) {
+	session := replaySeekSession(t)
+	it := session.items[0]
+	position, err := session.app.playerPositionFor(it, 6*time.Second)
+	if err != nil {
+		t.Fatalf("mapping a content position onto the file: %v", err)
+	}
+	if want := 6*time.Second - it.replay.StartBufferTime; position != want {
+		t.Fatalf("content 6s asked for position %s, want %s", position, want)
+	}
+
+	live := *it
+	live.replay = nil
+	position, err = session.app.playerPositionFor(&live, 6*time.Second)
+	if err != nil || position != 6*time.Second {
+		t.Fatalf("a live player was asked for %s (err %v), want its own 6s", position, err)
 	}
 }

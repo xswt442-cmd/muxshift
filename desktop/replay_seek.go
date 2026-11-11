@@ -95,10 +95,12 @@ func (a *appState) replaySeekSource(it *item, event time.Duration) (dvr.SeekSour
 	// The offset was placed against a particular buffer clock. Content time
 	// counts from that buffer's first stored segment, so the same number on a
 	// buffer built later points at a different frame. Re-measuring the anchor is
-	// not enough: someone has to place this buffer on the timeline again.
+	// not enough: someone has to place this buffer on the timeline again. A
+	// placement made while a live player was running records no identity, because
+	// nothing has shown that the live position is the buffer's content clock.
 	switch {
 	case recorded.instance == "":
-		return dvr.SeekSource{}, fmt.Errorf("%s: the offset %+.3fs was recorded without a buffer, so it cannot place this buffer's content clock",
+		return dvr.SeekSource{}, fmt.Errorf("%s: the offset %+.3fs was placed on a player that was not reading this buffer's recording, so it cannot place this buffer's content clock",
 			name, offset.Seconds())
 	case recorded.instance != again.Instance:
 		return dvr.SeekSource{}, fmt.Errorf("%s: the offset %+.3fs was calibrated against buffer %s, not %s",

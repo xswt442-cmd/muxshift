@@ -434,6 +434,11 @@ func TestBufferIdentityAndEpoch(t *testing.T) {
 	if older.SourceMediaEpoch != 1 {
 		t.Fatalf("a recording of the range before the jump has epoch %d, want 1", older.SourceMediaEpoch)
 	}
+	// A cut is one range: it must stop at the boundary rather than carry media
+	// from both clocks under one epoch.
+	if older.EndBufferTime > ranges[0].End {
+		t.Fatalf("the cut ran to buffer %s, past the range end %s", older.EndBufferTime, ranges[0].End)
+	}
 	newer, err := first.Record(ranges[1].Start)
 	if err != nil {
 		t.Fatalf("cut the range after the jump: %v", err)

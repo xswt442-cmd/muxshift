@@ -55,7 +55,8 @@ It prints `http://127.0.0.1:<port>/?token=<token>`. The token appears once, the 
 
 ## Limits
 
-- A source card created while the session runs still draws no picture; a recording registered before the session starts plays and seeks in the session window.
+- A source can be imported while the session runs: its card appears and the player comes up with a picture; an address that cannot be read reports an error and leaves no empty card.
+- Replay stops at "switch to a recording": the switch shows the new player's picture before it takes the stage and rolls back on failure; treating a replay window as an authorized seek range is not done yet.
 - The desktop only advances the picture it is drawing: another page stalls the stage, and returning catches up within seconds.
 - Audio separation and content matching are experiments outside the playback path and never move the timeline.
 - The web client neither aligns sources nor keeps history; seeking stays inside what the browser has buffered.

@@ -23,7 +23,7 @@ var commonShift = 4 * time.Second
 // The fixture is built so the answer can be predicted without asking the code
 // under test: the second playlist carries the same encoded frames as the first,
 // every packet timestamp four seconds later. Two independent checks hold that
-// claim up 閳?ffprobe reports the first segment of the second playlist starting
+// claim up: ffprobe reports the first segment of the second playlist starting
 // exactly 4s after the first, and the decoded frames of corresponding segments
 // hash identically. That is what makes the shared window an observation rather
 // than a restatement of the number the window was built from.

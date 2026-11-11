@@ -7,6 +7,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -38,10 +39,19 @@ func runSources(window *mygo.Window, a *appState, dir string) {
 			uri = a.lifecycleAddition()
 			// Prefer a local file that is not already open: importing the same
 			// file a second time would mix two questions (a new player mid-run
-			// and the same file opened twice).
-			other := `E:\\.codes\\muxshift\\testplace\\media\\local\\long.mp4`
-			if _, statErr := os.Stat(other); statErr == nil {
-				uri = other
+			// and the same file opened twice). Look next to the first local
+			// source instead of carrying a machine-specific path.
+			for _, other := range a.items {
+				address := string(other.source.ID)
+				if isNetworkAddress(address) {
+					continue
+				}
+				if candidate := filepath.Join(filepath.Dir(address), "long.mp4"); candidate != address {
+					if _, statErr := os.Stat(candidate); statErr == nil {
+						uri = candidate
+					}
+				}
+				break
 			}
 		})
 		if uri != "" {

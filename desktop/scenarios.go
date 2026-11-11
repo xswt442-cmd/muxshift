@@ -1205,7 +1205,6 @@ func runDVR(window *mygo.Window, a *appState, dir string) {
 		logf(scenario, "common window on the shared event clock: %s..%s", start, end)
 	}
 
-	// The buffer proved it keeps growing while the output is paused; the group
 	// The buffer proved it keeps growing while the output is paused, and the
 	// recording now takes the picture in the session's own window: a player
 	// created on the drawing thread can be shown at any time, which is what the

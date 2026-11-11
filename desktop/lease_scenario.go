@@ -19,10 +19,9 @@ import (
 //
 // The consumer here is a real file handle held open the whole time, which is what
 // Windows refuses to delete, plus a decode of the recording after the close to
-// show the bytes a player would have read were never touched. The desktop replay
-// player cannot stand in for that consumer yet: a recording opened on a card
-// while the session runs reports playing but presents no picture (P8), so this
-// check states file custody rather than claiming a picture.
+// show the bytes a player would have read were never touched. This check states
+// file custody rather than a picture: the picture side of a replay switch is
+// measured by the swap scenarios, which open a player on the drawing thread.
 func runLease(window *mygo.Window, a *appState, dir string) {
 	const scenario = "lease"
 	it, err := a.at(0)

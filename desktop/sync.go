@@ -33,10 +33,21 @@ type syncState struct {
 	// set the first time a synchronised command runs and is not derived from
 	// the scene again, so changing what is shown cannot change who pauses.
 	group core.SyncGroupID
-	// origins records where each track's offset came from. A replay decision
-	// has to say whether an offset was established or merely defaulted, and
-	// the timeline stores the number without its provenance.
-	origins map[core.TrackID]dvr.Basis
+	// origins records where each track's offset came from, and which buffer's
+	// content clock it was established against. The second half matters as much
+	// as the first: a replay's content time counts from the first segment its own
+	// buffer stored, so a calibration made against one buffer says nothing about
+	// a buffer built later, even for the same source.
+	origins map[core.TrackID]origin
+}
+
+// origin is an offset's provenance: what established it and the buffer clock the
+// calibration was made against. An origin with no buffer is a live source's
+// placement, which cannot authorise a replay of any buffer.
+type origin struct {
+	basis    dvr.Basis
+	instance string
+	epoch    uint64
 }
 
 // newSyncState starts paused at the origin with no track aligned, which is what
@@ -45,30 +56,46 @@ func newSyncState() *syncState {
 	return &syncState{
 		timeline: core.NewTimeline(),
 		playhead: core.NewPlayhead(),
-		origins:  make(map[core.TrackID]dvr.Basis),
+		origins:  make(map[core.TrackID]origin),
 	}
 }
 
-// place records where a track's offset came from. Replacing an offset replaces
-// its origin too, so a number left over from an earlier calibration cannot
-// borrow the authority of a later measurement.
-func (s *syncState) place(track core.TrackID, basis dvr.Basis) {
+// place records where a track's offset came from, and which buffer clock it was
+// established against. Replacing an offset replaces its origin too, so a number
+// left over from an earlier calibration cannot borrow the authority of a later
+// measurement.
+func (s *syncState) place(track core.TrackID, basis dvr.Basis, instance string, epoch uint64) {
 	if s == nil || track == "" {
 		return
 	}
 	if s.origins == nil {
-		s.origins = make(map[core.TrackID]dvr.Basis)
+		s.origins = make(map[core.TrackID]origin)
 	}
-	s.origins[track] = basis
+	s.origins[track] = origin{basis: basis, instance: instance, epoch: epoch}
 }
 
 // originOf returns the recorded origin of a track's offset.
-func (s *syncState) originOf(track core.TrackID) (dvr.Basis, bool) {
+func (s *syncState) originOf(track core.TrackID) (origin, bool) {
 	if s == nil {
-		return dvr.BasisNone, false
+		return origin{}, false
 	}
-	basis, ok := s.origins[track]
-	return basis, ok && basis != dvr.BasisNone
+	recorded, ok := s.origins[track]
+	if !ok || recorded.basis == dvr.BasisNone {
+		return origin{}, false
+	}
+	return recorded, true
+}
+
+// bufferClock is the identity of the replay buffer this item reads, if it reads
+// one. A live source has no buffer, and the empty answer is what keeps its
+// placement from authorising a replay.
+func (a *appState) bufferClock(it *item) (string, uint64) {
+	runner := a.runnerFor(it)
+	if runner == nil || runner.buffer == nil {
+		return "", 0
+	}
+	state := runner.buffer.State()
+	return state.Instance, state.Epoch
 }
 
 // replaySource is one source's replay buffer, paired with the index of its item
@@ -363,6 +390,12 @@ func (a *appState) anchor(index int) error {
 	}
 	// The anchored source is the reference, so its tracks are on the timeline by
 	// definition; without this its own sound would count as unverified.
+	//
+	// Choosing a reference is a person's decision, not a proof that two buffers
+	// started on the same content frame, so it is recorded as a manual placement
+	// rather than a shared start. BasisSharedStart stays defined for a check this
+	// build does not perform; nothing here may claim it.
+	instance, epoch := a.bufferClock(it)
 	for _, track := range []core.TrackID{it.video, it.audio} {
 		if track == "" {
 			continue
@@ -370,7 +403,7 @@ func (a *appState) anchor(index int) error {
 		if err := a.sync.timeline.SetShift(track, 0); err != nil {
 			return err
 		}
-		a.sync.place(track, dvr.BasisSharedStart)
+		a.sync.place(track, dvr.BasisManual, instance, epoch)
 	}
 	a.apply()
 	return nil
@@ -474,9 +507,13 @@ func (a *appState) nudge(index int, delta time.Duration) (string, error) {
 			return "", err
 		}
 	}
-	// Both tracks of one player moved together, so they share one origin.
+	// Both tracks of one player moved together, so they share one origin, and
+	// that origin belongs to the buffer this player is reading: the offset places
+	// a content position, and a different buffer counts that content from a
+	// different first frame.
+	instance, epoch := a.bufferClock(it)
 	for _, other := range []core.TrackID{it.video, it.audio} {
-		a.sync.place(other, dvr.BasisManual)
+		a.sync.place(other, dvr.BasisManual, instance, epoch)
 	}
 
 	outcome := seekAndMeasure(it.player, target)

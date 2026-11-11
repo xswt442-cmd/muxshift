@@ -61,7 +61,7 @@ func replaySeekItem(t *testing.T, app *appState, source core.SourceID, track cor
 	if err := app.sync.timeline.SetShift(track, 0); err != nil {
 		t.Fatalf("place %s: %v", track, err)
 	}
-	app.sync.place(track, dvr.BasisManual)
+	app.sync.place(track, dvr.BasisManual, state.Instance, state.Epoch)
 	return it, add
 }
 
@@ -137,7 +137,6 @@ func TestConfirmReplaySeekRefusesAStateThatMoved(t *testing.T) {
 func TestPlanReplaySeekRefusesAnOffsetWithoutOrigin(t *testing.T) {
 	session := replaySeekSession(t)
 	// The timeline still holds a zero, but nothing remembers placing it.
-	session.app.sync.originOf("track-2")
 	delete(session.app.sync.origins, "track-2")
 
 	_, err := session.app.planReplaySeek(6*time.Second, session.items)
@@ -214,7 +213,7 @@ func TestConfirmReplaySeekRefusesARangeThatWasEvicted(t *testing.T) {
 	if err := app.sync.timeline.SetShift("track-1", 0); err != nil {
 		t.Fatalf("place the track: %v", err)
 	}
-	app.sync.place("track-1", dvr.BasisManual)
+	app.sync.place("track-1", dvr.BasisManual, state.Instance, state.Epoch)
 
 	plan, err := app.planReplaySeek(1*time.Second, []*item{it})
 	if err != nil {
@@ -262,7 +261,8 @@ func TestPlanReplaySeekRefusesABufferWithoutARecording(t *testing.T) {
 	if err := app.sync.timeline.SetShift("track-1", 0); err != nil {
 		t.Fatalf("place the track: %v", err)
 	}
-	app.sync.place("track-1", dvr.BasisManual)
+	state := buffer.State()
+	app.sync.place("track-1", dvr.BasisManual, state.Instance, state.Epoch)
 	if cut := len(buffer.Recordings()); cut != 0 {
 		t.Fatalf("the fixture already cut %d recording(s)", cut)
 	}
@@ -305,6 +305,73 @@ func TestPlanReplaySeekRefusesASpliceOfTwoMoments(t *testing.T) {
 	}
 }
 
+func TestReplaySeekRefusesAnOriginFromAnotherBuffer(t *testing.T) {
+	session := replaySeekSession(t)
+	if _, err := session.app.planReplaySeek(6*time.Second, session.items); err != nil {
+		t.Fatalf("planning on the first buffers: %v", err)
+	}
+
+	// The same source is left and joined again: the session now reads a buffer
+	// built later, with its own content zero, its own recording and a measured
+	// anchor that matches that buffer. The manual placement was made against the
+	// old buffer's clock, so it says nothing about where this one starts.
+	replacement, add := fixtureBufferOptions(t, dvr.Options{Source: "source-1"})
+	add(2, false)
+	add(3, false)
+	add(4, false)
+	recording, err := replacement.Record(0)
+	if err != nil {
+		t.Fatalf("cut the replacement: %v", err)
+	}
+	state := replacement.State()
+	session.app.runners[0].runner = &dvrRunner{source: "source-1", buffer: replacement}
+	session.items[0].replay = &recording
+	session.items[0].replayAnchor = &dvr.Anchor{
+		Source:         "source-1",
+		Epoch:          state.Epoch,
+		BufferInstance: state.Instance,
+		BufferStart:    recording.StartBufferTime,
+		MediaStart:     30 * time.Second,
+		Interval:       dvr.Range{Start: recording.StartBufferTime, End: recording.EndBufferTime},
+		MeasuredAt:     time.Now(),
+	}
+	session.items[0].generation++
+
+	_, err = session.app.planReplaySeek(6*time.Second, session.items)
+	if err == nil {
+		t.Fatal("an offset placed against the old buffer authorised the new one")
+	}
+	if !containsAll(err.Error(), "source-1", "calibrated against buffer") {
+		t.Fatalf("the refusal %q does not say which buffer the offset belongs to", err)
+	}
+
+	// Placing the new buffer on the timeline is what makes it usable again: the
+	// old number is not re-labelled, a new relation is established.
+	session.app.sync.place("track-1", dvr.BasisManual, state.Instance, state.Epoch)
+	if _, err := session.app.planReplaySeek(6*time.Second, session.items); err != nil {
+		t.Fatalf("planning after placing the new buffer: %v", err)
+	}
+}
+
+func TestReplaySeekRefusesARunnerReplacedDuringSnapshot(t *testing.T) {
+	session := replaySeekSession(t)
+	defer func() { replaySnapshotHook = nil }()
+	replaySnapshotHook = func() {
+		// The session swaps the runner under the item while the snapshot is
+		// being taken. The buffer the adapter is reading stays perfectly stable,
+		// so reading it twice cannot notice; only asking the session again can.
+		replacement, _ := fixtureBufferOptions(t, dvr.Options{Source: "source-1"})
+		session.app.runners[0].runner = &dvrRunner{source: "source-1", buffer: replacement}
+	}
+	_, err := session.app.planReplaySeek(6*time.Second, session.items)
+	if err == nil {
+		t.Fatal("a runner replaced during the read produced a plan")
+	}
+	if !containsAll(err.Error(), "source-1", "replaced while its state was read") {
+		t.Fatalf("the refusal %q does not say the buffer was replaced", err)
+	}
+}
+
 func TestConfirmReplaySeekRefusesEveryKindOfDrift(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -330,7 +397,8 @@ func TestConfirmReplaySeekRefusesEveryKindOfDrift(t *testing.T) {
 			if _, err := session.app.sync.timeline.AdjustShift("track-1", 200*time.Millisecond); err != nil {
 				t.Fatalf("moving the offset: %v", err)
 			}
-			session.app.sync.place("track-1", dvr.BasisManual)
+			instance, epoch := session.app.bufferClock(session.items[0])
+			session.app.sync.place("track-1", dvr.BasisManual, instance, epoch)
 		}},
 		{"basis withdrawn", func(session replaySeekState) {
 			delete(session.app.sync.origins, "track-1")

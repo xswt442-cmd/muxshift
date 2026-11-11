@@ -49,7 +49,7 @@ func (a *appState) replaySeekSource(it *item, event time.Duration) (dvr.SeekSour
 	if err != nil {
 		return dvr.SeekSource{}, err
 	}
-	basis, ok := a.sync.originOf(track)
+	recorded, ok := a.sync.originOf(track)
 	if !ok {
 		return dvr.SeekSource{}, fmt.Errorf("%s: the offset %+.3fs has no recorded origin, so it cannot authorise a seek",
 			name, offset.Seconds())
@@ -65,6 +65,7 @@ func (a *appState) replaySeekSource(it *item, event time.Duration) (dvr.SeekSour
 		return dvr.SeekSource{}, fmt.Errorf("%s: event %s with offset %+.3fs is before the buffer's own clock",
 			name, event.Round(time.Millisecond), offset.Seconds())
 	}
+	sourceID, generation := it.source.ID, it.generation
 	state := runner.buffer.State()
 	if state.Instance == "" {
 		return dvr.SeekSource{}, fmt.Errorf("%s: the buffer has no identity, so a plan cannot name it", name)
@@ -81,6 +82,31 @@ func (a *appState) replaySeekSource(it *item, event time.Duration) (dvr.SeekSour
 	if again.Instance != state.Instance || again.Epoch != state.Epoch || !sameRanges(again.Ranges, state.Ranges) {
 		return dvr.SeekSource{}, fmt.Errorf("%s: the buffer changed while its state was read", name)
 	}
+	// The buffer read above is only the current one if the session still routes
+	// this item to it. A runner swapped in during the read leaves the old buffer
+	// perfectly stable, so its two readings would agree while describing
+	// something the session no longer plays.
+	if a.runnerFor(it) != runner {
+		return dvr.SeekSource{}, fmt.Errorf("%s: the replay buffer was replaced while its state was read", name)
+	}
+	if it.source.ID != sourceID || it.generation != generation {
+		return dvr.SeekSource{}, fmt.Errorf("%s: the player was replaced while its state was read", name)
+	}
+	// The offset was placed against a particular buffer clock. Content time
+	// counts from that buffer's first stored segment, so the same number on a
+	// buffer built later points at a different frame. Re-measuring the anchor is
+	// not enough: someone has to place this buffer on the timeline again.
+	switch {
+	case recorded.instance == "":
+		return dvr.SeekSource{}, fmt.Errorf("%s: the offset %+.3fs was recorded without a buffer, so it cannot place this buffer's content clock",
+			name, offset.Seconds())
+	case recorded.instance != again.Instance:
+		return dvr.SeekSource{}, fmt.Errorf("%s: the offset %+.3fs was calibrated against buffer %s, not %s",
+			name, offset.Seconds(), recorded.instance, again.Instance)
+	case recorded.epoch != again.Epoch:
+		return dvr.SeekSource{}, fmt.Errorf("%s: the offset %+.3fs was calibrated in epoch %d, but the buffer is in epoch %d",
+			name, offset.Seconds(), recorded.epoch, again.Epoch)
+	}
 	span, ok := again.Containing(content)
 	if !ok {
 		return dvr.SeekSource{}, fmt.Errorf("%s: the buffer no longer holds a single range around %s",
@@ -88,14 +114,14 @@ func (a *appState) replaySeekSource(it *item, event time.Duration) (dvr.SeekSour
 	}
 	state = again
 	return dvr.SeekSource{
-		Source:           it.source.ID,
+		Source:           sourceID,
 		Epoch:            state.Epoch,
 		Instance:         state.Instance,
 		Range:            span,
 		Anchor:           *it.replayAnchor,
-		Alignment:        dvr.Alignment{Offset: offset, Basis: basis},
+		Alignment:        dvr.Alignment{Offset: offset, Basis: recorded.basis},
 		Recording:        *it.replay,
-		PlayerGeneration: uint64(it.generation),
+		PlayerGeneration: uint64(generation),
 	}, nil
 }
 

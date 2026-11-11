@@ -12,6 +12,7 @@ testplace/
 /build/
 /dist/
 /coverage/
+/desktop/desktop
 *.exe
 *.test
 *.out

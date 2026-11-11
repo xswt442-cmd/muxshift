@@ -21,6 +21,13 @@ import (
 // moved on while ffprobe was still reading".
 func fixtureBuffer(t *testing.T) (*dvr.Buffer, func(sequence int, discontinuity bool)) {
 	t.Helper()
+	return fixtureBufferOptions(t, dvr.Options{})
+}
+
+// fixtureBufferOptions is fixtureBuffer with the caller's limits, which is how a
+// test stages eviction: Retention makes the oldest segment removable.
+func fixtureBufferOptions(t *testing.T, opts dvr.Options) (*dvr.Buffer, func(sequence int, discontinuity bool)) {
+	t.Helper()
 	body, err := os.ReadFile("../core/hls/testdata/vod/seg0.ts")
 	if err != nil {
 		t.Fatalf("read the fixture segment: %v", err)
@@ -29,11 +36,10 @@ func fixtureBuffer(t *testing.T) (*dvr.Buffer, func(sequence int, discontinuity 
 		_, _ = w.Write(body)
 	}))
 	t.Cleanup(server.Close)
-	buffer, err := dvr.New(dvr.Options{
-		Dir:           t.TempDir(),
-		RecordingsDir: t.TempDir(),
-		Source:        "fixture",
-	})
+	opts.Dir = t.TempDir()
+	opts.RecordingsDir = t.TempDir()
+	opts.Source = "fixture"
+	buffer, err := dvr.New(opts)
 	if err != nil {
 		t.Fatalf("new buffer: %v", err)
 	}
@@ -283,6 +289,74 @@ func TestBufferAnchorRefusesAWindowAcrossASkippedSegment(t *testing.T) {
 	}
 	if anchor, err := runner.bufferAnchor(dvr.Range{Start: 2 * time.Second, End: 4 * time.Second}); err != nil {
 		t.Fatalf("a window inside the measured range: %v (anchor %+v)", err, anchor)
+	}
+}
+
+// TestMeasuredRangeStopsAuthorisingWhenEvicted keeps an old measurement from
+// outliving the media it measured. Once the measured range is gone the window it
+// used to explain has no media behind it, so it must be refused — the anchor is a
+// statement about stored segments, not a licence to keep replaying their times.
+func TestMeasuredRangeStopsAuthorisingWhenEvicted(t *testing.T) {
+	buffer, add := fixtureBufferOptions(t, dvr.Options{Retention: 3 * time.Second})
+	stubProbe(t, 100*time.Second, nil)
+	runner := &dvrRunner{buffer: buffer, source: "fixture"}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := runner.waitAnchor(ctx); err != nil {
+		t.Fatalf("measuring the first range: %v", err)
+	}
+
+	add(2, false)
+	if removed := buffer.Evict(nil); len(removed) != 1 || removed[0] != 1 {
+		t.Fatalf("evicted %v, want the measured segment 1", removed)
+	}
+	if ranges := buffer.Ranges(); len(ranges) != 1 || ranges[0].Start != 2*time.Second {
+		t.Fatalf("ranges after eviction = %v, want just 2s..4s", ranges)
+	}
+
+	if anchor, err := runner.bufferAnchor(dvr.Range{Start: 0, End: 2 * time.Second}); err == nil {
+		t.Fatalf("an evicted range was still authorised: %+v", anchor)
+	}
+	if anchor, err := runner.bufferAnchor(dvr.Range{Start: 2 * time.Second, End: 4 * time.Second}); err == nil {
+		t.Fatalf("the new range used the anchor of the evicted one: %+v", anchor)
+	}
+}
+
+// TestOldRangeReplaysUnderItsOwnIdentity keeps history usable without letting it
+// borrow a newer clock: a recording cut before the discontinuity stays replayable
+// through the anchor measured on its own media, and the anchor measured after the
+// jump must not be used for it.
+func TestOldRangeReplaysUnderItsOwnIdentity(t *testing.T) {
+	buffer, add := fixtureBuffer(t)
+	add(2, false)
+	stubProbe(t, 100*time.Second, nil)
+	runner := &dvrRunner{buffer: buffer, source: "fixture"}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	before, err := runner.waitBufferAnchor(ctx, dvr.Range{Start: 0, End: 4 * time.Second})
+	if err != nil {
+		t.Fatalf("measuring before the jump: %v", err)
+	}
+	recording, err := buffer.Record(0)
+	if err != nil {
+		t.Fatalf("cut a recording: %v", err)
+	}
+	if _, err := replayFileFor(recording, before); err != nil {
+		t.Fatalf("the recording does not replay under its own anchor: %v", err)
+	}
+
+	// The playlist declares a discontinuity: the epoch moves and a new anchor is
+	// measured for the media after it.
+	add(3, true)
+	after, err := runner.waitBufferAnchor(ctx, dvr.Range{Start: 4 * time.Second, End: 6 * time.Second})
+	if err != nil {
+		t.Fatalf("measuring after the jump: %v", err)
+	}
+	if after.Epoch == before.Epoch {
+		t.Fatalf("both anchors name epoch %d, want different clocks", after.Epoch)
+	}
+	if _, err := replayFileFor(recording, after); err == nil {
+		t.Fatal("the recording accepted the anchor measured after the discontinuity")
 	}
 }
 

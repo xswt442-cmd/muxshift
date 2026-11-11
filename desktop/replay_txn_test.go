@@ -25,6 +25,10 @@ type fakeSeekPlayer struct {
 	// here: the transaction must notice and give it back.
 	honourSeek bool
 	position   time.Duration
+
+	// ignoreSeeks is the number of requests the player drops on the floor, as
+	// the engine does when a seek arrives before the player is settled.
+	ignoreSeeks int
 }
 
 func (p *fakeSeekPlayer) Ready() bool     { return p.ready }
@@ -39,6 +43,10 @@ func (p *fakeSeekPlayer) Err() error              { return nil }
 func (p *fakeSeekPlayer) Play()                   {}
 func (p *fakeSeekPlayer) Pause()                  {}
 func (p *fakeSeekPlayer) Seek(target time.Duration) {
+	if p.ignoreSeeks > 0 {
+		p.ignoreSeeks--
+		return
+	}
 	if p.honourSeek {
 		p.position = target
 	}
@@ -573,4 +581,98 @@ func allClosed(players []*fakeSeekPlayer) bool {
 		}
 	}
 	return len(players) > 0
+}
+
+// settleTxnFor is a transaction with one prepared step: the settle step only
+// needs the player it landed, the item it names and the offset it wants.
+func settleTxnFor(session replaySeekState, player desktopPlayer, offset time.Duration) *seekTxn {
+	return &seekTxn{
+		event: 6 * time.Second,
+		steps: []*seekTxnStep{{item: session.items[0], player: player, offset: offset}},
+	}
+}
+
+// TestSettleSeekRetriesAnIgnoredRequest covers the engine behaviour the retry
+// exists for: the first request is dropped, the second one takes.
+func TestSettleSeekRetriesAnIgnoredRequest(t *testing.T) {
+	session, _ := seekTxnFixture(t)
+	player := &fakeSeekPlayer{ready: true, honourSeek: true, ignoreSeeks: 1}
+	start := time.Now()
+	if err := session.app.settleSeekTxn(settleTxnFor(session, player, time.Second)); err != nil {
+		t.Fatalf("a dropped request that was re-issued did not settle: %v", err)
+	}
+	if player.position != time.Second {
+		t.Fatalf("the player ended at %s, want the requested 1s", player.position)
+	}
+	if elapsed := time.Since(start); elapsed < 1200*time.Millisecond {
+		t.Fatalf("the request was honoured after %s, so no re-issue happened", elapsed)
+	}
+}
+
+// TestSettleSeekGivesUpAfterTheBudget keeps the re-issue bounded: a player
+// that drops every request is a failed landing, not a longer wait.
+func TestSettleSeekGivesUpAfterTheBudget(t *testing.T) {
+	session, _ := seekTxnFixture(t)
+	previous := handoverWait
+	handoverWait = 300 * time.Millisecond
+	t.Cleanup(func() { handoverWait = previous })
+
+	player := &fakeSeekPlayer{ready: true, honourSeek: true, ignoreSeeks: 100}
+	err := session.app.settleSeekTxn(settleTxnFor(session, player, time.Second))
+	if err == nil || !strings.Contains(err.Error(), "did not settle") {
+		t.Fatalf("a player that never arrived returned %v, want a settle failure", err)
+	}
+	if player.position != 0 {
+		t.Fatalf("the player moved to %s although every request was dropped", player.position)
+	}
+}
+
+// TestShutdownWaitsForAnOpeningPlayer is the case the interleaving scenario
+// did not cover: the session closes while a replacement player is still being
+// opened. The player must not outlive the session, and shutdown must not
+// return before the work it stopped has given its resources back.
+func TestShutdownWaitsForAnOpeningPlayer(t *testing.T) {
+	session, opened := seekTxnFixture(t)
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	session.app.openSeek = func(recording dvr.Recording) (desktopPlayer, error) {
+		entered <- struct{}{}
+		<-release
+		player := &fakeSeekPlayer{name: recording.FileName(), ready: true, honourSeek: true}
+		*opened = append(*opened, player)
+		return player, nil
+	}
+	if err := session.app.startSeekTxn(session.items, 6*time.Second); err != nil {
+		t.Fatalf("the transaction did not start: %v", err)
+	}
+	<-entered
+
+	closed := make(chan struct{})
+	go func() {
+		if !session.app.shutdownReplayTxn() {
+			t.Error("the closing session gave up waiting for the preparation to return")
+		}
+		close(closed)
+	}()
+	select {
+	case <-closed:
+		t.Fatal("the session closed while a player was still being opened")
+	case <-time.After(300 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-closed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the session did not close after the player opened")
+	}
+
+	if !allClosed(*opened) {
+		t.Fatal("a player opened after the session asked to close was left open")
+	}
+	if owner := session.app.seekInFlight(); owner != nil {
+		t.Fatalf("a transaction is still registered after the session closed: %s", owner.event)
+	}
+	if pending := session.app.releaseLeases(); len(pending) > 0 {
+		t.Fatalf("leases were left open after the session closed: %v", pending)
+	}
 }

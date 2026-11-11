@@ -253,7 +253,9 @@ func interleaveBody(window *mygo.Window, a *appState, dir string) {
 	if txn == nil {
 		logf(scenario, "order 3: the transaction never appeared")
 	} else {
-		a.abortSeekTxn(txn, "the session is closing")
+		// Close the session the way shutdown does: stop the transaction and wait
+		// for the work it started to give its players and leases back.
+		a.shutdownReplayTxn()
 		waitSeekGone(a, 30*time.Second)
 		open, _ = a.leaseStats()
 		check(open == beforeThird, "order 3: %d lease(s) open after the abort, want %d", open, beforeThird)

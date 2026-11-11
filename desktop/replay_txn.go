@@ -68,6 +68,11 @@ type seekTxn struct {
 	prepared dvr.SeekPlan
 
 	steps []*seekTxnStep
+
+	// done is closed when the preparing goroutine has returned. A closing
+	// session waits on it so the files and players the work opened are given
+	// back before the buffers they were cut from are closed.
+	done chan struct{}
 }
 
 // stepFor returns the step preparing a source, or nil when the transaction does
@@ -103,7 +108,7 @@ func (a *appState) startSeekTxn(items []*item, event time.Duration) error {
 	if err != nil {
 		return err
 	}
-	txn := &seekTxn{event: event, plan: plan}
+	txn := &seekTxn{event: event, plan: plan, done: make(chan struct{})}
 	for _, hop := range plan.Hops() {
 		it, _, err := a.itemBySource(hop.Source)
 		if err != nil {
@@ -129,7 +134,10 @@ func (a *appState) startSeekTxn(items []*item, event time.Duration) error {
 	a.seekMu.Lock()
 	a.seek = txn
 	a.seekMu.Unlock()
-	go a.prepareSeekTxn(txn)
+	go func() {
+		defer close(txn.done)
+		a.prepareSeekTxn(txn)
+	}()
 	return nil
 }
 
@@ -167,6 +175,15 @@ func (a *appState) prepareSeekTxn(txn *seekTxn) {
 		player, err := a.openSeekPlayer(recording)
 		if err != nil {
 			a.abortSeekTxn(txn, fmt.Sprintf("open %s: %v", recording.FileName(), err))
+			return
+		}
+		// The session may have closed or another transaction may have taken
+		// over while this player was opening. The work stops here and gives the
+		// player straight back, so a closing session never has a player appear
+		// after it asked the transaction to stop.
+		if !a.holdsSeek(txn) {
+			a.closeSeekPlayer(player)
+			a.abortSeekTxn(txn, "the session gave up while a replacement was opening")
 			return
 		}
 		a.seekMu.Lock()
@@ -338,6 +355,38 @@ func (a *appState) commitSeekTxn(txn *seekTxn) {
 // abortSeekTxn gives back every file and player the attempt took. The items keep
 // the players and leases they had, because the commit is the only step that
 // replaces them.
+// seekShutdownWait is how long a closing session waits for the work it stopped
+// to return. The work may be inside a cut, an ffprobe or a player open; it is
+// bounded so a closing window does not hang on an engine call.
+const seekShutdownWait = 2 * time.Second
+
+// shutdownReplayTxn stops a transaction that is still preparing and waits for
+// the work it started to return. A closing session runs this before it closes
+// the buffers those files were cut from, so a player opened at the last moment
+// is given back instead of outliving the session.
+func (a *appState) shutdownReplayTxn() bool {
+	txn := a.seekInFlight()
+	if txn == nil {
+		return true
+	}
+	a.abortSeekTxn(txn, "the session is closing")
+	if !a.awaitSeekTxn(txn, seekShutdownWait) {
+		logf("seek", "the replay preparation was still running %s after the session closed", seekShutdownWait)
+		return false
+	}
+	return true
+}
+
+// awaitSeekTxn waits for the preparing goroutine to return.
+func (a *appState) awaitSeekTxn(txn *seekTxn, timeout time.Duration) bool {
+	select {
+	case <-txn.done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
 func (a *appState) abortSeekTxn(txn *seekTxn, why string) {
 	// Take whatever the transaction still owns out of its steps under the lock,
 	// then close it outside: a step reaches here at most once with resources

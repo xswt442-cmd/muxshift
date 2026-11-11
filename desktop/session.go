@@ -897,9 +897,7 @@ func (a *appState) release() {
 func (a *appState) shutdown() {
 	// A transaction still preparing owns files and players of its own; give them
 	// back before the sources they were cut from are closed.
-	if txn := a.seekInFlight(); txn != nil {
-		a.abortSeekTxn(txn, "the session is closing")
-	}
+	a.shutdownReplayTxn()
 	a.stopRecording()
 	log.Printf("shutdown: recording stopped; closing %d player(s)", len(a.items))
 	for _, it := range a.items {

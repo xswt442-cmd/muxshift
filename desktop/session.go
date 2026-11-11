@@ -134,6 +134,9 @@ type appState struct {
 	seek    *seekTxn
 	seekMu  sync.Mutex
 	settled []seekLanding
+	// notice is the newest account of a replay transaction, kept as a value so
+	// a reader never sees it change under a caller.
+	notice replayReport
 	// seekStart serialises the decision to start a transaction, so two requests
 	// that arrive together cannot both find the field empty and both plan.
 	seekStart sync.Mutex

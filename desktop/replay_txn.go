@@ -44,8 +44,10 @@ type seekTxnStep struct {
 	// and settled is where the player reported it had arrived. They are two
 	// different facts: the second says the player is at that position, not that
 	// the frame there is on screen.
-	offset  time.Duration
-	settled time.Duration
+	offset   time.Duration
+	settled  time.Duration
+	reported time.Duration
+	measured bool
 
 	// wasPlaying is the state the player was committed in. Settling it means
 	// stopping, asking for the position and letting it go again, so the state
@@ -66,6 +68,13 @@ type seekTxn struct {
 	// prepared is the plan rebuilt from the recordings that were really cut.
 	// The transaction commits only while that plan still matches the session.
 	prepared dvr.SeekPlan
+
+	// id ties every report about this transaction to the same attempt.
+	id uint64
+
+	// noticeOnce keeps one account per transaction: the first ending wins, and
+	// a later abort of the same transaction cannot rewrite it.
+	noticeOnce sync.Once
 
 	steps []*seekTxnStep
 
@@ -90,7 +99,14 @@ func (txn *seekTxn) stepFor(source core.SourceID) *seekTxnStep {
 // preparing the files and players it needs. It returns as soon as the work is
 // off the caller's thread; progress goes to the log, and a failure leaves the
 // sources untouched.
-func (a *appState) startSeekTxn(items []*item, event time.Duration) error {
+func (a *appState) startSeekTxn(items []*item, event time.Duration) (err error) {
+	// Every refusal is its own account: a request that never became a
+	// transaction is still something a surface may have to explain.
+	defer func() {
+		if err != nil {
+			a.publishReport(replayReport{ID: replaySeq.Add(1), Event: event, Phase: replayRefused, Reason: err.Error()})
+		}
+	}()
 	if len(items) == 0 {
 		return fmt.Errorf("no source was offered for the replay seek")
 	}
@@ -108,7 +124,7 @@ func (a *appState) startSeekTxn(items []*item, event time.Duration) error {
 	if err != nil {
 		return err
 	}
-	txn := &seekTxn{event: event, plan: plan, done: make(chan struct{})}
+	txn := &seekTxn{event: event, plan: plan, done: make(chan struct{}), id: replaySeq.Add(1)}
 	for _, hop := range plan.Hops() {
 		it, _, err := a.itemBySource(hop.Source)
 		if err != nil {
@@ -134,6 +150,7 @@ func (a *appState) startSeekTxn(items []*item, event time.Duration) error {
 	a.seekMu.Lock()
 	a.seek = txn
 	a.seekMu.Unlock()
+	a.publishReport(txn.reportFor(replayPreparing, ""))
 	go func() {
 		defer close(txn.done)
 		a.prepareSeekTxn(txn)
@@ -350,6 +367,7 @@ func (a *appState) commitSeekTxn(txn *seekTxn) {
 	a.clearSeek(txn)
 	logf("seek", "committed %d recording(s) for event %s; each player is on the file cut for it, and the target sits %s into that file for the seek step",
 		len(txn.steps), shortDuration(txn.event), shortDuration(deepestPosition(txn.prepared)))
+	txn.noticeOnce.Do(func() { a.publishReport(txn.reportFor(replayCommitted, "")) })
 }
 
 // abortSeekTxn gives back every file and player the attempt took. The items keep
@@ -419,6 +437,7 @@ func (a *appState) abortSeekTxn(txn *seekTxn, why string) {
 	}
 	a.clearSeek(txn)
 	logf("seek", "rolled back the replay for event %s: %s", shortDuration(txn.event), why)
+	txn.noticeOnce.Do(func() { a.publishReport(txn.reportFor(replayRolledBack, why)) })
 }
 
 // seekInFlight returns the transaction the window is preparing, if any.
@@ -565,6 +584,8 @@ func (a *appState) settleSeekTxn(txn *seekTxn) error {
 					residual:  frames[i].position - step.offset,
 				})
 				step.settled = frames[i].position
+				step.reported = frames[i].position
+				step.measured = true
 			}
 			a.seekMu.Lock()
 			a.settled = landings

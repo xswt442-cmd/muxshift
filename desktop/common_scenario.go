@@ -12,14 +12,18 @@ import (
 )
 
 // commonShift is the timestamp shift the second fixture of the "common"
-// scenario was built with. The scenario checks that the measured anchors agree
-// with it before it uses it as the offset, so a wrong value fails instead of
-// quietly producing a window.
+// scenario was built with. It is a container shift, not a content offset: the
+// frames are identical, so the two sources show the same event at the same
+// content time. The scenario measures the shift to show the fixture is what it
+// claims, and never hands it to the Core timeline as an offset.
 var commonShift = 4 * time.Second
 
-// runCommon is P16.3d-3.0: two sources that really are the same event, buffered
-// separately, must produce a non-empty shared window once each source's measured
-// anchor and its confirmed offset put them on the event clock.
+// runCommon is P16.3d-3.0, kept current with the content clock: two sources that
+// really are the same event, buffered separately, must produce a non-empty
+// shared window once each source's measured anchor puts it on the content clock
+// and its confirmed offset puts it on the event clock. The fixture's four-second
+// difference between container timestamps is not a content offset and must not
+// reach the timeline.
 //
 // The fixture is built so the answer can be predicted without asking the code
 // under test: the second playlist carries the same encoded frames as the first,
@@ -132,15 +136,10 @@ func commonBody(window *mygo.Window, a *appState, dir string) {
 	check(absDuration(measuredGap-commonShift) <= 100*time.Millisecond,
 		"the measured media gap is %s, not the %s the fixture was built with", sceneClock(measuredGap), sceneClock(commonShift))
 
-	// The offset is not invented from the gap above: it is the shift the fixture
-	// itself applies, and the check just above shows the measurement agrees with
-	// it. The first source is the reference, so its offset is zero.
-	offsetOf := func(index int) time.Duration {
-		if index == 1 {
-			return commonShift
-		}
-		return 0
-	}
+	// The fixtures hold the same frames, so the content offset between them is
+	// zero: the four seconds are the container's mux delay, and the content
+	// clock (buffer time) does not carry it. Both sources get a confirmed zero
+	// offset, which is the honest statement about where their content sits.
 	step(window, a, dir, scenario, "", "align both sources on the shared event clock", func(a *appState) {
 		for index := 0; index < 2; index++ {
 			it, err := a.at(index)
@@ -148,12 +147,11 @@ func commonBody(window *mygo.Window, a *appState, dir string) {
 				logf(scenario, "%v", err)
 				continue
 			}
-			offset := offsetOf(index)
 			for _, track := range []core.TrackID{it.video, it.audio} {
 				if track == "" {
 					continue
 				}
-				if err := a.sync.timeline.SetShift(track, offset); err != nil {
+				if err := a.sync.timeline.SetShift(track, 0); err != nil {
 					logf(scenario, "source %d: align %s: %v", index+1, track, err)
 				}
 			}
@@ -171,12 +169,25 @@ func commonBody(window *mygo.Window, a *appState, dir string) {
 		logf(scenario, "CHECK FAILED: no shared window for two sources of the same event: %v", windowErr)
 		return
 	}
-	wantStart := mediaStarts[0]
-	if mediaStarts[1]-offsetOf(1) > wantStart {
-		wantStart = mediaStarts[1] - offsetOf(1)
+	// The event start is the later of the two content starts. Content time is
+	// buffer time, so this is a statement about the clock the timeline holds,
+	// not about the container timestamps the anchors measured.
+	contentStarts := make([]time.Duration, len(windows))
+	wantStart := time.Duration(0)
+	for index := range windows {
+		content, err := anchors[index].ContentTime(windows[index].Start)
+		if err != nil {
+			failures++
+			logf(scenario, "CHECK FAILED: source %d: content for the window start: %v", index+1, err)
+			return
+		}
+		contentStarts[index] = content
+		if index == 0 || content > wantStart {
+			wantStart = content
+		}
 	}
-	logf(scenario, "shared window on the event clock: %s..%s; the measured anchors put the event start at %s",
-		sceneClock(start), sceneClock(end), sceneClock(wantStart))
+	logf(scenario, "shared window on the event clock: %s..%s; the content clocks put the event start at %s (the containers would say %s and %s)",
+		sceneClock(start), sceneClock(end), sceneClock(wantStart), sceneClock(mediaStarts[0]), sceneClock(mediaStarts[1]))
 	check(absDuration(start-wantStart) <= 100*time.Millisecond,
 		"the shared window starts at %s, but the measured anchors put the event at %s",
 		sceneClock(start), sceneClock(wantStart))
@@ -305,10 +316,11 @@ func commonBody(window *mygo.Window, a *appState, dir string) {
 	step(window, a, dir, scenario, "2-unaligned.png", "the same buffers with no confirmed offset", nil)
 
 	// The second negative: a confirmed but wrong offset is not refused; it
-	// moves the window by the difference. This is the reason the offset needs
-	// evidence of its own: the window follows whatever mapping it is given, so
-	// a shifted answer is only as good as the shift.
-	step(window, a, dir, scenario, "", "confirm a zero offset the fixture contradicts", func(a *appState) {
+	// moves the window by the difference. The offset used here is the container
+	// gap, which is exactly the mistake the new contract rules out -- if the
+	// four seconds were written into the Core timeline as a content offset, the
+	// shared window would shrink by four seconds on the wrong assumption.
+	step(window, a, dir, scenario, "", "confirm the container gap as if it were a content offset", func(a *appState) {
 		it, err := a.at(1)
 		if err != nil {
 			logf(scenario, "%v", err)
@@ -318,8 +330,8 @@ func commonBody(window *mygo.Window, a *appState, dir string) {
 			if track == "" {
 				continue
 			}
-			if err := a.sync.timeline.SetShift(track, 0); err != nil {
-				logf(scenario, "clear %s: %v", track, err)
+			if err := a.sync.timeline.SetShift(track, commonShift); err != nil {
+				logf(scenario, "shift %s: %v", track, err)
 			}
 		}
 		a.apply()
@@ -329,12 +341,12 @@ func commonBody(window *mygo.Window, a *appState, dir string) {
 	mygoRunOnMain(func() {
 		wrongStart, wrongEnd, wrongErr = a.commonReplay(sources)
 	})
-	logf(scenario, "with a zero offset the same buffers give %s..%s (%v)", sceneClock(wrongStart), sceneClock(wrongEnd), wrongErr)
-	check(wrongErr == nil, "a zero offset on the shifted source failed instead of moving the window: %v", wrongErr)
-	check(absDuration((wrongStart-start)-offsetOf(1)) <= 100*time.Millisecond,
-		"a wrong offset moved the window to %s, %s away from the proven %s",
-		sceneClock(wrongStart), sceneClock(wrongStart-start), sceneClock(start))
-	step(window, a, dir, scenario, "3-wrong-offset.png", "a confirmed offset the fixture contradicts", nil)
+	logf(scenario, "with the container gap used as an offset the same buffers give %s..%s (%v)", sceneClock(wrongStart), sceneClock(wrongEnd), wrongErr)
+	check(wrongErr == nil, "a confirmed offset failed instead of moving the window: %v", wrongErr)
+	check(absDuration((end-wrongEnd)-commonShift) <= 100*time.Millisecond,
+		"the invented offset changed the window end to %s, %s instead of %s",
+		sceneClock(wrongEnd), sceneClock(end-wrongEnd), sceneClock(commonShift))
+	step(window, a, dir, scenario, "3-wrong-offset.png", "the container gap mistaken for a content offset", nil)
 	logf(scenario, "checks failed: %d", failures)
 }
 

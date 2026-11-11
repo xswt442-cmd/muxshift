@@ -221,14 +221,17 @@ func orUnknown(instance string) string {
 }
 
 // EventTime maps a position inside the file to shared event time. The Core
-// timeline fixes media = event + offset, so this subtracts the confirmed track
-// offset instead of inventing the other sign.
+// timeline holds content time, not container time: a position becomes buffer
+// time through where the file starts, then content time through the anchor, and
+// only then loses the confirmed track offset. SourceMediaTime is the separate,
+// explicitly container-domain mapping a caller uses when it needs to open the
+// file at a timestamp rather than place a frame on the timeline.
 func (r Recording) EventTime(position time.Duration, anchor Anchor, offset time.Duration) (time.Duration, error) {
-	at, err := r.SourceMediaTime(position, anchor)
+	content, err := anchor.ContentTime(r.StartBufferTime + position)
 	if err != nil {
 		return 0, err
 	}
-	return at - offset, nil
+	return content - offset, nil
 }
 
 // Valid reports whether the file still matches the recording. It detects a file

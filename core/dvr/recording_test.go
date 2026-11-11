@@ -202,15 +202,17 @@ func TestEventTimeFollowsTheCoreTimelineSign(t *testing.T) {
 	}
 	anchor := anchorFor(recording, 2*time.Second, 3*time.Second)
 
-	// Core fixes media = event + offset, so event = media - offset. A media time
-	// of 3s with a +0.5s offset is 2.5s on the shared clock.
+	// The file starts at 2s of buffer time and buffer time is content time, so
+	// position 0 is content 2s; the anchor's container timestamp (3s) is a
+	// calibration for opening the file, not where the frame sits on the
+	// timeline. Core fixes media = event + offset, so event = content - offset.
 	for _, test := range []struct {
 		offset time.Duration
 		want   time.Duration
 	}{
-		{0, 3 * time.Second},
-		{500 * time.Millisecond, 2*time.Second + 500*time.Millisecond},
-		{-2 * time.Second, 5 * time.Second},
+		{0, 2 * time.Second},
+		{500 * time.Millisecond, 1500 * time.Millisecond},
+		{-2 * time.Second, 4 * time.Second},
 	} {
 		got, err := recording.EventTime(0, anchor, test.offset)
 		if err != nil {
@@ -219,6 +221,11 @@ func TestEventTimeFollowsTheCoreTimelineSign(t *testing.T) {
 		if got != test.want {
 			t.Fatalf("event time with offset %s = %s, want %s", test.offset, got, test.want)
 		}
+	}
+	// The container mapping stays available and still answers in its own domain:
+	// the same position opens the file at the measured media time.
+	if media, err := recording.SourceMediaTime(0, anchor); err != nil || media != anchor.MediaStart {
+		t.Fatalf("the container mapping gave %s (err %v), want the measured %s", media, err, anchor.MediaStart)
 	}
 }
 

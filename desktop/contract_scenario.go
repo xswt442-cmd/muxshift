@@ -56,10 +56,9 @@ func runContract(window *mygo.Window, a *appState, dir string) {
 	// The buffer's clock is its own. This fixture's playlist begins at media
 	// zero and the buffer stored its first segment, so buffer zero is media zero
 	// here; the burnt-in timecode is what confirms the claim afterwards. A live
-	// buffer that joined mid-stream must measure its anchor instead.
-	anchor := dvr.Anchor{Source: it.source.ID, BufferStart: 0, MediaStart: 0}
-	logf(scenario, "anchor for %s: buffer %s is media %s", anchor.Source,
-		anchor.BufferStart, anchor.MediaStart)
+	// buffer that joined mid-stream must measure its anchor instead. The anchor
+	// is built after the cut because it has to name the recording's own buffer
+	// instance and epoch, and it counts as measured, which both mappings demand.
 
 	// The request falls inside a segment, so the file cannot start there: a
 	// transport stream segment cannot be cut. The recording has to say both the
@@ -70,6 +69,17 @@ func runContract(window *mygo.Window, a *appState, dir string) {
 		logf(scenario, "mid-segment request %s: %v", request, err)
 		return
 	}
+	anchor := dvr.Anchor{
+		Source:         it.source.ID,
+		Epoch:          mid.SourceMediaEpoch,
+		BufferInstance: mid.BufferInstance,
+		BufferStart:    0,
+		MediaStart:     0,
+		Interval:       dvr.Range{Start: 0, End: mid.EndBufferTime},
+		MeasuredAt:     time.Now(),
+	}
+	logf(scenario, "anchor for %s: buffer %s is media %s (instance %s, epoch %d)",
+		anchor.Source, anchor.BufferStart, anchor.MediaStart, anchor.BufferInstance, anchor.Epoch)
 	logf(scenario, "mid-segment: %s", mid)
 	inside, err := mid.Position(request)
 	if err != nil {
@@ -81,25 +91,38 @@ func runContract(window *mygo.Window, a *appState, dir string) {
 		logf(scenario, "media time at file position %s: %v", inside, err)
 		return
 	}
-	event, err := mid.EventTime(inside, anchor, 0)
+	// Event time runs on the content clock, so it needs an anchor that says what
+	// it measured and which stretch of the buffer it covers. This fixture's
+	// buffer starts at zero, so buffer time and content time are the same
+	// numbers here; the measurement is what makes the anchor usable at all.
+	timelineAnchor := dvr.Anchor{
+		Source:         it.source.ID,
+		Epoch:          mid.SourceMediaEpoch,
+		BufferInstance: mid.BufferInstance,
+		BufferStart:    mid.StartBufferTime,
+		MediaStart:     mid.StartBufferTime,
+		Interval:       dvr.Range{Start: mid.StartBufferTime, End: mid.EndBufferTime},
+		MeasuredAt:     time.Now(),
+	}
+	event, err := mid.EventTime(inside, timelineAnchor, 0)
 	if err != nil {
 		logf(scenario, "event time at file position %s: %v", inside, err)
 		return
 	}
-	logf(scenario, "mid-segment: asked %s · file starts %s · request sits at %s · media time %s · event time %s (offset 0)",
+	logf(scenario, "mid-segment: asked %s · file starts %s · request sits at %s · container time %s · event time %s (offset 0)",
 		mid.RequestedBufferTime, mid.StartBufferTime, inside, at, event)
 	if at != request || event != request {
 		logf(scenario, "mid-segment: the mapping disagrees with the request (%s, %s vs %s)", at, event, request)
 	}
 	// Core fixes media = event + offset, so a positive offset pulls event time
-	// back: 3s of media at +0.5s is 2.5s on the shared clock.
+	// back: content 3s at +0.5s is 2.5s on the shared clock.
 	for _, offset := range []time.Duration{500 * time.Millisecond, -2 * time.Second} {
-		shifted, err := mid.EventTime(inside, anchor, offset)
+		shifted, err := mid.EventTime(inside, timelineAnchor, offset)
 		if err != nil {
 			logf(scenario, "event time with offset %s: %v", offset, err)
 			continue
 		}
-		logf(scenario, "offset %+dms: media %s -> event %s", offset.Milliseconds(), at, shifted)
+		logf(scenario, "offset %+dms: content %s -> event %s", offset.Milliseconds(), event+offset, shifted)
 	}
 	if _, err := mid.SourceMediaTime(0, dvr.Anchor{}); err == nil {
 		logf(scenario, "a recording without an anchor was mapped anyway, which it must not be")

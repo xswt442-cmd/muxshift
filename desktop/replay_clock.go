@@ -1,4 +1,4 @@
-﻿// The replay clock: measuring where a recording sits on its source's media
+// The replay clock: measuring where a recording sits on its source's media
 // clock, and converting a position inside it to shared event time.
 //
 // The buffer's clock starts at the first segment the buffer stored; the source's

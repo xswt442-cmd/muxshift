@@ -286,14 +286,19 @@ func (a *appState) commitSeekTxn(txn *seekTxn) {
 	// one turns out to have moved; checking everything first and installing
 	// afterwards is what makes the commit all-or-nothing.
 	a.seekOnMain(func() {
-		// The transaction only commits if it still owns the session. A newer
-		// transaction, a close or a shutdown can have taken it over while the
-		// files were being prepared.
-		if !a.holdsSeek(txn) {
+		// The decision to commit and the installation it authorises happen under
+		// the same lock. Ownership cannot change between "this transaction still
+		// owns the session" and the step that acts on it, and the slot is given
+		// up as part of the same critical section, so a transaction that lost it
+		// cannot install anything or clear whoever took its place.
+		a.seekMu.Lock()
+		if a.seek != txn {
+			a.seekMu.Unlock()
 			refusal = fmt.Errorf("this replay transaction no longer owns the session")
 			return
 		}
 		if err := a.revalidateSeekTxn(txn); err != nil {
+			a.seekMu.Unlock()
 			refusal = err
 			return
 		}
@@ -309,6 +314,8 @@ func (a *appState) commitSeekTxn(txn *seekTxn) {
 			it.replayAnchorErr = nil
 			it.generation++
 		}
+		a.seek = nil
+		a.seekMu.Unlock()
 	})
 	if refusal != nil {
 		a.abortSeekTxn(txn, refusal.Error())

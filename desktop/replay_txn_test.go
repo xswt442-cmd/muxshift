@@ -508,3 +508,69 @@ func TestSeekTxnGivesWayWhenAnotherTakesOver(t *testing.T) {
 		t.Fatal("the replaced transaction cleared the one that took over")
 	}
 }
+
+// A transaction that has lost the session may not install anything, even when
+// it is already inside the commit step.
+func TestSeekTxnCommitsNothingOnceOwnershipIsGone(t *testing.T) {
+	session, opened := seekTxnFixture(t)
+	newer := &seekTxn{event: 9 * time.Second}
+	session.app.beforeSeekCommit = func() {
+		session.app.seekMu.Lock()
+		session.app.seek = newer
+		session.app.seekMu.Unlock()
+	}
+	before := make([]*dvr.Recording, len(session.items))
+	for i, it := range session.items {
+		before[i] = it.replay
+	}
+
+	if err := session.app.startSeekTxn(session.items, 6*time.Second); err != nil {
+		t.Fatalf("the transaction did not start: %v", err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for len(*opened) == 0 || !allClosed(*opened) {
+		if !time.Now().Before(deadline) {
+			t.Fatal("the transaction that lost the session kept its players")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	for i, it := range session.items {
+		if it.replay != before[i] || it.generation != 2 {
+			t.Fatalf("source %d: a transaction that lost the session still installed itself", i+1)
+		}
+	}
+	session.app.seekMu.Lock()
+	holder := session.app.seek
+	session.app.seekMu.Unlock()
+	if holder != newer {
+		t.Fatal("the transaction cleared the one that took over")
+	}
+}
+
+// Rolling an old transaction back must not clear the transaction that replaced
+// it, even when the abort arrives after the replacement.
+func TestSeekTxnAbortLeavesANewerTransactionAlone(t *testing.T) {
+	session, _ := seekTxnFixture(t)
+	old := &seekTxn{event: 6 * time.Second}
+	newer := &seekTxn{event: 9 * time.Second}
+	session.app.seekMu.Lock()
+	session.app.seek = newer
+	session.app.seekMu.Unlock()
+
+	session.app.abortSeekTxn(old, "test abort")
+
+	session.app.seekMu.Lock()
+	holder := session.app.seek
+	session.app.seekMu.Unlock()
+	if holder != newer {
+		t.Fatal("aborting an old transaction cleared the newer one")
+	}
+}
+func allClosed(players []*fakeSeekPlayer) bool {
+	for _, player := range players {
+		if !player.closed {
+			return false
+		}
+	}
+	return len(players) > 0
+}

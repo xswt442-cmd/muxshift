@@ -313,6 +313,14 @@ type appState struct {
 	// finished".
 	probeAttempt uint64
 	probeDone    uint64
+	// probeCtx and probeCancel own the comparison in flight. Closing the session
+	// cancels it, so the ffmpeg child ends with the window instead of decoding
+	// three more minutes against a session nobody can see. probeChild is the
+	// child's pid, written by the goroutine that starts it: the checks read it to
+	// prove the process is really gone, which a "cancelled" string cannot.
+	probeCtx    context.Context
+	probeCancel context.CancelFunc
+	probeChild  atomic.Int64
 
 	// pending holds players that were removed while no other player was alive.
 	// See close for why they cannot be released at that moment. A player that
@@ -1145,6 +1153,10 @@ func (a *appState) release() {
 }
 
 func (a *appState) shutdown() {
+	a.stopProbe("the session closed")
+	// A comparison still decoding belongs to the session that is closing: cancel
+	// it first, so its ffmpeg ends here instead of running against a window that
+	// will never show the result.
 	// A transaction still preparing owns files and players of its own; give them
 	// back before the sources they were cut from are closed.
 	a.shutdownReplayTxn()

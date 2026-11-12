@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"os/exec"
 	"path"
 	"strconv"
@@ -86,7 +87,11 @@ const probeLength = 60 * time.Second
 // suggestAlign compares two sources and returns a proposal. It reports an error
 // only when the comparison could not run at all; a comparison that ran but found
 // nothing convincing comes back with Result.Accepted false and a reason.
-func (a *appState) suggestAlign(reference, target int) (alignSuggestion, error) {
+//
+// The context belongs to the session: cancelling it (see stopProbe) ends the
+// decoders, and the result of a cancelled comparison is dropped before it can
+// touch the session it no longer describes.
+func (a *appState) suggestAlign(ctx context.Context, reference, target int) (alignSuggestion, error) {
 	started := time.Now()
 	snapshot, err := a.snapshotOnMain(reference, target)
 	if err != nil {
@@ -94,14 +99,14 @@ func (a *appState) suggestAlign(reference, target int) (alignSuggestion, error) 
 	}
 	ref, tgt := snapshot.Reference, snapshot.Target
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 
-	first, err := decodeEnvelope(ctx, ref.URI, ref.Start, ref.Length)
+	first, err := decodeEnvelope(ctx, ref.URI, ref.Start, ref.Length, a.noteProbeChild)
 	if err != nil {
 		return alignSuggestion{}, fmt.Errorf("%s: %w", shortURI(ref.URI), err)
 	}
-	second, err := decodeEnvelope(ctx, tgt.URI, tgt.Start, tgt.Length)
+	second, err := decodeEnvelope(ctx, tgt.URI, tgt.Start, tgt.Length, a.noteProbeChild)
 	if err != nil {
 		return alignSuggestion{}, fmt.Errorf("%s: %w", shortURI(tgt.URI), err)
 	}
@@ -265,18 +270,46 @@ func (a *appState) alignWindowAt(index int) (alignWindow, error) {
 	}, nil
 }
 
+// decodeProgram is the decoder a comparison runs. It is a variable so a check can
+// point it at a program whose pid it can watch die; the product always runs
+// ffmpeg from PATH.
+var decodeProgram = "ffmpeg"
+
 // decodeEnvelope turns a slice of one source into the envelope the matcher uses.
 // The desktop cannot ask MyGo for PCM, so this decodes the same address with
 // ffmpeg; the offset comes from the bytes of the stream, not from the player.
-func decodeEnvelope(ctx context.Context, uri string, start, length time.Duration) (align.Envelope, error) {
-	command := exec.CommandContext(ctx, "ffmpeg", "-v", "error",
+//
+// It is started by hand rather than through Output so the caller learns the
+// child's pid while it runs: a session that closes during a comparison has to
+// show the process is gone, and only the pid can show that.
+func decodeEnvelope(ctx context.Context, uri string, start, length time.Duration, onStart func(int)) (align.Envelope, error) {
+	command := exec.CommandContext(ctx, decodeProgram, "-v", "error",
 		"-ss", seconds(start), "-t", seconds(length),
 		"-i", uri, "-map", "0:a:0", "-ac", "1", "-ar", "16000", "-f", "s16le", "-")
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
-	raw, err := command.Output()
+	stdout, err := command.StdoutPipe()
 	if err != nil {
-		return align.Envelope{}, fmt.Errorf("cannot decode audio: %w (%s)", err, strings.TrimSpace(stderr.String()))
+		return align.Envelope{}, fmt.Errorf("cannot read the decoder's output: %w", err)
+	}
+	if err := command.Start(); err != nil {
+		return align.Envelope{}, fmt.Errorf("cannot start the decoder: %w", err)
+	}
+	if onStart != nil {
+		onStart(command.Process.Pid)
+	}
+	raw, readErr := io.ReadAll(stdout)
+	waitErr := command.Wait()
+	if waitErr != nil {
+		// A cancelled comparison stopped because the session closed; say that,
+		// not the signal the kill happened to leave behind.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return align.Envelope{}, fmt.Errorf("the decoder stopped (%v): %w", ctxErr, waitErr)
+		}
+		return align.Envelope{}, fmt.Errorf("cannot decode audio: %w (%s)", waitErr, strings.TrimSpace(stderr.String()))
+	}
+	if readErr != nil {
+		return align.Envelope{}, fmt.Errorf("cannot read the decoder's output: %w", readErr)
 	}
 	if len(raw) < 2 {
 		return align.Envelope{}, fmt.Errorf("the source has no audio track")
@@ -346,7 +379,7 @@ func (a *appState) suggestionLine(s alignSuggestion) string {
 // same read-only path.
 func (a *appState) probeAndReport(reference, target int) alignSuggestion {
 	a.syncNote = ""
-	suggestion, err := a.suggestAlign(reference, target)
+	suggestion, err := a.suggestAlign(context.Background(), reference, target)
 	if err != nil {
 		a.syncNote = fmt.Sprintf("alignment probe failed: %v", err)
 		logf("align", "probe failed: %v", err)
@@ -386,14 +419,51 @@ func (a *appState) startProbe(reference, target int) uint64 {
 	a.probeAttempt++
 	attempt := a.probeAttempt
 	a.probeRunning = true
+	a.probeChild.Store(0)
+	ctx, cancel := context.WithCancel(context.Background())
+	a.probeCtx, a.probeCancel = ctx, cancel
 	a.syncNote = fmt.Sprintf("comparing source %d with source %d…", reference+1, target+1)
 	go func() {
-		suggestion, err := a.suggestAlign(reference, target)
+		suggestion, err := a.suggestAlign(ctx, reference, target)
+		cancel()
 		mygoRunOnMain(func() {
 			a.applyProbeResult(attempt, suggestion, err, refWindow, refErr, tgtWindow, tgtErr)
 		})
 	}()
 	return attempt
+}
+
+// noteProbeChild records the decoder's pid. A close can then show the process
+// ended instead of assuming that cancelling a context was enough.
+func (a *appState) noteProbeChild(pid int) {
+	a.probeChild.Store(int64(pid))
+	logf("align", "the decoder runs as pid %d", pid)
+}
+
+// probePID is the pid of the decoder in flight, or 0 when none was started.
+func (a *appState) probePID() int {
+	return int(a.probeChild.Load())
+}
+
+// stopProbe ends the comparison in flight and makes sure its result can never
+// touch the session again: the attempt counter moves on, so a result that lands
+// after this returns is dropped as stale. It does not wait for the decoder — the
+// context cancels it — because the close path must not block on a callback only
+// the drawing thread could run.
+func (a *appState) stopProbe(why string) bool {
+	if !a.probeRunning && a.probeCancel == nil {
+		return false
+	}
+	a.probeAttempt++
+	a.probeRunning = false
+	cancel := a.probeCancel
+	a.probeCancel = nil
+	a.probeCtx = nil
+	if cancel != nil {
+		cancel()
+	}
+	logf("align", "the comparison in flight was cancelled: %s", why)
+	return true
 }
 
 // applyProbeResult records a finished comparison. A result from an attempt that
@@ -406,6 +476,11 @@ func (a *appState) applyProbeResult(attempt uint64, suggestion alignSuggestion, 
 	}
 	a.probeRunning = false
 	a.probeDone = attempt
+	if cancel := a.probeCancel; cancel != nil {
+		cancel()
+		a.probeCancel = nil
+	}
+	a.probeCtx = nil
 	if err != nil {
 		reason := trimFailure(err.Error(), tgt.URI)
 		a.lastProbeErr = reason

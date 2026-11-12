@@ -61,19 +61,35 @@ func TestTheBudgetLineIsStatedAsALimit(t *testing.T) {
 // buffers are one: instance ids carry a nanosecond stamp, and a short name that
 // only keeps the head would cut them down to the same string.
 func TestTwoBuffersMadeInTheSameSecondReadApart(t *testing.T) {
-	first := "buf-1794510388123456789-1"
-	second := "buf-1794510388999999999-2"
+	// The counterexample the review named: the same prefix, two counters. The id
+	// ends in the Core's per-process counter, so the name keeps it verbatim
+	// instead of hoping a digest of the whole id never collides.
+	first := "buf-1794510388264000000-265"
+	second := "buf-1794510388491000000-492"
+	if got, want := instanceName(first), "buf-1794510388-265"; got != want {
+		t.Fatalf("the first instance reads %q, want %q", got, want)
+	}
+	if got, want := instanceName(second), "buf-1794510388-492"; got != want {
+		t.Fatalf("the second instance reads %q, want %q", got, want)
+	}
 	if instanceName(first) == instanceName(second) {
 		t.Fatalf("two instances read as one name: %q", instanceName(first))
 	}
-	name := instanceName(first)
-	if !strings.HasPrefix(name, "buf-1794510") {
-		t.Fatalf("the name lost the moment it was made: %q", name)
+	// A buffer made in the same nanosecond differs only by that counter, and the
+	// two must still be told apart.
+	next := "buf-1794510388264000000-266"
+	if instanceName(first) == instanceName(next) {
+		t.Fatalf("two buffers made in the same nanosecond read as one name: %q", instanceName(first))
 	}
-	if len(name) > 24 {
-		t.Fatalf("the name is not short enough for a row: %q (%d characters)", name, len(name))
+	for _, instance := range []string{first, second, next} {
+		if name := instanceName(instance); len(name) > 24 {
+			t.Fatalf("the name is not short enough for a row: %q (%d characters)", name, len(name))
+		}
 	}
 	if instanceName("") != "buffer" {
 		t.Fatalf("an empty instance reads %q", instanceName(""))
+	}
+	if instanceName("noseparator") != "noseparator" {
+		t.Fatalf("an id without a counter reads %q", instanceName("noseparator"))
 	}
 }

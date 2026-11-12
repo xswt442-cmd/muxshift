@@ -60,8 +60,22 @@ func windowsBody(window *mygo.Window, a *appState, dir string) {
 	logf(scenario, "the window starts at %dx%d at %d,%d, on the %q display (scale %.2f, work area %dx%d)",
 		original.Width, original.Height, original.X, original.Y, home.Label, home.ScaleFactor,
 		home.WorkArea.Width, home.WorkArea.Height)
-	check(intersects(original, home.WorkArea), "the window starts inside a work area: %dx%d at %d,%d",
-		original.Width, original.Height, original.X, original.Y)
+	// The walk places the window itself before it measures anything: a window
+	// inherited from the person's last session can sit partly off-screen, and
+	// "the window is inside the work area" has to be a claim about a window
+	// this check put there.
+	centered := centeredFrame(original, home.WorkArea)
+	if !inside(original, home.WorkArea) {
+		logf(scenario, "the window started at %d,%d %dx%d, which reaches outside the work area; moved it inside first",
+			original.X, original.Y, original.Width, original.Height)
+		step(window, a, dir, scenario, "", "moved the window inside the work area", func(*appState) {
+			window.SetBounds(centered)
+		})
+	}
+	moved := window.Bounds()
+	check(inside(moved, home.WorkArea), "the whole window is inside the work area: %dx%d at %d,%d in %dx%d at %d,%d",
+		moved.Width, moved.Height, moved.X, moved.Y,
+		home.WorkArea.Width, home.WorkArea.Height, home.WorkArea.X, home.WorkArea.Y)
 
 	// SetSize sizes the frame, not the content. Measure the frame once, at
 	// 100%, so every scale can be compared with the content it should get
@@ -83,8 +97,8 @@ func windowsBody(window *mygo.Window, a *appState, dir string) {
 	// The scale walk. "fit" is the widest window this screen allows at the
 	// scale; "min" is the smallest content the workbench promises to support.
 	for _, scale := range windowsScales {
-		fitWidth := int(float32(home.WorkArea.Width)) - 32
-		fitHeight := int(float32(home.WorkArea.Height)) - 32
+		fitWidth := int(float32(home.WorkArea.Width)) - 80
+		fitHeight := int(float32(home.WorkArea.Height)) - 80
 		fitWidth = minInt(fitWidth, int(1426*scale.zoom))
 		fitHeight = minInt(fitHeight, int(862*scale.zoom))
 		sizes := []struct {
@@ -98,10 +112,13 @@ func windowsBody(window *mygo.Window, a *appState, dir string) {
 			name := fmt.Sprintf("scale-%s-%s.png", scale.name, size.name)
 			caption := fmt.Sprintf("scale %s%% in a %dx%d window", scale.name, size.w, size.h)
 			zoom := scale.zoom
-			width, height := size.w, size.h
+			// One call sets the size and the place: a window this check sizes
+			// must also be a window this check puts inside the work area,
+			// otherwise "it stayed inside" proves nothing.
+			frame := centeredFrame(mygo.Rectangle{Width: size.w, Height: size.h}, home.WorkArea)
 			step(window, a, dir, scenario, name, caption, func(a *appState) {
 				a.zoom = zoom
-				window.SetSize(width, height)
+				window.SetBounds(frame)
 			})
 			var dips float32
 			var rail, inspector, dock bool
@@ -109,11 +126,11 @@ func windowsBody(window *mygo.Window, a *appState, dir string) {
 				dips = a.lastWidth
 				rail, inspector, dock = a.railOpen(a.lastWidth), a.inspectorOpen(a.lastWidth), a.dockOpen(a.lastWidth, a.lastHeight)
 				logf(scenario, "scale %s%% at %dx%d: the content sees %.1fx%.1f DIPs (rail %v, inspector %v, dock %v)",
-					scale.name, width, height, a.lastWidth, a.lastHeight, rail, inspector, dock)
+					scale.name, size.w, size.h, a.lastWidth, a.lastHeight, rail, inspector, dock)
 			})
-			wantWidth := float32(width-frameWidth) / zoom
+			wantWidth := float32(size.w-frameWidth) / zoom
 			check(abs32(dips-wantWidth) <= 2, "scale %s%%: the content got %.1f DIPs from %dx%d pixels (about %.1f)",
-				scale.name, dips, width, height, wantWidth)
+				scale.name, dips, size.w, size.h, wantWidth)
 			check(rail == (dips >= railAutoWidth), "scale %s%%: the rail fold (%v) follows the %.1f DIPs it got",
 				scale.name, rail, dips)
 			check(inspector == (dips >= inspectorAutoWidth), "scale %s%%: the inspector fold (%v) follows the %.1f DIPs it got",
@@ -123,8 +140,8 @@ func windowsBody(window *mygo.Window, a *appState, dir string) {
 					"scale %s%%: the smallest window laid out at %.1f DIPs (%d)", scale.name, dips, minContentWidth)
 			}
 			bounds := window.Bounds()
-			check(intersects(bounds, home.WorkArea), "scale %s%% at %dx%d stayed in the work area: %dx%d at %d,%d",
-				scale.name, width, height, bounds.Width, bounds.Height, bounds.X, bounds.Y)
+			check(inside(bounds, home.WorkArea), "scale %s%% at %dx%d: the whole window is inside the work area (%dx%d at %d,%d)",
+				scale.name, size.w, size.h, bounds.Width, bounds.Height, bounds.X, bounds.Y)
 		}
 	}
 
@@ -202,6 +219,7 @@ func windowsBody(window *mygo.Window, a *appState, dir string) {
 		check(intersects(moved, other.WorkArea), "the window landed on the %q display", other.Label)
 		step(window, a, dir, scenario, "", "back on the first display", func(*appState) {
 			window.SetBounds(original)
+			_ = centeredFrame
 		})
 	}
 
@@ -253,4 +271,24 @@ func abs32(v float32) float32 {
 		return -v
 	}
 	return v
+}
+
+// inside reports whether a is entirely within b.
+func inside(a, b mygo.Rectangle) bool {
+	return a.X >= b.X && a.Y >= b.Y && a.X+a.Width <= b.X+b.Width && a.Y+a.Height <= b.Y+b.Height
+}
+
+// centeredFrame places r in the middle of area, shrinking it to fit when it is
+// larger. A window this check places is a window this check can hold to being
+// inside the area.
+func centeredFrame(r, area mygo.Rectangle) mygo.Rectangle {
+	if r.Width > area.Width {
+		r.Width = area.Width
+	}
+	if r.Height > area.Height {
+		r.Height = area.Height
+	}
+	r.X = area.X + (area.Width-r.Width)/2
+	r.Y = area.Y + (area.Height-r.Height)/2
+	return r
 }

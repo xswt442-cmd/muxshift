@@ -139,6 +139,11 @@ var (
 	// extraMedia is the second address the sourcememory check adds by hand, so it
 	// the write path is exercised with a source the command line did not open.
 	extraMedia string
+
+	// scenarioDecoder replaces the decoder a comparison starts, so the probeclose
+	// check can watch a child that is still running when the window closes. The
+	// close path under test is the product's: same context, same kill, same Wait.
+	scenarioDecoder string
 )
 
 // handOver waits for the replacement player of a reopen to show a picture, then
@@ -698,6 +703,7 @@ func main() {
 	flag.DurationVar(&handoverWait, "handover", handoverWait, "how long a reopened player may take to show a picture before the previous one is kept")
 	settingsFile := flag.String("settings", "", "settings file to read and write; empty uses the per-user configuration directory")
 	flag.StringVar(&extraMedia, "scenario-extra", "", "with -scenario sourcememory: the address the check adds by hand")
+	flag.StringVar(&scenarioDecoder, "scenario-decoder", "", "with -scenario probeclose: the program a comparison starts instead of ffmpeg")
 	frameFlag := flag.String("frame", "", "place the window at x,y,width,height instead of restoring it (a check's starting point)")
 	flag.DurationVar(&syncAt, "at", 10*time.Second, "syncmap: the shared event time to measure")
 	flag.DurationVar(&syncOffset, "offset", 0, "syncmap: the offset applied to the measured source")
@@ -714,6 +720,12 @@ func main() {
 	// dropped without a word.
 	if extraMedia != "" && *scenario != "sourcememory" {
 		log.Fatalf("muxshift-desktop: -scenario-extra only goes with -scenario sourcememory")
+	}
+	if scenarioDecoder != "" {
+		if *scenario != "probeclose" {
+			log.Fatalf("muxshift-desktop: -scenario-decoder only goes with -scenario probeclose")
+		}
+		decodeProgram = scenarioDecoder
 	}
 	if *replay != "" {
 		// A recording is played by a process of its own: this build cannot put a

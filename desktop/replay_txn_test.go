@@ -19,6 +19,9 @@ type fakeSeekPlayer struct {
 	pauses, plays, seeks int
 	seekStarted          chan struct{}
 	seekRelease          chan struct{}
+	readyStarted         chan struct{}
+	readyRelease         chan struct{}
+	readyOnce            sync.Once
 	name                 string
 	ready                bool
 	closed               bool
@@ -34,7 +37,13 @@ type fakeSeekPlayer struct {
 	ignoreSeeks int
 }
 
-func (p *fakeSeekPlayer) Ready() bool     { return p.ready }
+func (p *fakeSeekPlayer) Ready() bool {
+	if p.readyStarted != nil {
+		p.readyOnce.Do(func() { close(p.readyStarted) })
+		<-p.readyRelease
+	}
+	return p.ready
+}
 func (p *fakeSeekPlayer) Playing() bool   { return false }
 func (p *fakeSeekPlayer) Buffering() bool { return false }
 
@@ -849,4 +858,60 @@ func TestAStopWaitsForAStepThatIsUsingItsPlayer(t *testing.T) {
 	if !player.closed {
 		t.Fatal("the stopped transaction's player was left open")
 	}
+}
+
+// TestAStopWaitsForAPictureCheckThatIsReading is the third edge: the picture
+// check asks the player whether it is ready, and a stop must not close the
+// player while that question is being asked. The check runs inside the same
+// lock a stop takes, so the stop waits for the answer.
+func TestAStopWaitsForAPictureCheckThatIsReading(t *testing.T) {
+	session, _ := seekTxnFixture(t)
+	player := &fakeSeekPlayer{
+		ready:        true,
+		readyStarted: make(chan struct{}),
+		readyRelease: make(chan struct{}),
+	}
+	txn := settleTxnFor(session, player, time.Second)
+	session.app.seek = txn
+	// Use the player's own answer: this test is about reading it under the
+	// lock, not about the seam that stands in for a picture.
+	session.app.seekStarted = nil
+	previousWait := handoverWait
+	handoverWait = 10 * time.Second
+	defer func() { handoverWait = previousWait }()
+
+	checked := make(chan error, 1)
+	go func() { checked <- session.app.waitSeekPlayers(txn) }()
+	select {
+	case err := <-checked:
+		t.Fatalf("the picture check returned before reading the player: %v", err)
+	case <-player.readyStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the picture check never asked the player whether it was ready")
+	}
+
+	stopped := make(chan struct{})
+	go func() {
+		session.app.abortSeekTxn(txn, "the session is closing")
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+		t.Fatal("the stop returned while the picture check was reading the player")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(player.readyRelease)
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stop did not return after the check finished")
+	}
+	if !player.closed {
+		t.Fatal("the stopped transaction's player was left open")
+	}
+	// The answer itself was read while the player was still open, so it may
+	// well be a success; what matters is that the stop waited for it and then
+	// gave the player back.
+	<-checked
 }

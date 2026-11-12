@@ -119,14 +119,16 @@ func (txn *seekTxn) reportFor(phase replayPhase, reason string) replayReport {
 // but it must not replace the account of a request that came after it.
 func (a *appState) publishReport(report replayReport) {
 	a.seekMu.Lock()
-	older := a.notice.ID != 0 && report.ID < a.notice.ID
+	newest := a.notice.ID
+	older := newest != 0 && report.ID < newest
 	if !older {
 		a.notice = report
+		newest = report.ID
 	}
 	a.seekMu.Unlock()
 	logf("seek", "%s", report.Line())
 	if older {
-		logf("seek", "replay %d is older than the newest attempt %d, so it stays out of the session's account", report.ID, a.notice.ID)
+		logf("seek", "replay %d is older than the newest attempt %d, so it stays out of the session's account", report.ID, newest)
 	}
 }
 

@@ -208,9 +208,12 @@ device switching, and the UI must not offer them. See
 A probe compares two windows of audio and offers an offset. The inspector shows
 that offer as an account, not as a number:
 
-- **What was compared**: both sources, both windows, and how much of them
-  actually overlapped at the proposed offset. A proposal built on four seconds of
-  overlap and one built on thirty are different kinds of evidence.
+- **What was compared**: both sources, the track of each that was decoded, both
+  windows, and how much of them actually overlapped at the proposed offset. A
+  proposal built on four seconds of overlap and one built on thirty are different
+  kinds of evidence. The comparison decodes `0:a:0`, so the window names the audio
+  track it read, and a source without one is refused rather than described as a
+  picture.
 - **How strong it is**: the peak, the next candidate and where it sits, and the
   confidence the comparison computed from the gap between them. A peak of
   `1.000` next to a runner-up of `0.105` is a match; two peaks a hair apart are
@@ -221,6 +224,10 @@ that offer as an account, not as a number:
   nudge made while it ran (or after it finished) turns the account into
   `expired: …` with the reason. The status bar renders its summary from the same
   report, so it cannot keep saying `now +0.000s` for a session that moved.
+
+When the newest comparison does not finish at all, the failure is the first line
+and any earlier proposal is labelled as an earlier one; a session that failed to
+measure must not look as if it had just measured something.
 
 The account is read-only. It derives from a finished suggestion plus the
 session as it is now, and rendering it writes no shift, so a window that redraws

@@ -33,6 +33,10 @@ type alignReport struct {
 	Accepted   bool
 	Reason     string
 	Expired    string
+	// Failed says why the newest comparison did not finish at all. The older
+	// proposal, if any, is still described below it, but never as the newest
+	// word: a session that failed to measure has not measured anything now.
+	Failed string
 }
 
 // reportOf turns a finished suggestion into the report the inspector shows.
@@ -57,6 +61,7 @@ func (a *appState) reportOf(s alignSuggestion) alignReport {
 		Accepted:   s.Result.Accepted,
 		Reason:     s.Result.Reason,
 		Expired:    a.fresh(s),
+		Failed:     a.lastProbeErr,
 	}
 }
 
@@ -65,6 +70,8 @@ func (a *appState) reportOf(s alignSuggestion) alignReport {
 // describes the session.
 func (r alignReport) state() string {
 	switch {
+	case r.Failed != "":
+		return "failed"
 	case !r.Accepted:
 		return "refused"
 	case r.Expired != "":
@@ -77,8 +84,9 @@ func (r alignReport) state() string {
 // lines renders the report as short rows: identity, windows, strength,
 // proposal, and what it is worth now.
 func (r alignReport) lines() []string {
-	first := fmt.Sprintf("%s compared with %s · %s vs %s",
-		fmt.Sprintf("source %d", r.Target.Index+1), fmt.Sprintf("source %d", r.Reference.Index+1),
+	first := fmt.Sprintf("%s (%s) compared with %s (%s) · %s vs %s",
+		fmt.Sprintf("source %d", r.Target.Index+1), trackName(r.Target.Track),
+		fmt.Sprintf("source %d", r.Reference.Index+1), trackName(r.Reference.Track),
 		shortURI(r.Target.URI), shortURI(r.Reference.URI))
 	windows := fmt.Sprintf("windows %s..%s · %s..%s · matched %s of %s",
 		roundMS(r.Target.Start), roundMS(r.Target.Start+r.Target.Length),
@@ -87,6 +95,12 @@ func (r alignReport) lines() []string {
 	strength := fmt.Sprintf("peak %.3f · next %.3f at %+.3fs · confidence %.3f",
 		r.Peak, r.RunnerUp, r.RunnerAt.Seconds(), r.Confidence)
 	lines := []string{first, windows, strength}
+	if r.Failed != "" {
+		// The newest attempt did not finish. Say that first, and say plainly
+		// that anything below describes an earlier comparison.
+		lines = append([]string{"the last comparison did not finish: " + r.Failed,
+			"what it would have replaced (an earlier comparison):"}, lines...)
+	}
 
 	if !r.Accepted {
 		lines = append(lines, fmt.Sprintf("no suggestion: %s · took %s", r.Reason, r.Elapsed.Round(time.Millisecond)))
@@ -108,6 +122,9 @@ func (r alignReport) lines() []string {
 // terms above. It reads state and changes none.
 func (a *appState) alignLines() []string {
 	if a.lastProbe.Reference.Source == "" && a.lastProbe.Target.Source == "" {
+		if a.lastProbeErr != "" {
+			return []string{"the last comparison did not finish: " + a.lastProbeErr}
+		}
 		return nil
 	}
 	return a.reportOf(a.lastProbe).lines()
@@ -120,6 +137,8 @@ func (a *appState) alignLine() string {
 	}
 	report := a.reportOf(a.lastProbe)
 	switch report.state() {
+	case "failed":
+		return fmt.Sprintf("alignment probe failed for %s: %s", shortURI(report.Target.URI), report.Failed)
 	case "refused":
 		return fmt.Sprintf("no suggestion for %s: %s (peak %.3f, next %.3f)",
 			shortURI(report.Target.URI), report.Reason, report.Peak, report.RunnerUp)
@@ -135,7 +154,7 @@ func (a *appState) alignLine() string {
 // the session outgrew, or a refusal.
 func alignTone(state string) ui.Color {
 	switch state {
-	case "refused":
+	case "failed", "refused":
 		return colorWarn
 	case "expired":
 		return colorDim

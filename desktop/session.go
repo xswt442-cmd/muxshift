@@ -258,6 +258,10 @@ type appState struct {
 	// finished suggestion here instead of parsing the status line.
 	probeRunning bool
 	lastProbe    alignSuggestion
+	// lastProbeErr is why the newest comparison did not finish. It is kept
+	// beside lastProbe, not instead of it: an older proposal may still describe
+	// the session, but a failed attempt must be the first thing the report says.
+	lastProbeErr string
 
 	// pending holds players that were removed while no other player was alive.
 	// See close for why they cannot be released at that moment. A player that

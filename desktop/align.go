@@ -35,8 +35,11 @@ type alignWindow struct {
 	Index      int
 	URI        string
 	Generation int
-	Start      time.Duration
-	Length     time.Duration
+	// Track is the track of this source that was decoded. A proposal describes
+	// that track's offset, so a report has to name it.
+	Track  core.TrackID
+	Start  time.Duration
+	Length time.Duration
 }
 
 func (w alignWindow) String() string {
@@ -244,11 +247,18 @@ func (a *appState) alignWindowAt(index int) (alignWindow, error) {
 	if length > probeLength {
 		length = probeLength
 	}
+	track := a.trackOfAudio(it)
+	if it.audio == "" {
+		// The comparison decodes `0:a:0`. Without an audio track nothing is
+		// compared, and the window must say so rather than name a picture.
+		return alignWindow{}, fmt.Errorf("%s has no audio track to compare", a.name(it))
+	}
 	return alignWindow{
 		Source:     it.source.ID,
 		Index:      index,
 		URI:        it.uri,
 		Generation: it.generation,
+		Track:      track,
 		Start:      0,
 		Length:     length,
 	}, nil
@@ -362,10 +372,12 @@ func (a *appState) probeAsync(reference, target int) {
 		mygoRunOnMain(func() {
 			a.probeRunning = false
 			if err != nil {
+				a.lastProbeErr = err.Error()
 				a.syncNote = fmt.Sprintf("alignment probe failed: %v", err)
 				logf("align", "probe failed: %v", err)
 				return
 			}
+			a.lastProbeErr = ""
 			a.lastProbe = suggestion
 			a.syncNote = a.suggestionLine(suggestion)
 			logf("align", "%s", a.syncNote)

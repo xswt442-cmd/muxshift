@@ -48,7 +48,7 @@ func alignReportBody(window *mygo.Window, a *appState, dir string) {
 	if nudgeErr != nil {
 		logf(scenario, "nudging the second source failed: %v", nudgeErr)
 	}
-	current := a.targetOffset(1)
+	current := runOnMainValue(func() time.Duration { return a.targetOffset(1) })
 	logf(scenario, "the second source sits at %+.3fs before the probe", current.Seconds())
 
 	probeErr := a.probeAndWait(0, 1, 30*time.Second)
@@ -59,7 +59,7 @@ func alignReportBody(window *mygo.Window, a *appState, dir string) {
 		return
 	}
 
-	report := a.alignLines()
+	report := runOnMainValue(a.alignLines)
 	logf(scenario, "the probe describes:\n%s", strings.Join(report, "\n"))
 	for _, want := range []string{
 		"compared with",
@@ -67,6 +67,7 @@ func alignReportBody(window *mygo.Window, a *appState, dir string) {
 		"matched ",
 		"peak ",
 		"confidence ",
+		"(track-",
 		"suggested ",
 		"now ",
 		"difference ",
@@ -84,10 +85,10 @@ func alignReportBody(window *mygo.Window, a *appState, dir string) {
 	if moveErr != nil {
 		logf(scenario, "moving the second source failed: %v", moveErr)
 	}
-	before := a.sync.timeline.Shifts()
-	stale := a.alignLines()
+	before := runOnMainValue(a.sync.timeline.Shifts)
+	stale := runOnMainValue(a.alignLines)
 	logf(scenario, "after moving the target, the same probe reads:\n%s", strings.Join(stale, "\n"))
-	after := a.sync.timeline.Shifts()
+	after := runOnMainValue(a.sync.timeline.Shifts)
 	check(strings.Contains(strings.Join(stale, "\n"), "expired: "),
 		"the report says it expired after the target moved:\n%s", strings.Join(stale, "\n"))
 	check(len(before) == len(after), "reading the report did not add or remove shifts: %d -> %d", len(before), len(after))
@@ -122,7 +123,8 @@ func (a *appState) probeAndWait(reference, target int, timeout time.Duration) er
 	a.probeAsync(reference, target)
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if !a.probeRunning && a.lastProbe.Target.Source != "" {
+		done := runOnMainValue(func() bool { return !a.probeRunning && a.lastProbe.Target.Source != "" })
+		if done {
 			return nil
 		}
 		time.Sleep(100 * time.Millisecond)

@@ -14,8 +14,8 @@ import (
 // the caller compares against the session.
 func suggestionFor(reference, target string) alignSuggestion {
 	return alignSuggestion{
-		Reference: alignWindow{Source: "source-1", Index: 0, URI: reference, Start: 0, Length: 30 * time.Second},
-		Target:    alignWindow{Source: "source-2", Index: 1, URI: target, Start: 4 * time.Second, Length: 26 * time.Second},
+		Reference: alignWindow{Source: "source-1", Index: 0, URI: reference, Track: "track-1", Start: 0, Length: 30 * time.Second},
+		Target:    alignWindow{Source: "source-2", Index: 1, URI: target, Track: "track-2", Start: 4 * time.Second, Length: 26 * time.Second},
 		Snapshot: probeSnapshot{
 			Track:   "track-2",
 			Offset:  time.Second,
@@ -42,7 +42,7 @@ func TestTheReportShowsEveryReasonToTrustOrDoubtIt(t *testing.T) {
 	app.lastProbe = suggestionFor("a.m3u8", "b.m3u8")
 	lines := strings.Join(app.alignLines(), "\n")
 	for _, want := range []string{
-		"source 2 compared with source 1",
+		"source 2 (track-2) compared with source 1 (track-1)",
 		"windows 4s..30s · 0s..30s · matched 25.9s of 26s",
 		"peak 0.918 · next 0.152 at +2.400s · confidence 0.861",
 		"suggested +2.000s · now +1.000s · difference +1.000s · took 387ms",
@@ -123,4 +123,48 @@ func alignApp() *appState {
 	}
 	app.sync.timeline.SetShift("track-2", time.Second)
 	return app
+}
+
+// TestTheReportNamesTheTrackItCompared keeps the identity honest: a proposal
+// describes one track's offset, and the report has to say which.
+func TestTheReportNamesTheTrackItCompared(t *testing.T) {
+	app := alignApp()
+	app.lastProbe = suggestionFor("a.m3u8", "b.m3u8")
+	first := app.alignLines()[0]
+	if !strings.Contains(first, "source 2 (track-2)") || !strings.Contains(first, "source 1 (track-1)") {
+		t.Fatalf("the report does not name the tracks it compared: %q", first)
+	}
+}
+
+// TestAFailedComparisonSaysSoFirst covers the newest attempt failing while an
+// older proposal still exists: the failure is the news, and the older proposal
+// may only be shown as what the failure would have replaced.
+func TestAFailedComparisonSaysSoFirst(t *testing.T) {
+	app := alignApp()
+	app.lastProbe = suggestionFor("a.m3u8", "b.m3u8")
+	app.lastProbeErr = "ffmpeg is not on PATH: exec: \"ffmpeg\": executable file not found"
+	lines := app.alignLines()
+	if !strings.Contains(lines[0], "the last comparison did not finish: ffmpeg is not on PATH") {
+		t.Fatalf("a failed comparison is not the first line: %q", strings.Join(lines, "\n"))
+	}
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "an earlier comparison") {
+		t.Fatalf("the older proposal is not marked as an earlier one:\n%s", joined)
+	}
+	if state := app.reportOf(app.lastProbe).state(); state != "failed" {
+		t.Fatalf("a failed comparison reports state %q, want failed", state)
+	}
+	if line := app.alignLine(); !strings.Contains(line, "alignment probe failed") {
+		t.Fatalf("the status bar does not report the failure: %q", line)
+	}
+}
+
+// TestAFailedComparisonAloneStillShowsSomething covers the first attempt.
+func TestAFailedComparisonAloneStillShowsSomething(t *testing.T) {
+	app := alignApp()
+	app.lastProbeErr = "the two sources could not be decoded"
+	lines := app.alignLines()
+	if len(lines) != 1 || !strings.Contains(lines[0], "did not finish") {
+		t.Fatalf("a single failed comparison shows %q", strings.Join(lines, "\n"))
+	}
 }

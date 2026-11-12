@@ -139,6 +139,34 @@ func mixerBody(window *mygo.Window, a *appState, dir string) {
 	mixerPhase(a, "overlay cleared")
 	time.Sleep(4 * time.Second)
 
+	// Changing a level is not routing: the unrouted source must be refused, and
+	// the routed one's slider must end up showing what the scene now holds.
+	mygoRunOnMain(func() {
+		result := a.runCommand(command{Kind: commandVolume, Source: sourceAt(a, 1), Volume: 0.35})
+		check(result.Err != nil, "changing the level of an unrouted source was accepted")
+		check(result.Err != nil && strings.Contains(result.Err.Error(), "use Hear"),
+			"the refusal does not point at routing: %v", result.Err)
+		logf("mixer", "volume on the unrouted source: %v", result.Err)
+		a.lastErr = nil
+
+		if level, routed := a.sceneLevel(a.items[1]); routed {
+			check(false, "the refused volume routed the source at %.2f", level.Volume)
+		}
+
+		a.report(a.runCommand(command{Kind: commandVolume, Source: sourceAt(a, 0), Volume: 0.25}))
+	})
+
+	step(window, a, dir, "mixer", "6-volume.png", "the routed source at a quarter", func(a *appState) {
+		for _, line := range mixerLines(a) {
+			logf("mixer", "after the volume change: %s", line)
+		}
+		level, routed := a.sceneLevel(a.items[0])
+		check(routed && level.Volume == 0.25, "the scene holds %.2f for the routed source, want 0.25", level.Volume)
+		check(a.items[0].volume == 0.25, "the item still carries %.2f", a.items[0].volume)
+		check(strings.Contains(a.mixerLine(a.items[0]), "25%"),
+			"the row does not show the level the scene holds: %q", a.mixerLine(a.items[0]))
+	})
+
 	logf("mixer", "mixer: %d source(s), checks failed: %d", len(a.items), checks)
 	finishScenario(a)
 }

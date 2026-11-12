@@ -166,9 +166,17 @@ PCM bus, ducking, panning, per-source EQ, output-device switching and a level
 meter are named at the bottom as unavailable; the page offers no control for
 them.
 
+Changing a level is not routing. A slider on a source the scene does not carry is
+refused with a pointer at `Hear`; writing it would put that source's sound on the
+output as a side effect of touching a control. After a change the scene holds the
+number, the item carries it too, and the slider and its label read the scene, so
+they cannot keep drawing 100% while the output plays 25%. A level change also
+leaves the scene's mute alone.
+
 The windowed check (`mixer`) uses the shape this build actually has: one source
 routed at a time, held by the unaligned protection until somebody anchors it,
-and a second source outside the scene. It soloes the unrouted source first to
+and a second source outside the scene. It ends by refusing a level change on the
+unrouted source and by carrying a quarter through to the slider and the row. It soloes the unrouted source first to
 see the refusal, then the routed one, then mutes everything and lifts it again.
 Audibility is measured where it matters: a separate process samples the peak of
 the default render endpoint, and the check's phases are logged with timestamps

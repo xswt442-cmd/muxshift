@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -270,5 +271,72 @@ func TestApplySilencesTheOtherSourceWhileOneIsSoloed(t *testing.T) {
 	}
 	if players[1].muted {
 		t.Fatal("leaving solo left the other source muted")
+	}
+}
+
+// TestVolumeRefusesToRouteASourceTheSceneDoesNotHold pins the difference between
+// changing a level and putting a source on the output: a slider must not make a
+// source audible as a side effect.
+func TestVolumeRefusesToRouteASourceTheSceneDoesNotHold(t *testing.T) {
+	a := mixerFixture(t)
+	it := a.items[1]
+	if _, err := a.session.RemoveSceneAudio(a.scene, it.audio); err != nil {
+		t.Fatalf("unroute: %v", err)
+	}
+	before := it.volume
+	err := a.setVolume(1, 0.35)
+	if err == nil {
+		t.Fatal("changing the level of an unrouted source succeeded")
+	}
+	if !strings.Contains(err.Error(), "use Hear") {
+		t.Fatalf("the refusal does not point at routing: %v", err)
+	}
+	if it.volume != before {
+		t.Fatalf("the refused change still moved the level: %v -> %v", before, it.volume)
+	}
+	scene, err := a.session.Scene(a.scene)
+	if err != nil {
+		t.Fatalf("scene: %v", err)
+	}
+	for _, level := range scene.Audio {
+		if level.Track == it.audio {
+			t.Fatal("the refused change routed the source anyway")
+		}
+	}
+}
+
+// TestVolumeUpdatesTheLevelTheControlsShow keeps the scene, the item and the
+// row in step: a slider that keeps drawing 100% while the scene plays 25% is the
+// same defect as a wrong value.
+func TestVolumeUpdatesTheLevelTheControlsShow(t *testing.T) {
+	a := mixerFixture(t)
+	it := a.items[0]
+	if err := a.setVolume(0, 0.25); err != nil {
+		t.Fatalf("volume: %v", err)
+	}
+	level, routed := a.sceneLevel(it)
+	if !routed || level.Volume != 0.25 {
+		t.Fatalf("scene level = %v (routed=%v), want 0.25", level.Volume, routed)
+	}
+	if it.volume != 0.25 {
+		t.Fatalf("item volume = %v, want 0.25", it.volume)
+	}
+	if got := a.shownLevel(it); got != 0.25 {
+		t.Fatalf("shown level = %v, want 0.25", got)
+	}
+	if line := a.mixerLine(it); !strings.Contains(line, "25%") {
+		t.Fatalf("the row still shows another level: %q", line)
+	}
+}
+
+// TestVolumeIsCheckedAgainstItsRange keeps an impossible level out of the scene.
+func TestVolumeIsCheckedAgainstItsRange(t *testing.T) {
+	a := mixerFixture(t)
+	it := a.items[0]
+	if err := a.setVolume(0, 1.5); err == nil || !strings.Contains(err.Error(), "outside 0..1") {
+		t.Fatalf("out-of-range volume: %v", err)
+	}
+	if it.volume != 1 {
+		t.Fatalf("the refused change moved the level: %v", it.volume)
 	}
 }

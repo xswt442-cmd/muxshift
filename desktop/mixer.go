@@ -160,13 +160,23 @@ func (a *appState) heard(it *item) bool {
 	return len(a.silences(it)) == 0
 }
 
+// shownLevel is the level the controls should display for a source: the one the
+// scene holds when the source is routed, otherwise the level it would be given
+// when somebody routes it.
+func (a *appState) shownLevel(it *item) float64 {
+	if level, routed := a.sceneLevel(it); routed {
+		return level.Volume
+	}
+	return it.volume
+}
+
 // mixerLine describes one source's place in the current listening overlay.
 func (a *appState) mixerLine(it *item) string {
 	state := "silent"
 	if a.heard(it) {
 		state = "heard"
 	}
-	line := fmt.Sprintf("%s %s · %.0f%%", it.source.ID, state, it.volume*100)
+	line := fmt.Sprintf("%s %s · %.0f%%", it.source.ID, state, a.shownLevel(it)*100)
 	if a.solo == it.source.ID {
 		line += " · solo"
 	}

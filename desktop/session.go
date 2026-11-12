@@ -656,23 +656,41 @@ func (a *appState) setVolume(index int, volume float64) error {
 	if it.audio == "" {
 		return fmt.Errorf("source %d has no audio track", index+1)
 	}
+	if volume < 0 || volume > 1 {
+		return fmt.Errorf("volume %.2f is outside 0..1", volume)
+	}
+	// Changing a level is not routing. A source outside the scene has no level
+	// to change, and writing one would put its sound on the output as a side
+	// effect of touching a slider, so refuse and point at Hear instead.
+	level, routed := a.sceneLevel(it)
+	if !routed {
+		return fmt.Errorf("source %d is not in the scene, so it has no level to change; use Hear to route it first", index+1)
+	}
 	// The level that reaches the scene keeps whatever mute the scene already
 	// carries: changing a volume must not turn a muted track back on, which is
 	// what passing a fresh `false` here would do.
-	muted := false
-	if scene, err := a.session.Scene(a.scene); err == nil {
-		for _, level := range scene.Audio {
-			if level.Track == it.audio {
-				muted = level.Muted
-				break
-			}
-		}
-	}
-	if _, err := a.session.SetSceneAudio(a.scene, it.audio, volume, muted); err != nil {
+	if _, err := a.session.SetSceneAudio(a.scene, it.audio, volume, level.Muted); err != nil {
 		return err
 	}
+	// The scene now holds the number the controls must show; keeping the item's
+	// copy in step is what makes a slider and its label agree on the next frame.
+	it.volume = volume
 	a.apply()
 	return nil
+}
+
+// sceneLevel reports the level the scene holds for a source's audio track.
+func (a *appState) sceneLevel(it *item) (core.AudioLevel, bool) {
+	scene, err := a.session.Scene(a.scene)
+	if err != nil {
+		return core.AudioLevel{}, false
+	}
+	for _, level := range scene.Audio {
+		if level.Track == it.audio {
+			return level, true
+		}
+	}
+	return core.AudioLevel{}, false
 }
 
 // hearBoth makes the scene play two sources' audio together, each at its own

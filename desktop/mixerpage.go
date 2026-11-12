@@ -93,11 +93,17 @@ func (a *appState) mixerRow(c *ui.Context, index int, it *item) {
 			}
 		})
 		ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
+			// Show the level the scene actually holds, so a slider and its label
+			// cannot disagree with what is playing after a change.
 			level := it.volume
+			if current, routed := a.sceneLevel(it); routed {
+				level = current.Volume
+			}
 			if ui.Slider(c.Key(fmt.Sprintf("mixer-volume-%d", index)), &level, 0, 1).
 				Grow(1).Height(20).Clicked() {
 				// Slider reports the new value on click and drag; the command
-				// writes it to the scene without touching the mute.
+				// writes it to the scene without touching the mute, and refuses
+				// to route a source that is not in the scene yet.
 				a.report(a.runCommand(command{Kind: commandVolume, Source: it.source.ID, Volume: level}))
 			}
 			ui.Text(c, fmt.Sprintf("%.0f%%", level*100)).Width(46).

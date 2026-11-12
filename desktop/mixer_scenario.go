@@ -252,6 +252,43 @@ func mixerBody(window *mygo.Window, a *appState, dir string) {
 		}
 	})
 
+	// A solo is not an unmute. The target's own mute is part of its state, and
+	// the overlay must not quietly lift it to make the solo audible.
+	mygoRunOnMain(func() {
+		a.report(a.runCommand(command{Kind: commandMute, Source: sourceAt(a, 0)}))
+		a.report(a.runCommand(command{Kind: commandSolo, Source: sourceAt(a, 0)}))
+	})
+
+	step(window, a, dir, "mixer", "11-solo-keeps-mute.png", "solo leaves the target's own mute alone", func(a *appState) {
+		for _, line := range mixerLines(a) {
+			logf("mixer", "solo on a muted source: %s", line)
+		}
+		check(a.solo == sourceAt(a, 0), "solo does not name the first source: %q", a.solo)
+		check(a.items[0].muted, "soloing the source turned its own mute off")
+		check(!a.heard(a.items[0]), "a source that is muted and soloed reads as heard: %s", a.mixerLine(a.items[0]))
+		line := a.mixerLine(a.items[0])
+		check(strings.Contains(line, "muted") && strings.Contains(line, "solo"),
+			"the row does not say both why it is silent and that it is soloed: %q", line)
+		if a.items[0].player != nil {
+			check(rawPlayer(a.items[0].player).Muted(), "the muted solo target still plays")
+		}
+	})
+
+	mygoRunOnMain(func() {
+		a.report(a.runCommand(command{Kind: commandMute, Source: sourceAt(a, 0)}))
+	})
+
+	step(window, a, dir, "mixer", "12-unmuted-solo.png", "unmuting the solo target makes it audible again", func(a *appState) {
+		for _, line := range mixerLines(a) {
+			logf("mixer", "solo target unmuted: %s", line)
+		}
+		check(!a.items[0].muted, "the source is still muted")
+		check(a.heard(a.items[0]), "the soloed source is not heard after unmuting: %s", a.mixerLine(a.items[0]))
+		if a.items[0].player != nil {
+			check(!rawPlayer(a.items[0].player).Muted(), "the player stayed muted after unmuting")
+		}
+	})
+
 	logf("mixer", "mixer: %d source(s), checks failed: %d", len(a.items), checks)
 	finishScenario(a)
 }

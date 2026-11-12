@@ -186,7 +186,7 @@ Solo moving from one source to another is checked separately with the scene
 carrying both: the second source has to be allowed explicitly first, because the
 unaligned protection outranks routing and a solo is not a way around it. While
 the solo sits on one row the other row's player is muted; leaving it puts both
-back at the 0.80 and 0.60 the scene still holds.
+back at the 0.80 and 0.60 the scene still holds. A solo also does not lift the target's own mute: a muted target stays inaudible while soloed, the row names both reasons, and it becomes audible only once the mute is removed.
 ### The listening overlay (P17.4a)
 
 Mute, master mute and solo are a listening overlay, not a mixing bus. The

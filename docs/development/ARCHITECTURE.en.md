@@ -173,7 +173,10 @@ Three things stay apart, because they answer different questions:
 A track with no shift reads `not aligned`, never `+0.0s`: an unknown alignment
 and an alignment that happens to be zero are different facts, and the dock used
 to print the same number for both. The reference comes from the sync group that
-exists, not from whichever source is first in the window.
+exists, not from whichever source is first in the window, and a row describes
+the reference track itself when it belongs to that source: Core allows an audio
+track to be the reference, so a row that always picked the picture would hide
+the very track the group aligns to.
 
 Drawing the view is a pure read: it sets no shift, moves no playhead and touches
 no player, so a frame that redraws the dock cannot change what a person aligned.

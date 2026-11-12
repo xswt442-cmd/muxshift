@@ -46,10 +46,7 @@ func (a *appState) timelineRows() []timelineRow {
 	event := a.sync.playhead.Event()
 	rows := make([]timelineRow, 0, len(a.items))
 	for index, it := range a.items {
-		track := it.video
-		if track == "" {
-			track = it.audio
-		}
+		track := a.rowTrack(it, reference)
 		row := timelineRow{Index: index, Source: it.uri, Track: track,
 			Reference: track != "" && track == reference, Event: event}
 		if track == "" {
@@ -135,4 +132,23 @@ func (a *appState) timelineLines() []string {
 		lines = append(lines, row.line())
 	}
 	return lines
+}
+
+// rowTrack picks the track a source's row describes. When the sync group's
+// reference belongs to this source, the row describes that track: Core allows
+// an audio track to be the reference, and a video-first choice would then hide
+// the very track the group aligns to. Sources without the reference keep their
+// video track, or their audio track when they have no video.
+func (a *appState) rowTrack(it *item, reference core.TrackID) core.TrackID {
+	if reference != "" {
+		for _, track := range a.session.Tracks() {
+			if track.ID == reference && track.Source == it.source.ID {
+				return reference
+			}
+		}
+	}
+	if it.video != "" {
+		return it.video
+	}
+	return it.audio
 }

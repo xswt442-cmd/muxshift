@@ -9,7 +9,8 @@ import (
 
 // runTimeline checks the read-only timeline view (P17.1) in a real window: it
 // must say "not aligned" where it knows nothing, show a real zero offset once a
-// person anchors, keep the three times apart, and change nothing by drawing.
+// person anchors, show a real non-zero offset once a person nudges, keep the
+// three times apart, and change nothing by drawing.
 func runTimeline(window *mygo.Window, a *appState, dir string) {
 	go timelineBody(window, a, dir)
 }
@@ -44,14 +45,20 @@ func timelineBody(window *mygo.Window, a *appState, dir string) {
 		check(len(lines) == 2, "want two rows, got %d", len(lines))
 	})
 
-	// A person anchors: that is the real command path, not a view-only edit.
-	if err := a.anchor(0); err != nil {
-		logf("timeline", "anchor: %v", err)
+	// A person anchors: that is the real command path, not a view-only edit. It
+	// runs on the drawing thread because it seeks players and changes the
+	// session the window reads.
+	var anchorErr error
+	mygoRunOnMain(func() { anchorErr = a.anchor(0) })
+	if anchorErr != nil {
+		logf("timeline", "anchor: %v", anchorErr)
 		checks++
 	}
-	if _, err := a.nudge(1, 0); err != nil {
-		logf("timeline", "the nudge on the second source: %v", err)
-	}
+	mygoRunOnMain(func() {
+		if _, err := a.nudge(1, 0); err != nil {
+			logf("timeline", "the nudge on the second source: %v", err)
+		}
+	})
 
 	step(window, a, dir, "timeline", "2-aligned.png", "after anchoring the first source", func(a *appState) {
 		lines := a.timelineLines()
@@ -64,6 +71,29 @@ func timelineBody(window *mygo.Window, a *appState, dir string) {
 		check(strings.Contains(joined, "ref"), "the anchored reference track is not marked: %q", joined)
 		check(strings.Contains(joined, "media "), "the view does not show the mapped media time: %q", joined)
 		check(strings.Contains(joined, "player "), "the view does not show what the player reports: %q", joined)
+	})
+
+	// A nudge moves one source by a real, non-zero amount: the row must show the
+	// offset it was given and the media time the timeline maps the event to,
+	// while the other source stays where it was.
+	var nudgeErr error
+	mygoRunOnMain(func() { _, nudgeErr = a.nudge(1, -500*time.Millisecond) })
+	if nudgeErr != nil {
+		logf("timeline", "the nudge on the second source: %v", nudgeErr)
+		checks++
+	}
+
+	step(window, a, dir, "timeline", "3-nudged.png", "after nudging the second source by -500ms", func(a *appState) {
+		lines := a.timelineLines()
+		joined := strings.Join(lines, "\n")
+		for _, line := range lines {
+			logf("timeline", "after nudging: %s", line)
+		}
+		check(strings.Contains(joined, "offset -0.5s"), "the nudged source does not show the offset it was given: %q", joined)
+		check(strings.Contains(joined, "offset +0.0s"), "nudging one source moved the other: %q", joined)
+		event := a.sync.playhead.Event()
+		want := sceneClock(event - 500*time.Millisecond)
+		check(strings.Contains(joined, "media "+want), "the nudged source does not map the event to %s: %q", want, joined)
 	})
 
 	// Drawing is read-only: a second read must produce the same rows and leave

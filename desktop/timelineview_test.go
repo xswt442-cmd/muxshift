@@ -147,3 +147,51 @@ func TestTheReferenceComesFromTheSyncGroup(t *testing.T) {
 		t.Fatalf("a non-reference track is marked as one: %q", lines[0])
 	}
 }
+
+// Core lets an audio track be the sync group's reference. A row that always
+// prefers the video track would then hide the very track the group aligns to.
+func TestAnAudioReferenceLabelsItsOwnRow(t *testing.T) {
+	session := core.NewSession("view")
+	// One source carries both a picture and a sound, and the group aligns to
+	// its sound: a row that always prefers the picture would hide that.
+	mixedSource, err := session.AddSource("a.m3u8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	picture, err := session.AddTrack(mixedSource.ID, core.MediaVideo, "picture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sound, err := session.AddTrack(mixedSource.ID, core.MediaAudio, "sound")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherSource, err := session.AddSource("b.m3u8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := session.AddTrack(otherSource.ID, core.MediaVideo, "other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	group, err := session.AddSyncGroup(sound.ID, picture.ID, sound.ID, other.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := &appState{session: session, sync: newSyncState()}
+	app.sync.group = group.ID
+	app.items = []*item{
+		{source: mixedSource, uri: "a.m3u8", video: picture.ID, audio: sound.ID},
+		{source: otherSource, uri: "b.m3u8", video: other.ID},
+	}
+	rows := app.timelineRows()
+	if len(rows) != 2 {
+		t.Fatalf("want two rows, got %d", len(rows))
+	}
+	if rows[0].Track != sound.ID || !rows[0].Reference {
+		t.Fatalf("a source whose sound is the reference describes its picture instead: %+v", rows[0])
+	}
+	if rows[1].Track != other.ID || rows[1].Reference {
+		t.Fatalf("the other source picked up the reference: %+v", rows[1])
+	}
+}

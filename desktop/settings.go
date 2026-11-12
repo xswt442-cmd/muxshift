@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -314,12 +315,28 @@ func loadSettings(path string) (settings, string) {
 
 // saveSettingsSerialized writes the settings file under the app's save lock. A
 // remembered preference saves from a background goroutine while Apply saves
-// from the drawing thread; without the lock the two could rename in the other
-// order and leave the older file behind.
-func (a *appState) saveSettingsSerialized(st settings) error {
+// from the drawing thread; the lock keeps two temp files from racing, and the
+// ticket keeps them in order: whoever built its snapshot last wins, even if the
+// goroutine is scheduled after the other write has already renamed.
+func (a *appState) saveSettingsSerialized(st settings, ticket uint64) error {
 	a.settingsSave.Lock()
 	defer a.settingsSave.Unlock()
-	return saveSettings(a.settingsPath, st)
+	if ticket < a.saveDone.Load() {
+		// A newer snapshot is already on disk; writing this one would put an
+		// older file in its place.
+		return nil
+	}
+	err := saveSettings(a.settingsPath, st)
+	if err == nil {
+		a.saveDone.Store(ticket)
+	}
+	return err
+}
+
+// saveTicket reserves the place of one settings snapshot in the order of
+// writes; call it where the snapshot is made, not where the write happens.
+func (a *appState) saveTicket() uint64 {
+	return a.saveSeq.Add(1)
 }
 
 // saveSettings writes the settings atomically with owner-only permissions: a
@@ -357,16 +374,19 @@ func saveSettings(path string, st settings) error {
 		return err
 	}
 	// The rename replaces the file in one step, which is what makes a crash
-	// harmless. On Windows it fails while a reader still holds the target open,
-	// so a check that reads the file to watch for a write can make the write
-	// itself fail; a few short retries cover that without weakening the atomic
-	// replace.
+	// harmless. On Windows it fails while another process — a reader, an indexer,
+	// a virus scanner — still holds the target open, and that failure looks like
+	// a permission error. Retry only that for a moment; every other failure is
+	// reported at once rather than delayed.
 	var last error
-	for attempt := 0; attempt < 5; attempt++ {
+	for attempt := 0; attempt < 10; attempt++ {
 		if last = os.Rename(name, path); last == nil {
 			return nil
 		}
-		time.Sleep(20 * time.Millisecond)
+		if !errors.Is(last, fs.ErrPermission) {
+			return last
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 	return last
 }
@@ -676,7 +696,7 @@ func (a *appState) applySettingsCommand() {
 		a.settingsErr = err.Error()
 		return
 	}
-	if err := a.saveSettingsSerialized(next); err != nil {
+	if err := a.saveSettingsSerialized(next, a.saveTicket()); err != nil {
 		a.settingsErr = fmt.Sprintf("applied, but saving failed: %v", err)
 		return
 	}

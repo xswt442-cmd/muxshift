@@ -5,6 +5,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -113,11 +114,23 @@ func sourceMemoryBody(window *mygo.Window, a *appState, dir string) {
 	}
 	var saved settings
 	saved, note = loadSettings(a.settingsPath)
-	time.Sleep(800 * time.Millisecond)
-	step(window, a, dir, scenario, "1-remembered.png",
-		"the hand-added source is audible and muted, and the file keeps its sound",
-		func(a *appState) { a.workspace = workspaceMixer })
+	// The capture only succeeds while the window is actually drawn; a start that
+	// has not painted yet reports "the window's content has no size". Retry a
+	// few times and count a missing picture as a failure rather than leave it in
+	// the log only.
+	shot := filepath.Join(dir, "1-remembered.png")
+	for attempt := 0; attempt < 4; attempt++ {
+		time.Sleep(800 * time.Millisecond)
+		step(window, a, dir, scenario, "1-remembered.png",
+			"the hand-added source is audible and muted, and the file keeps its sound",
+			func(a *appState) { a.workspace = workspaceMixer })
+		if info, err := os.Stat(shot); err == nil && info.Size() > 0 {
+			break
+		}
+	}
 	mygoRunOnMain(func() {
+		info, err := os.Stat(shot)
+		check(err == nil && info.Size() > 0, "the Mixer page was captured (%v)", err)
 		logf(scenario, "the file holds %s", sourceMemoryLine(saved.SourceMemory))
 		check(note == "", "the file loaded without a complaint (%s)", note)
 		check(len(saved.SourceMemory.Entries) == 1, "the file remembers one address (it holds %d)", len(saved.SourceMemory.Entries))

@@ -246,8 +246,12 @@ type appState struct {
 	// its defaults, so the workspace memory checks this before saving.
 	settingsTrusted bool
 	// settingsSave serializes the two writers: Apply on the drawing thread and
-	// a remembered preference saving from its goroutine.
+	// a remembered preference saving from its goroutine. saveSeq hands out the
+	// order of snapshots and saveDone is the last ticket actually written, so a
+	// write that lost the race cannot replace a newer file.
 	settingsSave sync.Mutex
+	saveSeq      atomic.Uint64
+	saveDone     atomic.Uint64
 
 	// budget is the DVR budget a buffer opened now would get, and budgetFrom
 	// names the rule that produced it: the command line, the settings file or
@@ -1013,11 +1017,14 @@ func (a *appState) rememberSource(it *item) {
 	}
 	a.settings = next
 	// The write gets its own copy: by the time it runs, a newer set or an
-	// Apply may already have replaced a.settings.
+	// Apply may already have replaced a.settings. The ticket is taken here, on
+	// the thread that made the snapshot, so a write that starts late still
+	// knows it is older than one that already landed.
 	saved := cloneSettings(next)
+	ticket := a.saveTicket()
 	digest, volume, muted := identityDigest(identity), it.volume, it.muted
 	go func() {
-		if err := a.saveSettingsSerialized(saved); err != nil {
+		if err := a.saveSettingsSerialized(saved, ticket); err != nil {
 			log.Printf("source memory: could not save %s: %v", digest, err)
 			return
 		}

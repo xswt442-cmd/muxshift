@@ -194,3 +194,40 @@ func TestSettingsNudgeUsesStep(t *testing.T) {
 		t.Fatalf("nudge with a half-second step = %v, want 500ms", got)
 	}
 }
+
+// TestAnOlderSaveCannotReplaceANewerFile is the ordering half of the fix: the
+// lock stops two temp files from racing, and the ticket stops a snapshot made
+// earlier — whose write happens to run later — from landing on top of a newer
+// one.
+func TestAnOlderSaveCannotReplaceANewerFile(t *testing.T) {
+	dir := t.TempDir()
+	app := &appState{settings: defaultSettings(), settingsPath: filepath.Join(dir, "settings.json")}
+	newer := app.settings
+	newer.DefaultVolume = 0.8
+	older := app.settings
+	older.DefaultVolume = 0.2
+	olderTicket := app.saveTicket()
+	newerTicket := app.saveTicket()
+	if err := app.saveSettingsSerialized(newer, newerTicket); err != nil {
+		t.Fatalf("the newer save failed: %v", err)
+	}
+	if err := app.saveSettingsSerialized(older, olderTicket); err != nil {
+		t.Fatalf("an older save reported %v, want it skipped", err)
+	}
+	got, note := loadSettings(app.settingsPath)
+	if note != "" {
+		t.Fatalf("load reported %q", note)
+	}
+	if got.DefaultVolume != 0.8 {
+		t.Fatalf("an older snapshot replaced the newer file: %.2f", got.DefaultVolume)
+	}
+	// A ticket newer than the last written one still writes.
+	newest := app.settings
+	newest.DefaultVolume = 0.6
+	if err := app.saveSettingsSerialized(newest, app.saveTicket()); err != nil {
+		t.Fatalf("a newer save after the skip failed: %v", err)
+	}
+	if got, _ := loadSettings(app.settingsPath); got.DefaultVolume != 0.6 {
+		t.Fatalf("the newest save did not land: %.2f", got.DefaultVolume)
+	}
+}

@@ -136,7 +136,7 @@ var (
 	dvrMaxBytes       int64
 	dvrRecordingBytes = int64(256 << 20)
 
-	// extraMedia is the second address the sourcememory check adds by hand, so
+	// extraMedia is the second address the sourcememory check adds by hand, so it
 	// the write path is exercised with a source the command line did not open.
 	extraMedia string
 )
@@ -697,7 +697,7 @@ func main() {
 	flag.StringVar(&wakeMode, "wake", wakeMode, "nudge a network player once for its first frame, or none to record what happens without it")
 	flag.DurationVar(&handoverWait, "handover", handoverWait, "how long a reopened player may take to show a picture before the previous one is kept")
 	settingsFile := flag.String("settings", "", "settings file to read and write; empty uses the per-user configuration directory")
-	flag.StringVar(&extraMedia, "extra", "", "sourcememory: the address a check adds by hand after the window opened")
+	flag.StringVar(&extraMedia, "scenario-extra", "", "with -scenario sourcememory: the address the check adds by hand")
 	frameFlag := flag.String("frame", "", "place the window at x,y,width,height instead of restoring it (a check's starting point)")
 	flag.DurationVar(&syncAt, "at", 10*time.Second, "syncmap: the shared event time to measure")
 	flag.DurationVar(&syncOffset, "offset", 0, "syncmap: the offset applied to the measured source")

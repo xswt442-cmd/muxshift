@@ -92,7 +92,11 @@ func validateDVRBudget(b dvrBudget) error {
 // dvrBudgetInForce resolves which budget a new buffer gets: a flag the person
 // actually typed beats the file, and the file beats the built-in defaults. The
 // second result names the rule that won, for the page and the log.
-func dvrBudgetInForce(from settings, explicit map[string]bool, flags dvrBudget) (dvrBudget, string) {
+//
+// The winner is validated here too, because a flag is as capable of asking for
+// a budget the buffer cannot run with as a file is: -dvr-retention 1s must be
+// refused rather than turned into a buffer that keeps nothing.
+func dvrBudgetInForce(from settings, explicit map[string]bool, flags dvrBudget) (dvrBudget, string, error) {
 	effective := from.DVR
 	won := "the settings file"
 	var named []string
@@ -111,7 +115,10 @@ func dvrBudgetInForce(from settings, explicit map[string]bool, flags dvrBudget) 
 	if len(named) > 0 {
 		won = "the command line (" + strings.Join(named, ", ") + ")"
 	}
-	return effective, won
+	if err := validateDVRBudget(effective); err != nil {
+		return dvrBudget{}, won, fmt.Errorf("the budget from %s cannot run: %w", won, err)
+	}
+	return effective, won, nil
 }
 
 // bytesLine spells a byte limit for the page and the log. Zero is not a number
@@ -462,16 +469,27 @@ func (a *appState) shortcutLine(c *ui.Context, keys, what string) {
 	})
 }
 
-// resolveBudget works out the budget a buffer opened now would get and pushes it
-// into the flags the buffer is built from, so the page, the log and the buffer
-// read one value instead of three that can disagree.
-func (a *appState) resolveBudget() {
-	a.budget, a.budgetFrom = dvrBudgetInForce(a.settings, a.budgetFlags, a.flagBudget)
+// resolveBudgetFor works out the budget that would be in force for these
+// settings and pushes it into the flags the buffer is built from, so the page,
+// the log and the buffer read one value instead of three that can disagree. It
+// leaves the running values alone when the answer cannot run: a budget that
+// failed validation must not half-apply.
+func (a *appState) resolveBudgetFor(st settings) error {
+	effective, from, err := dvrBudgetInForce(st, a.budgetFlags, a.flagBudget)
+	if err != nil {
+		return err
+	}
+	a.budget = effective
+	a.budgetFrom = from
 	dvrRetention = time.Duration(a.budget.RetentionSeconds) * time.Second
 	dvrMaxBytes = a.budget.MaxBytes
 	dvrRecordingBytes = a.budget.RecordingBytes
 	log.Printf("dvr: budget %s from %s", a.budget.line(), a.budgetFrom)
+	return nil
 }
+
+// resolveBudget re-resolves the budget for the settings already applied.
+func (a *appState) resolveBudget() error { return a.resolveBudgetFor(a.settings) }
 
 // applySettingsCommand is the Apply button: validate, apply, write, report.
 func (a *appState) applySettingsCommand() {
@@ -483,6 +501,14 @@ func (a *appState) applySettingsCommand() {
 		next.Workspace = a.workspaceFromWindow(a.window, true)
 	}
 	if err := validateSettings(next); err != nil {
+		a.settingsErr = err.Error()
+		return
+	}
+	// The budget is resolved against the draft before anything is applied: a
+	// flag the buffer cannot run with must stop the whole Apply, not leave the
+	// page describing a budget the buffer never got. A save that fails after
+	// this point still leaves the applied settings and the budget agreeing.
+	if err := a.resolveBudgetFor(next); err != nil {
 		a.settingsErr = err.Error()
 		return
 	}
@@ -498,9 +524,6 @@ func (a *appState) applySettingsCommand() {
 	a.settingsSaved = true
 	a.settingsNote = fmt.Sprintf("applied %s", a.settingsPath)
 	log.Printf("settings: applied %+v", next)
-	// A new budget has to reach the buffer too: applying it changes what the
-	// next buffer opened would get, not the one already running.
-	a.resolveBudget()
 }
 
 // eventCount is how many events the session has, for the Diagnostics section.

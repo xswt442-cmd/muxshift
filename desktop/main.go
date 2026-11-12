@@ -792,7 +792,9 @@ func main() {
 		MaxBytes:         dvrMaxBytes,
 		RecordingBytes:   dvrRecordingBytes,
 	}
-	s.resolveBudget()
+	if err := s.resolveBudget(); err != nil {
+		log.Fatalf("muxshift-desktop: %v", err)
+	}
 	for _, it := range s.items {
 		it.volume = s.settingsSourceVolume()
 	}

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/xswt442-cmd/muxshift/core"
 )
 
 // The budget is a settings field with three numbers, and each of them has a
@@ -62,7 +64,10 @@ func TestDVRBudgetComesFromAnExplicitFlag(t *testing.T) {
 
 	flags := dvrBudget{RetentionSeconds: 60, MaxBytes: 0, RecordingBytes: 64 << 20}
 
-	got, from := dvrBudgetInForce(fromFile, map[string]bool{}, flags)
+	got, from, err := dvrBudgetInForce(fromFile, map[string]bool{}, flags)
+	if err != nil {
+		t.Fatalf("the file's budget was refused: %v", err)
+	}
 	if got != fromFile.DVR {
 		t.Fatalf("without any flag the budget is %+v, want the file's %+v", got, fromFile.DVR)
 	}
@@ -70,7 +75,10 @@ func TestDVRBudgetComesFromAnExplicitFlag(t *testing.T) {
 		t.Fatalf("the rule that won reads %q, want the settings file", from)
 	}
 
-	got, from = dvrBudgetInForce(fromFile, map[string]bool{"dvr-max-bytes": true}, flags)
+	got, from, err = dvrBudgetInForce(fromFile, map[string]bool{"dvr-max-bytes": true}, flags)
+	if err != nil {
+		t.Fatalf("an explicit zero was refused: %v", err)
+	}
 	if got.MaxBytes != 0 {
 		t.Fatalf("an explicit -dvr-max-bytes 0 gave %d, want no limit", got.MaxBytes)
 	}
@@ -79,6 +87,32 @@ func TestDVRBudgetComesFromAnExplicitFlag(t *testing.T) {
 	}
 	if !strings.Contains(from, "-dvr-max-bytes") {
 		t.Fatalf("the rule that won reads %q, want the flag named", from)
+	}
+}
+
+// TestAnImpossibleFlagIsRefused is the other edge the flag path opened: a flag
+// is as able to ask for a budget the buffer cannot run with as a file is, so it
+// goes through the same validation and names the flag in the refusal.
+func TestAnImpossibleFlagIsRefused(t *testing.T) {
+	fromFile := defaultSettings()
+	flags := dvrBudget{RetentionSeconds: 1, MaxBytes: 0, RecordingBytes: 256 << 20}
+	if _, _, err := dvrBudgetInForce(fromFile, map[string]bool{"dvr-retention": true}, flags); err == nil {
+		t.Fatal("a one second retention was accepted")
+	} else {
+		if !strings.Contains(err.Error(), "-dvr-retention") || !strings.Contains(err.Error(), "retentionSeconds") {
+			t.Fatalf("the refusal %q does not name the flag and the field", err)
+		}
+	}
+
+	oldRetention, oldMax, oldRecording := dvrRetention, dvrMaxBytes, dvrRecordingBytes
+	t.Cleanup(func() { dvrRetention, dvrMaxBytes, dvrRecordingBytes = oldRetention, oldMax, oldRecording })
+	a := &appState{budgetFlags: map[string]bool{"dvr-retention": true}, flagBudget: flags}
+	a.settings = fromFile
+	if err := a.resolveBudget(); err == nil {
+		t.Fatal("resolveBudget accepted a budget that cannot run")
+	}
+	if dvrRetention != oldRetention {
+		t.Fatalf("a refused budget changed the running retention to %s", dvrRetention)
 	}
 }
 
@@ -132,7 +166,9 @@ func TestResolveBudgetReachesTheBuffer(t *testing.T) {
 	a := &appState{budgetFlags: map[string]bool{}, flagBudget: dvrBudget{RetentionSeconds: 60, RecordingBytes: 256 << 20}}
 	a.settings = defaultSettings()
 	a.settings.DVR = dvrBudget{RetentionSeconds: 180, MaxBytes: 0, RecordingBytes: 2 << 30}
-	a.resolveBudget()
+	if err := a.resolveBudget(); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
 	if a.budget.RetentionSeconds != 180 || a.budget.RecordingBytes != 2<<30 {
 		t.Fatalf("the budget in force is %+v", a.budget)
 	}
@@ -142,8 +178,52 @@ func TestResolveBudgetReachesTheBuffer(t *testing.T) {
 
 	a.budgetFlags = map[string]bool{"dvr-recording-bytes": true}
 	a.flagBudget = dvrBudget{RetentionSeconds: 60, RecordingBytes: 0}
-	a.resolveBudget()
+	if err := a.resolveBudget(); err != nil {
+		t.Fatalf("resolve with a zero flag: %v", err)
+	}
 	if dvrRecordingBytes != 0 || !strings.Contains(a.budgetFrom, "-dvr-recording-bytes") {
 		t.Fatalf("an explicit zero did not win: %d from %q", dvrRecordingBytes, a.budgetFrom)
+	}
+}
+
+// TestApplyResolvesTheBudgetEvenWhenTheSaveFails pins the order Apply uses: the
+// budget is resolved against the draft, then applied, then written. A save that
+// fails leaves the settings and the budget agreeing with each other instead of
+// the page describing a budget the buffer never got.
+func TestApplyResolvesTheBudgetEvenWhenTheSaveFails(t *testing.T) {
+	oldRetention, oldMax, oldRecording := dvrRetention, dvrMaxBytes, dvrRecordingBytes
+	t.Cleanup(func() { dvrRetention, dvrMaxBytes, dvrRecordingBytes = oldRetention, oldMax, oldRecording })
+
+	session := core.NewSession("budget apply test")
+	scene, err := session.AddScene("main")
+	if err != nil {
+		t.Fatalf("scene: %v", err)
+	}
+	dir := t.TempDir()
+	blocked := filepath.Join(dir, "settings.json")
+	if err := os.Mkdir(blocked, 0o700); err != nil {
+		t.Fatalf("make the save fail: %v", err)
+	}
+	a := &appState{
+		session:      session,
+		scene:        scene.ID,
+		settings:     defaultSettings(),
+		settingsPath: blocked,
+		budgetFlags:  map[string]bool{},
+		flagBudget:   dvrBudget{RetentionSeconds: 60, RecordingBytes: 256 << 20},
+	}
+	a.settingsDraft = a.settings
+	a.settingsDraft.DVR = dvrBudget{RetentionSeconds: 120, MaxBytes: 0, RecordingBytes: 64 << 20}
+
+	a.applySettingsCommand()
+	if !strings.Contains(a.settingsErr, "saving failed") {
+		t.Fatalf("the failure reads %q, want it to name the save", a.settingsErr)
+	}
+	if a.settings.DVR.RecordingBytes != 64<<20 || a.budget.RecordingBytes != 64<<20 {
+		t.Fatalf("the applied settings ask for %d but the budget in force is %d",
+			a.settings.DVR.RecordingBytes, a.budget.RecordingBytes)
+	}
+	if dvrRecordingBytes != 64<<20 || dvrRetention != 120*time.Second {
+		t.Fatalf("the buffer would run with %s/%d, want the applied budget", dvrRetention, dvrRecordingBytes)
 	}
 }

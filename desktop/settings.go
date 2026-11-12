@@ -373,33 +373,21 @@ func (a *appState) settingsForm(c *ui.Context) {
 		// The three numbers a buffer runs with. They are steppers rather than
 		// sliders because a budget is a number a person reads back and a slider
 		// cannot be read from a screenshot.
-		a.settingsRow(c, "Keep this much history", func() {
-			if ui.Button(c.Key("dvr-ret-less"), "-1 min").Width(80).Clicked() {
-				a.settingsDraft.DVR.RetentionSeconds = max(minRetentionSeconds, a.settingsDraft.DVR.RetentionSeconds-60)
-			}
-			ui.Text(c, fmt.Sprintf("%d s", a.settingsDraft.DVR.RetentionSeconds)).Width(90)
-			if ui.Button(c.Key("dvr-ret-more"), "+1 min").Width(80).Clicked() {
-				a.settingsDraft.DVR.RetentionSeconds = min(maxRetentionSeconds, a.settingsDraft.DVR.RetentionSeconds+60)
-			}
-		})
-		a.settingsRow(c, "Segment cache limit", func() {
-			if ui.Button(c.Key("dvr-max-less"), "-64 MiB").Width(90).Clicked() {
-				a.settingsDraft.DVR.MaxBytes = max(0, a.settingsDraft.DVR.MaxBytes-64<<20)
-			}
-			ui.Text(c, bytesLine(a.settingsDraft.DVR.MaxBytes)).Width(120)
-			if ui.Button(c.Key("dvr-max-more"), "+64 MiB").Width(90).Clicked() {
-				a.settingsDraft.DVR.MaxBytes = min(maxBudgetBytes, a.settingsDraft.DVR.MaxBytes+64<<20)
-			}
-		})
-		a.settingsRow(c, "Recording limit", func() {
-			if ui.Button(c.Key("dvr-rec-less"), "-64 MiB").Width(90).Clicked() {
-				a.settingsDraft.DVR.RecordingBytes = max(0, a.settingsDraft.DVR.RecordingBytes-64<<20)
-			}
-			ui.Text(c, bytesLine(a.settingsDraft.DVR.RecordingBytes)).Width(120)
-			if ui.Button(c.Key("dvr-rec-more"), "+64 MiB").Width(90).Clicked() {
-				a.settingsDraft.DVR.RecordingBytes = min(maxBudgetBytes, a.settingsDraft.DVR.RecordingBytes+64<<20)
-			}
-		})
+		a.dvrStepper(c, "Keep this much history", "dvr-ret-less", "-1 min", "dvr-ret-more", "+1 min",
+			fmt.Sprintf("%d s", a.settingsDraft.DVR.RetentionSeconds), func(delta int) {
+				next := a.settingsDraft.DVR.RetentionSeconds + 60*delta
+				a.settingsDraft.DVR.RetentionSeconds = min(maxRetentionSeconds, max(minRetentionSeconds, next))
+			})
+		a.dvrStepper(c, "Segment cache limit", "dvr-max-less", "-64 MiB", "dvr-max-more", "+64 MiB",
+			bytesLine(a.settingsDraft.DVR.MaxBytes), func(delta int) {
+				next := a.settingsDraft.DVR.MaxBytes + int64(delta)*64<<20
+				a.settingsDraft.DVR.MaxBytes = min(maxBudgetBytes, max(0, next))
+			})
+		a.dvrStepper(c, "Recording limit", "dvr-rec-less", "-64 MiB", "dvr-rec-more", "+64 MiB",
+			bytesLine(a.settingsDraft.DVR.RecordingBytes), func(delta int) {
+				next := a.settingsDraft.DVR.RecordingBytes + int64(delta)*64<<20
+				a.settingsDraft.DVR.RecordingBytes = min(maxBudgetBytes, max(0, next))
+			})
 		a.settingsHint(c, "in force for a buffer opened now: "+a.budget.line()+" from "+a.budgetFrom)
 		if a.settingsDraft.DVR.MaxBytes == 0 || a.settingsDraft.DVR.RecordingBytes == 0 {
 			ui.Text(c, "a zero byte limit is not a small budget: it removes that limit, so only the retention and the disk stop the buffer").
@@ -436,11 +424,32 @@ func (a *appState) settingsForm(c *ui.Context) {
 	}
 }
 
-// settingsRow puts a label and a control on one line.
+// settingsRow puts a label and a control on one line. Its 260px label is fine
+// on a wide page and too wide beside a folded rail, so the DVR numbers use
+// dvrStepper instead.
 func (a *appState) settingsRow(c *ui.Context, label string, control func()) {
 	ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, label).Width(260)
 		control()
+	})
+}
+
+// dvrStepper is one budget number: its name on a line of its own, then the two
+// buttons and the value. The name is not on the same row as the buttons because
+// the settings page still has to fit beside the folded rail at the smallest
+// window, and a 260px label plus three controls does not.
+func (a *appState) dvrStepper(c *ui.Context, name, lessKey, lessLabel, moreKey, moreLabel, value string, adjust func(delta int)) {
+	ui.Column(c).Gap(spaceXs).WidthPercent(100).Children(func() {
+		ui.Text(c, name).FontSize(textMicro).TextColor(colorDim)
+		ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
+			if ui.Button(c.Key(lessKey), lessLabel).Width(84).Clicked() {
+				adjust(-1)
+			}
+			ui.Text(c, value).Width(96)
+			if ui.Button(c.Key(moreKey), moreLabel).Width(84).Clicked() {
+				adjust(1)
+			}
+		})
 	})
 }
 

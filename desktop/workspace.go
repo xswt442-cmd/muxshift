@@ -78,6 +78,7 @@ func (a *appState) sourcesPage(c *ui.Context) {
 func (a *appState) importRow(c *ui.Context) {
 	ui.Column(c).WidthPercent(100).Gap(spaceXs).Children(func() {
 		ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).WidthPercent(100).Children(func() {
+			c.Key("import-url")
 			ui.TextInput(c, &a.importText).Grow(1).Height(34).
 				Placeholder("https://… .m3u8  or  C:\\path\\file.mp4")
 			label := "Add"

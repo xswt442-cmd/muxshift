@@ -255,6 +255,16 @@ func (a *appState) runCommand(cmd command) commandResult {
 // snapshot record a key exactly as they record a press; with nothing selected it
 // says so instead of guessing which source was meant.
 func (a *appState) shortcutCommand(kind commandKind) {
+	// P18.1: a key press is recorded with the focus that let it through, so a
+	// reader can tell a shortcut from a keystroke that typed into a field. The
+	// window binds no shortcut while a text field has the focus; the count
+	// exists to prove that, not to be a feature.
+	a.shortcutFires++
+	if a.keysTyping {
+		a.firesWhileTyping++
+		log.Printf("focus: %s fired while a text field had the focus", kind)
+	}
+	log.Printf("focus: shortcut %s fired (typing %v, workspace %s)", kind, a.keysTyping, a.workspace.title())
 	it, _, ok := a.selectedSource()
 	if !ok {
 		a.lastErr = errors.New("no source is selected: click a row in Sources, then press the key again")

@@ -280,10 +280,18 @@ func (a *appState) settingsForm(c *ui.Context) {
 		a.settingsHint(c, "the spacing switch is read on the next start; the dock switch applies as soon as it is applied")
 	case "Shortcuts":
 		a.settingsSlider(c, "Nudge step", &a.settingsDraft.NudgeStep, 0.02, 1)
+		// P18.1: the list is what the window actually binds, read-only. The
+		// transport keys are still unbound, and the list says so instead of
+		// offering a switch that would not do anything.
+		a.shortcutLine(c, "Ctrl+S", "show the selected source")
+		a.shortcutLine(c, "Ctrl+H", "hear the selected source")
+		a.shortcutLine(c, "Ctrl+R", "retry the selected source's player")
+		a.shortcutLine(c, "Ctrl+1 … Ctrl+5", "stage, sources, diagnostics, settings, mixer")
+		a.settingsHint(c, "these keys pause while a text field has the focus, so typing never shows or moves anything")
 		ui.Button(c.Key("shortcut-space"), "Space: play or pause").Width(300).Disabled(true).
-			Tooltip("keyboard shortcuts are not bound yet; the transport buttons are the only play control")
+			Tooltip("not bound: the transport buttons are the only play control")
 		ui.Button(c.Key("shortcut-nudge"), "Left/Right: nudge the selected source").Width(300).Disabled(true).
-			Tooltip("keyboard shortcuts are not bound yet")
+			Tooltip("not bound: the inspector's -/+ buttons move a source")
 		a.settingsHint(c, "the nudge step above is real: it is the distance the inspector's -/+ buttons move a source")
 	case "Diagnostics":
 		ui.Text(c, fmt.Sprintf("%d event(s) in the session, %d source(s)", a.eventCount(), len(a.items)))
@@ -318,6 +326,15 @@ func (a *appState) settingsSlider(c *ui.Context, label string, value *float64, l
 // settingsHint is the small line under a control that explains what it does.
 func (a *appState) settingsHint(c *ui.Context, text string) {
 	ui.Text(c, text).FontSize(textMicro).TextColor(colorDim).Wrap()
+}
+
+// shortcutLine names one window shortcut and what it does. The list is read
+// from the bindings in main.go's view; a key that is not bound is not listed.
+func (a *appState) shortcutLine(c *ui.Context, keys, what string) {
+	ui.Row(c).Gap(12).WidthPercent(100).Children(func() {
+		ui.Text(c, keys).Width(150).FontSize(textMicro).TextColor(colorText)
+		ui.Text(c, what).FontSize(textMicro).TextColor(colorDim)
+	})
 }
 
 // applySettingsCommand is the Apply button: validate, apply, write, report.

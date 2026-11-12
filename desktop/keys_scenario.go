@@ -34,7 +34,7 @@ func runKeys(window *mygo.Window, a *appState, dir string) {
 				a.selected = a.items[0].source.ID
 			}
 			a.workspace = workspaceSources
-			log.Printf("keys: selected %q on the Sources page; press Ctrl+S, Ctrl+H, Ctrl+R, Ctrl+1..4", a.selected)
+			log.Printf("keys: selected %q on the Sources page; press Ctrl+S, Ctrl+H, Ctrl+R, Ctrl+1..5", a.selected)
 		})
 		var lastAt time.Time
 		deadline := time.Now().Add(14 * time.Second)

@@ -109,6 +109,18 @@ type appState struct {
 	zoom                  float32
 	lastWidth, lastHeight float32
 
+	// keysTyping is whether the last pass found a text field holding the
+	// keyboard focus, which is when the window's shortcuts stay silent, and
+	// keysSeen counts the passes that asked. typingEdges counts the passes
+	// where the keyboard newly entered a text field. The focus scenario reads
+	// all three.
+	keysTyping       bool
+	keysSeen         int
+	typingEdges      int
+	shortcutFires    int
+	firesWhileTyping int
+	closes           int
+
 	// dvrRoot is the cache root the DVR directories live under, and dvrSession
 	// is this run's own directory in it. The session holds a lock for as long as
 	// the process runs, so a later run can tell this one's leftovers from a live

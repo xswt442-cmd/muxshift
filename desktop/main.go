@@ -365,13 +365,27 @@ func (a *appState) view(c *ui.Context) {
 	// P15.4: window shortcuts. They are declared every pass because ui actions
 	// live one frame; each one sends the same command a button would, against
 	// whatever source is selected when the key is pressed.
-	c.OnWindowShortcut(ui.Ctrl, ui.KeyS, func() { a.shortcutCommand(commandShow) })
-	c.OnWindowShortcut(ui.Ctrl, ui.KeyH, func() { a.shortcutCommand(commandHear) })
-	c.OnWindowShortcut(ui.Ctrl, ui.KeyR, func() { a.shortcutCommand(commandRetry) })
-	c.OnWindowShortcut(ui.Ctrl, ui.Key1, func() { a.workspace = workspaceStage })
-	c.OnWindowShortcut(ui.Ctrl, ui.Key2, func() { a.workspace = workspaceSources })
-	c.OnWindowShortcut(ui.Ctrl, ui.Key3, func() { a.workspace = workspaceDiagnostics })
-	c.OnWindowShortcut(ui.Ctrl, ui.Key4, func() { a.workspace = workspaceSettings })
+	//
+	// P18.1: none of them fire while a text field has the focus. Ctrl+S in the
+	// import box is part of typing, not a request to show a source, and the
+	// page keys would move a person away from the text they are in the middle
+	// of entering.
+	typing := c.FocusTakesText()
+	if typing && !a.keysTyping {
+		a.typingEdges++
+	}
+	a.keysTyping = typing
+	a.keysSeen++
+	if !a.keysTyping {
+		c.OnWindowShortcut(ui.Ctrl, ui.KeyS, func() { a.shortcutCommand(commandShow) })
+		c.OnWindowShortcut(ui.Ctrl, ui.KeyH, func() { a.shortcutCommand(commandHear) })
+		c.OnWindowShortcut(ui.Ctrl, ui.KeyR, func() { a.shortcutCommand(commandRetry) })
+		c.OnWindowShortcut(ui.Ctrl, ui.Key1, func() { a.workspace = workspaceStage })
+		c.OnWindowShortcut(ui.Ctrl, ui.Key2, func() { a.workspace = workspaceSources })
+		c.OnWindowShortcut(ui.Ctrl, ui.Key3, func() { a.workspace = workspaceDiagnostics })
+		c.OnWindowShortcut(ui.Ctrl, ui.Key4, func() { a.workspace = workspaceSettings })
+		c.OnWindowShortcut(ui.Ctrl, ui.Key5, func() { a.workspace = workspaceMixer })
+	}
 	// P15.1: the workbench. The top bar and the status bar always exist; the
 	// rail, the inspector and the dock fold away by window size, and each can
 	// be switched by hand. The panes sit beside the stage, never on top of it,
@@ -852,6 +866,12 @@ func main() {
 			window.Invalidate()
 		}
 		window.OnClose(func(*mygo.CloseEvent) {
+			// P18.1: one close, recorded. A window that closed twice would
+			// leave a reader wondering whether the second pass released
+			// anything twice; this line and the release below answer that
+			// from the log.
+			s.closes++
+			log.Printf("focus: the window closed (%d time(s) so far)", s.closes)
 			// The window is still the window here, so this is the last moment
 			// its bounds can be read; a scripted run leaves the file alone.
 			if *scenario == "" {

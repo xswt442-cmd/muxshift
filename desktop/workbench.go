@@ -126,7 +126,7 @@ func (a *appState) topBar(c *ui.Context, width, height float32) {
 			// on and steps to the next one.
 			next := (a.workspace + 1) % workspaceCount
 			if ui.Button(c.Key("top-page"), a.workspace.title()+" ›").Width(104).Height(28).
-				Tooltip(fmt.Sprintf("page %s; press for %s (Ctrl+1..4 pick a page directly)", a.workspace.title(), next.title())).
+				Tooltip(fmt.Sprintf("page %s; press for %s (Ctrl+1..5 pick a page directly, unless a text field has the focus)", a.workspace.title(), next.title())).
 				Description("switch the workspace page").
 				Clicked() {
 				a.workspace = next

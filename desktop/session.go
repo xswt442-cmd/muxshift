@@ -28,6 +28,10 @@ import (
 type item struct {
 	uri string
 
+	// origin says whether the address came from the command line; only a source
+	// somebody added by hand writes its level back to the settings file.
+	origin sourceOrigin
+
 	source core.Source
 	video  core.TrackID
 	audio  core.TrackID
@@ -308,6 +312,16 @@ type appState struct {
 // newAppState builds a session with one scene per given source set, opens a
 // player for every source, and applies the first scene.
 func newAppState(uris []string) (*appState, error) {
+	return newAppStateWithSettings(uris, defaultSettings())
+}
+
+// newAppStateWithSettings is the real constructor. The settings have to exist
+// before the first source is opened: a remembered level and mute are installed
+// while the source is added, and applying them afterwards would let a source
+// speak at the default volume for a frame before its own level came back.
+func newAppStateWithSettings(uris []string, loaded settings) (*appState, error) {
+	// The command line decides which sources exist; the settings file only
+	// carries their sound, so a remembered address never opens anything.
 	session := core.NewSession("desktop")
 	scene, err := session.AddScene("main")
 	if err != nil {
@@ -317,9 +331,9 @@ func newAppState(uris []string) (*appState, error) {
 	if err != nil {
 		return nil, err
 	}
-	app := &appState{session: session, scene: scene.ID, output: output.ID, frames: make(chan struct{}, 1), sync: newSyncState(), audible: make(map[core.TrackID]bool), settings: defaultSettings(), settingsSection: "General"}
+	app := &appState{session: session, scene: scene.ID, output: output.ID, frames: make(chan struct{}, 1), sync: newSyncState(), audible: make(map[core.TrackID]bool), settings: cloneSettings(loaded), settingsDraft: cloneSettings(loaded), settingsSection: "General"}
 	for _, uri := range uris {
-		it, err := app.add(uri)
+		it, err := app.addFrom(uri, originCommandLine)
 		if err != nil {
 			// One unreachable source does not take the session down: the item
 			// keeps its open error so the window can report it.
@@ -352,9 +366,24 @@ func newAppState(uris []string) (*appState, error) {
 }
 
 // add registers one source and the tracks its player exposes, then opens the
-// player.
+// player. It is the manual route: the address came from the page or a check, so
+// the source may be remembered once somebody changes its sound.
 func (a *appState) add(uri string) (*item, error) {
-	it := &item{uri: uri, volume: a.settingsSourceVolume()}
+	return a.addFrom(uri, originAdded)
+}
+
+// sourceOrigin says how a source came into the session. A remembered level is
+// written back only for a source somebody added by hand: replaying the same
+// command line flag on every start must not keep saving the same preference.
+type sourceOrigin int
+
+const (
+	originAdded sourceOrigin = iota
+	originCommandLine
+)
+
+func (a *appState) addFrom(uri string, origin sourceOrigin) (*item, error) {
+	it := &item{uri: uri, volume: a.settingsSourceVolume(), origin: origin}
 	if isNetworkAddress(uri) {
 		if err := a.addProbed(it); err != nil {
 			return it, err
@@ -362,6 +391,10 @@ func (a *appState) add(uri string) (*item, error) {
 	} else if err := a.addLocal(it); err != nil {
 		return it, err
 	}
+	// A remembered preference is installed before the first scene is applied, so
+	// a source that was muted last time never speaks for a frame at the default
+	// volume first.
+	a.applySourceMemory(it)
 	player, err := openPlayerOnMain(uri)
 	if err != nil {
 		it.openErr = err
@@ -483,6 +516,10 @@ func (a *appState) importSource(ctx context.Context, uri string, token int) {
 			err = a.addLocal(it)
 		}
 		if err == nil {
+			// An imported address is a source somebody added, so it comes back
+			// with its remembered sound, and changing that sound may be
+			// remembered in turn.
+			a.applySourceMemory(it)
 			// The player opens at import, as it does for a source given on the
 			// command line: the stage builds a video for every source with a
 			// player, and a player created later, in the same pass that first
@@ -677,6 +714,10 @@ func (a *appState) hearAudio(index int, volume float64) error {
 	if _, err := a.session.SetSceneAudio(a.scene, it.audio, volume, false); err != nil {
 		return err
 	}
+	// The scene holds the level now; the source's own copy has to agree, or the
+	// inspector shows one number while the output plays another, and the
+	// remembered preference would save the stale one.
+	it.volume = volume
 	a.apply()
 	return nil
 }
@@ -710,6 +751,7 @@ func (a *appState) setVolume(index int, volume float64) error {
 	// copy in step is what makes a slider and its label agree on the next frame.
 	it.volume = volume
 	a.apply()
+	a.noteSourcePreference(it)
 	return nil
 }
 
@@ -894,6 +936,81 @@ func (a *appState) livePlayers() int {
 		}
 	})
 	return n
+}
+
+// applySourceMemory installs a remembered level and mute on a source. It reads
+// only when memory is on: with the switch off the file's entries stay as they
+// are and are not used, which is what "inactive" on the settings page means.
+func (a *appState) applySourceMemory(it *item) {
+	memory := a.settings.SourceMemory
+	if !memory.On {
+		return
+	}
+	identity := identityOf(it.uri)
+	if identity == "" {
+		return
+	}
+	volume, muted, ok := memory.lookup(identity)
+	if !ok {
+		return
+	}
+	it.volume = volume
+	if muted {
+		// The source's own mute, not the unaligned protection: that one is
+		// decided by the timeline and the Allow button on every start.
+		it.muted = true
+	}
+	log.Printf("source memory: %s comes back at %.0f%%%s", identityDigest(identity), volume*100, muteWord(muted))
+}
+
+// muteWord is the tail of the log line above, so a remembered mute is visible
+// without looking at the page.
+func muteWord(muted bool) string {
+	if muted {
+		return ", muted"
+	}
+	return ""
+}
+
+// noteSourcePreference remembers the sound of a source in the background: the
+// write must not block the drawing thread that just moved a slider.
+func (a *appState) noteSourcePreference(it *item) {
+	go a.rememberSource(it)
+}
+
+// rememberSource writes the level and mute now in force for the source's
+// address. It is the only write path, so the four refusals live here:
+// memory off, remembering off, a source started from the command line, and an
+// address that cannot be an identity.
+func (a *appState) rememberSource(it *item) {
+	memory := a.settings.SourceMemory
+	if !memory.On || !memory.Remember {
+		return
+	}
+	if it.origin == originCommandLine {
+		return
+	}
+	identity := identityOf(it.uri)
+	if identity == "" {
+		return
+	}
+	changed, refusal := a.settings.SourceMemory.set(identity, it.volume, it.muted)
+	if refusal != "" {
+		log.Printf("source memory: %s", refusal)
+		return
+	}
+	if !changed {
+		return
+	}
+	// The applied settings own the copy that will be saved; the draft is left
+	// alone so a page someone is editing is not rewritten underneath them.
+	a.settings = cloneSettings(a.settings)
+	if err := saveSettings(a.settingsPath, a.settings); err != nil {
+		log.Printf("source memory: could not save %s: %v", identityDigest(identity), err)
+		return
+	}
+	a.settingsSaved = true
+	log.Printf("source memory: remembered %s at %.0f%%%s", identityDigest(identity), it.volume*100, muteWord(it.muted))
 }
 
 // closePendingWhenReady releases the players kept because they were the last

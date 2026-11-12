@@ -135,6 +135,10 @@ var (
 	dvrRetention      = 60 * time.Second
 	dvrMaxBytes       int64
 	dvrRecordingBytes = int64(256 << 20)
+
+	// extraMedia is the second address the sourcememory check adds by hand, so
+	// the write path is exercised with a source the command line did not open.
+	extraMedia string
 )
 
 // handOver waits for the replacement player of a reopen to show a picture, then
@@ -693,6 +697,7 @@ func main() {
 	flag.StringVar(&wakeMode, "wake", wakeMode, "nudge a network player once for its first frame, or none to record what happens without it")
 	flag.DurationVar(&handoverWait, "handover", handoverWait, "how long a reopened player may take to show a picture before the previous one is kept")
 	settingsFile := flag.String("settings", "", "settings file to read and write; empty uses the per-user configuration directory")
+	flag.StringVar(&extraMedia, "extra", "", "sourcememory: the address a check adds by hand after the window opened")
 	frameFlag := flag.String("frame", "", "place the window at x,y,width,height instead of restoring it (a check's starting point)")
 	flag.DurationVar(&syncAt, "at", 10*time.Second, "syncmap: the shared event time to measure")
 	flag.DurationVar(&syncOffset, "offset", 0, "syncmap: the offset applied to the measured source")
@@ -742,9 +747,24 @@ func main() {
 		}
 	}
 
-	s, err := newAppState(media)
+	// Settings are read before the first source is opened, so a remembered level
+	// and mute are in force from the first frame rather than applied on top of a
+	// source that already spoke. A file that does not validate is reported and
+	// the defaults stay in memory; the file is left alone so it can be read,
+	// and a failed read never becomes a write.
+	path := settingsPath(*settingsFile)
+	loaded, note := loadSettings(path)
+	s, err := newAppStateWithSettings(media, loaded)
 	if err != nil {
 		log.Fatalf("muxshift-desktop: %v", err)
+	}
+	s.settingsPath = path
+	s.settingsTrusted = note == ""
+	if note != "" {
+		log.Printf("settings: %s", note)
+	}
+	if loaded.StartPage == "sources" {
+		s.workspace = workspaceSources
 	}
 	// The DVR cache root belongs to this process: a sweep collects only the
 	// directories of runs that are gone, and the session opened right after keeps
@@ -765,21 +785,6 @@ func main() {
 	}
 	s.dvrSession = session
 	log.Printf("dvr: session %s under %s", session.ID, s.dvrRoot)
-	// Settings are read before anything is drawn, so the start page and the
-	// default volume are in force from the first frame. A file that does not
-	// validate is reported and the defaults stay in memory; the file is left
-	// alone so it can be read.
-	s.settingsPath = settingsPath(*settingsFile)
-	loaded, note := loadSettings(s.settingsPath)
-	s.settings = loaded
-	s.settingsDraft = loaded
-	s.settingsTrusted = note == ""
-	if note != "" {
-		log.Printf("settings: %s", note)
-	}
-	if loaded.StartPage == "sources" {
-		s.workspace = workspaceSources
-	}
 	// P18.2: a buffer opened now gets the budget from "explicit flag > settings
 	// file > built-in defaults". Which flags were actually typed matters, so it
 	// is read from flag.Visit rather than by comparing values with the defaults:
@@ -794,9 +799,6 @@ func main() {
 	}
 	if err := s.resolveBudget(); err != nil {
 		log.Fatalf("muxshift-desktop: %v", err)
-	}
-	for _, it := range s.items {
-		it.volume = s.settingsSourceVolume()
 	}
 	s.apply()
 	log.Printf("settings: start page %q, file %s", loaded.StartPage, s.settingsPath)

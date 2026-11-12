@@ -35,6 +35,7 @@ func (a *appState) toggleMute(index int) (string, error) {
 	}
 	it.muted = !it.muted
 	a.apply()
+	a.noteSourcePreference(it)
 	if it.muted {
 		return fmt.Sprintf("source %d muted; its volume and routing are unchanged", index+1), nil
 	}

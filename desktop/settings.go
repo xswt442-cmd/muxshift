@@ -50,6 +50,11 @@ type settings struct {
 	// command line flag given explicitly wins over this, so a check can ask for
 	// a different budget without editing the file.
 	DVR dvrBudget `json:"dvr"`
+
+	// SourceMemory is the per-source preference (level, mute) keyed by
+	// normalised address (P18.2-b). It is off by default and never opens a
+	// source: see sourcememory.go for what it does and does not remember.
+	SourceMemory sourceMemory `json:"sourceMemory"`
 }
 
 // dvrBudget is the replay buffer's share of the disk. Both byte limits use zero
@@ -154,7 +159,80 @@ func defaultSettings() settings {
 		DockOpen:      true,
 		Compact:       false,
 		DVR:           builtinDVRBudget(),
+		// Source memory starts off in both senses: nothing is applied and
+		// nothing new is recorded until a person asks for it.
+		SourceMemory: sourceMemory{On: false, Remember: false},
 	}
+}
+
+// cloneSettings copies a settings value deeply enough that a draft and the
+// applied settings never share an array. The source memory's entries are the
+// only part that could.
+func cloneSettings(st settings) settings {
+	next := st
+	next.SourceMemory = st.SourceMemory.clone()
+	return next
+}
+
+// sameSettings reports whether two settings values describe the same choices.
+// Slices cannot be compared with ==, which is why the page cannot use one, and
+// the entries are also compared by content rather than by address.
+func sameSettings(a, b settings) bool {
+	if a.StartPage != b.StartPage || a.DefaultVolume != b.DefaultVolume || a.NudgeStep != b.NudgeStep ||
+		a.MuteUnaligned != b.MuteUnaligned || a.MasterVolume != b.MasterVolume ||
+		a.DockOpen != b.DockOpen || a.Compact != b.Compact ||
+		a.Workspace != b.Workspace || a.DVR != b.DVR {
+		return false
+	}
+	if a.SourceMemory.On != b.SourceMemory.On || a.SourceMemory.Remember != b.SourceMemory.Remember {
+		return false
+	}
+	if len(a.SourceMemory.Entries) != len(b.SourceMemory.Entries) {
+		return false
+	}
+	for i := range a.SourceMemory.Entries {
+		if a.SourceMemory.Entries[i] != b.SourceMemory.Entries[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// settingsSummary describes a settings value for the log without printing the
+// remembered addresses: a log line is copied into evidence, bug reports and
+// terminal scrollback, and an address can carry a private path or a host name.
+func settingsSummary(st settings) string {
+	return fmt.Sprintf("start page %q, nudge %.2fs, default volume %.2f, master %.2f, mute unaligned %v, dock %v, compact %v, dvr %s, source memory %d entr(ies) on=%v remember=%v set=%s",
+		st.StartPage, st.NudgeStep, st.DefaultVolume, st.MasterVolume, st.MuteUnaligned,
+		st.DockOpen, st.Compact, st.DVR.line(), len(st.SourceMemory.Entries),
+		st.SourceMemory.On, st.SourceMemory.Remember, memoryDigest(st.SourceMemory))
+}
+
+// validateSourceMemory refuses a memory the rest of the code cannot honour. It
+// checks every entry rather than skipping a bad one: a half-remembered set would
+// silently apply one source's level to another address.
+func validateSourceMemory(m sourceMemory) error {
+	if len(m.Entries) > maxRememberedSources {
+		return fmt.Errorf("sourceMemory.entries has %d addresses, more than the %d the file allows", len(m.Entries), maxRememberedSources)
+	}
+	seen := make(map[string]bool, len(m.Entries))
+	for i, entry := range m.Entries {
+		if entry.Volume < 0 || entry.Volume > 1 {
+			return fmt.Errorf("sourceMemory.entries[%d].volume %.3f is not a level between 0 and 1", i, entry.Volume)
+		}
+		identity, err := normalizeSourceIdentity(entry.Address)
+		if err != nil {
+			return fmt.Errorf("sourceMemory.entries[%d]: %w", i, err)
+		}
+		if identity != entry.Address {
+			return fmt.Errorf("sourceMemory.entries[%d] is not stored in its normalised form", i)
+		}
+		if seen[identity] {
+			return fmt.Errorf("sourceMemory.entries[%d] repeats an address already in the list", i)
+		}
+		seen[identity] = true
+	}
+	return nil
 }
 
 // validateSettings rejects values the rest of the code cannot honour. A file
@@ -275,8 +353,11 @@ func (a *appState) applySettingsState(next settings) error {
 	if err := validateSettings(next); err != nil {
 		return err
 	}
-	a.settings = next
-	a.settingsDraft = next
+	// Both sides get their own copy of the entries: the draft keeps being edited
+	// after Apply, and a shared array would let the next draft edit change what
+	// the applied settings say.
+	a.settings = cloneSettings(next)
+	a.settingsDraft = cloneSettings(next)
 	a.apply()
 	return nil
 }
@@ -289,7 +370,7 @@ func (a *appState) volumeFor(level float64) float64 {
 }
 
 // settingsSections names the page's sections in the order the page shows them.
-var settingsSections = []string{"General", "Playback", "Audio", "DVR", "Appearance", "Shortcuts", "Diagnostics"}
+var settingsSections = []string{"General", "Playback", "Sources", "Audio", "DVR", "Appearance", "Shortcuts", "Diagnostics"}
 
 // settingsPage draws the Global Settings page. The page edits a draft; nothing
 // reaches the session until Apply, and Cancel puts the draft back.
@@ -321,18 +402,18 @@ func (a *appState) settingsPage(c *ui.Context) {
 			if a.settingsNote != "" {
 				ui.Text(c, a.settingsNote).TextColor(colorTextDim).Wrap()
 			}
-			dirty := a.settingsDraft != a.settings
+			dirty := !sameSettings(a.settingsDraft, a.settings)
 			ui.Row(c).Gap(spaceSm).Padding(0, spaceSm).Children(func() {
 				if ui.Button(c.Key("settings-apply"), "Apply").Width(100).Disabled(!dirty).Clicked() {
 					a.applySettingsCommand()
 				}
 				if ui.Button(c.Key("settings-cancel"), "Cancel").Width(100).Disabled(!dirty).Clicked() {
-					a.settingsDraft = a.settings
+					a.settingsDraft = cloneSettings(a.settings)
 					a.settingsErr = ""
 					a.settingsNote = "cancelled: the draft is back to what is applied"
 				}
 				if ui.Button(c.Key("settings-reset"), "Reset to defaults").Width(160).Clicked() {
-					a.settingsDraft = defaultSettings()
+					a.settingsDraft = cloneSettings(defaultSettings())
 					a.settingsErr = ""
 					a.settingsNote = "the draft is back to the defaults; Apply writes them"
 				}
@@ -365,6 +446,50 @@ func (a *appState) settingsForm(c *ui.Context) {
 		a.settingsSlider(c, "Default volume for new sources", &a.settingsDraft.DefaultVolume, 0, 1)
 		ui.Checkbox(c, &a.settingsDraft.MuteUnaligned, "Mute a source until its place on the shared timeline is known")
 		a.settingsHint(c, "with this off, an unaligned source can be heard before anyone allows it; the per-source Allow button still overrides the mute")
+	case "Sources":
+		ui.Checkbox(c, &a.settingsDraft.SourceMemory.On, "Use the level and mute I set for a source when its address comes back")
+		ui.Checkbox(c, &a.settingsDraft.SourceMemory.Remember, "Remember the level and mute of sources I add from now on").Disabled(!a.settingsDraft.SourceMemory.On).
+			Tooltip("memory is off, so nothing new is remembered")
+		a.settingsHint(c, "remembered: the level and the mute of an http(s) address or an absolute file path. Not remembered: where playback stopped, timeline offsets, whether an unaligned source was allowed, or the session itself. It is a preference, not an authorisation: a remembered address is not opened again, and a remembered level does not allow an unaligned source to be heard.")
+		if !a.settingsDraft.SourceMemory.On && a.settingsDraft.SourceMemory.Remember {
+			ui.Text(c, "Remember is on while memory is off, so nothing is written; Apply keeps both switches as they stand.").
+				FontSize(textMicro).TextColor(colorWarn).Wrap()
+		}
+		// The draft's switches only take effect on Apply, so say so rather than
+		// letting somebody believe they just stopped the writing.
+		if a.settingsDraft.SourceMemory.On != a.settings.SourceMemory.On || a.settingsDraft.SourceMemory.Remember != a.settings.SourceMemory.Remember {
+			ui.Text(c, "this is a draft: the switches above take effect when Apply is pressed").
+				FontSize(textMicro).TextColor(colorWarn).Wrap()
+		}
+		entries := a.settingsDraft.SourceMemory.Entries
+		if len(entries) == 0 {
+			ui.Text(c, "no address is remembered").FontSize(textMicro).TextColor(colorDim)
+		} else {
+			ui.Text(c, fmt.Sprintf("%d remembered address(es), most recently saved first", len(entries))).
+				FontSize(textMicro).TextColor(colorDim)
+			for i, entry := range entries {
+				if i >= 4 {
+					ui.Text(c, fmt.Sprintf("… and %d more", len(entries)-4)).FontSize(textMicro).TextColor(colorDim)
+					break
+				}
+				// The page never prints a remembered address: a digest names it
+				// well enough to tell two entries apart in a screenshot.
+				muted := ""
+				if entry.Muted {
+					muted = ", muted"
+				}
+				ui.Text(c, fmt.Sprintf("%s  %.0f%%%s", identityDigest(entry.Address), entry.Volume*100, muted)).
+					FontSize(textMicro).TextColor(colorTextDim)
+			}
+			if !a.settingsDraft.SourceMemory.On {
+				ui.Text(c, fmt.Sprintf("%d remembered sources are currently inactive; Clear them to delete their saved preferences.", len(entries))).
+					FontSize(textMicro).TextColor(colorWarn).Wrap()
+			}
+			if ui.Button(c.Key("settings-memory-clear"), "Forget every remembered address").Width(280).Clicked() {
+				forgotten := a.settingsDraft.SourceMemory.clear()
+				a.settingsNote = fmt.Sprintf("forgot %d remembered source(s); Apply writes the empty list", forgotten)
+			}
+		}
 	case "Audio":
 		a.settingsSlider(c, "Master volume", &a.settingsDraft.MasterVolume, 0, 1)
 		a.settingsHint(c, "the master multiplies every source's scene level at its player; per-source levels stay in the inspector")
@@ -502,7 +627,7 @@ func (a *appState) resolveBudget() error { return a.resolveBudgetFor(a.settings)
 
 // applySettingsCommand is the Apply button: validate, apply, write, report.
 func (a *appState) applySettingsCommand() {
-	next := a.settingsDraft
+	next := cloneSettings(a.settingsDraft)
 	// Turning the memory on from the page means "this window, as it is now":
 	// the frame the page cannot see is filled in here, before validation gets a
 	// chance to refuse a zero size.
@@ -532,7 +657,7 @@ func (a *appState) applySettingsCommand() {
 	}
 	a.settingsSaved = true
 	a.settingsNote = fmt.Sprintf("applied %s", a.settingsPath)
-	log.Printf("settings: applied %+v", next)
+	log.Printf("settings: applied %s", settingsSummary(next))
 }
 
 // eventCount is how many events the session has, for the Diagnostics section.
@@ -548,7 +673,7 @@ func (a *appState) eventCount() int {
 func (a *appState) logState() {
 	snap := a.snapshot()
 	log.Printf("state: scene=%s event=%s playing=%v picture=%v sound=%d sources=%d", snap.Scene, formatEvent(snap.Event), snap.Playing, snap.Picture, len(snap.Sound), len(snap.Sources))
-	log.Printf("settings: %+v", a.settings)
+	log.Printf("settings: %s", settingsSummary(a.settings))
 }
 
 // space picks the tight spacing when the settings ask for it; the two

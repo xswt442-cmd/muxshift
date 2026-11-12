@@ -83,8 +83,8 @@ func TestSaveLoadSettingsRoundTrip(t *testing.T) {
 	if note != "" {
 		t.Fatalf("load reported %q", note)
 	}
-	if got != want {
-		t.Fatalf("loaded %+v, want %+v", got, want)
+	if !sameSettings(got, want) {
+		t.Fatalf("loaded %s, want %s", settingsSummary(got), settingsSummary(want))
 	}
 	entries, err := os.ReadDir(filepath.Dir(path))
 	if err != nil {
@@ -104,7 +104,7 @@ func TestLoadSettingsFirstRun(t *testing.T) {
 	if note != "" {
 		t.Fatalf("first run reported %q", note)
 	}
-	if got != defaultSettings() {
+	if !sameSettings(got, defaultSettings()) {
 		t.Fatalf("first run loaded %+v, want the defaults", got)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -137,7 +137,7 @@ func TestLoadSettingsRejectsBrokenFile(t *testing.T) {
 			if !strings.Contains(note, tc.want) {
 				t.Fatalf("note %q does not mention %q", note, tc.want)
 			}
-			if got != defaultSettings() {
+			if !sameSettings(got, defaultSettings()) {
 				t.Fatalf("loaded %+v, want the defaults", got)
 			}
 			if data, err := os.ReadFile(path); err != nil || string(data) != tc.body {

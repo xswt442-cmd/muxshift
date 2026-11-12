@@ -51,24 +51,58 @@ if ($leak) {
 }
 Write-Output "ok: no path from this checkout is in the binary"
 
-# The executable's own file icon comes from the resource file beside the
-# sources; a build without it still runs and still says the right version, so
-# this is the only check that would notice.
-$iconBytes = [IO.File]::ReadAllBytes((Join-Path $clone "desktop\icon.ico"))
-$exeBytes = [IO.File]::ReadAllBytes($exe)
-$start = [int]($iconBytes.Length / 2)
-$needle = $iconBytes[$start..($start + 63)]
-$found = $false
-for ($i = 0; $i -le $exeBytes.Length - $needle.Length; $i++) {
-    if ($exeBytes[$i] -ne $needle[0] -or $exeBytes[$i + 1] -ne $needle[1]) { continue }
-    $same = $true
-    for ($j = 0; $j -lt $needle.Length; $j++) {
-        if ($exeBytes[$i + $j] -ne $needle[$j]) { $same = $false; break }
+# The icon and the version block are resources Windows reads from the file, not
+# from the running program: a build without them still runs and still reports
+# the right version, so nothing else would notice. Read the resource directory
+# itself rather than scanning the bytes, and ask Windows for the version block.
+function Get-PeResourceTypes([string]$path) {
+    $bytes = [IO.File]::ReadAllBytes($path)
+    $lfanew = [BitConverter]::ToInt32($bytes, 0x3C)
+    if ([BitConverter]::ToUInt32($bytes, $lfanew) -ne 0x00004550) { throw "$path is not a PE file" }
+    $sections = [BitConverter]::ToUInt16($bytes, $lfanew + 6)
+    $optionalSize = [BitConverter]::ToUInt16($bytes, $lfanew + 20)
+    $optional = $lfanew + 24
+    if ([BitConverter]::ToUInt16($bytes, $optional) -ne 0x20B) { throw "$path is not PE32+" }
+    $directories = $optional + 112
+    $resourceRva = [BitConverter]::ToUInt32($bytes, $directories + 2 * 8)
+    if ($resourceRva -eq 0) { return @() }
+    $table = $optional + $optionalSize
+    $offset = -1
+    for ($i = 0; $i -lt $sections; $i++) {
+        $section = $table + $i * 40
+        $virtualSize = [BitConverter]::ToUInt32($bytes, $section + 8)
+        $virtualAddress = [BitConverter]::ToUInt32($bytes, $section + 12)
+        $raw = [BitConverter]::ToUInt32($bytes, $section + 20)
+        if ($resourceRva -ge $virtualAddress -and $resourceRva -lt $virtualAddress + $virtualSize) {
+            $offset = $raw + ($resourceRva - $virtualAddress)
+            break
+        }
     }
-    if ($same) { $found = $true; break }
+    if ($offset -lt 0) { throw "the resource directory of $path is outside every section" }
+    $named = [BitConverter]::ToUInt16($bytes, $offset + 12)
+    $numbered = [BitConverter]::ToUInt16($bytes, $offset + 14)
+    $types = @()
+    for ($i = 0; $i -lt ($named + $numbered); $i++) {
+        $entry = $offset + 16 + $i * 8
+        $name = [BitConverter]::ToUInt32($bytes, $entry)
+        if (($name -band 0x80000000) -ne 0) { continue }   # a named type, not one Windows numbers
+        $types += [int]$name
+    }
+    return $types
 }
-if (-not $found) { throw "the icon payload is not in the binary, so its file icon is the toolchain's default" }
-Write-Output "ok: the icon is part of the executable"
+
+$types = Get-PeResourceTypes $exe
+foreach ($wanted in @(@{ Id = 3; Name = "icons" }, @{ Id = 14; Name = "icon group" }, @{ Id = 16; Name = "version block" })) {
+    if ($types -notcontains $wanted.Id) {
+        throw "the binary has no $($wanted.Name) resource; the release would show the toolchain's defaults (types: $($types -join ', '))"
+    }
+}
+Write-Output "ok: the binary carries icons, an icon group and a version block (types $($types -join ', '))"
+
+$info = (Get-Item $exe).VersionInfo
+if ($info.ProductName -ne "MuxShift") { throw "the version block names '$($info.ProductName)' as the product" }
+if ([string]::IsNullOrWhiteSpace($info.FileVersion)) { throw "the version block carries no file version" }
+Write-Output "ok: the version block says $($info.ProductName) $($info.FileVersion)"
 $sha = (Get-FileHash -Algorithm SHA256 $exe).Hash.ToLower()
 Write-Output "sha256 $sha"
 

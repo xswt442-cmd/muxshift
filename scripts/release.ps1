@@ -45,6 +45,14 @@ if ($reported -notmatch [regex]::Escape($commit)) {
     throw "the binary does not name the commit it was built from: $reported"
 }
 
+# The version block Windows prints in the file's Properties is baked into
+# desktop\rsrc_windows_amd64.syso, not into the ldflags, so it can disagree with
+# the build. Say so instead of shipping a file that calls itself something else.
+$numeric = ($stamp -split '[+-]')[0]
+$resourceVersion = (Get-Item $exe).VersionInfo.FileVersion
+if ($resourceVersion -ne $numeric) {
+    throw "the file's version resource says '$resourceVersion' but this build is $numeric; run scripts\winres.ps1 -Version $numeric and commit desktop\rsrc_windows_amd64.syso"
+}
 $sha = (Get-FileHash -Algorithm SHA256 $exe).Hash.ToLower()
 $commitLine = "commit $commit"
 if ($dirty) { $commitLine = "$commitLine (working tree had changes)" }

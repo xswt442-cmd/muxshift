@@ -107,31 +107,14 @@ func (r *dvrRunner) pollOnce() {
 	defer cancel()
 	info, err := hls.Read(ctx, r.uri, hls.Options{})
 	if err != nil {
-		r.mu.Lock()
-		r.lastErr = err
-		r.failures++
-		failures := r.failures
-		r.mu.Unlock()
-		// A source that is simply away fails every second. Say it once, then
-		// every tenth attempt, so the log holds the outage and not the noise.
-		if failures == 1 || failures%10 == 0 {
-			log.Printf("dvr: read playlist of %s (attempt %d): %v", shortURI(r.uri), failures, err)
-		}
+		r.noteReadFailure(err)
 		return
 	}
 	r.mu.Lock()
 	r.polls++
-	failures := r.failures
-	if r.lastErr != nil {
-		r.lastErr = nil
-		r.failures = 0
-	}
 	next := r.next
 	r.mu.Unlock()
-	if failures > 0 {
-		log.Printf("dvr: reading %s works again after %d failed attempt(s)", shortURI(r.uri), failures)
-	}
-	added := 0
+	stored := 0
 	for _, segment := range info.Segments {
 		r.mu.Lock()
 		started, next := r.started, r.next
@@ -142,10 +125,16 @@ func (r *dvrRunner) pollOnce() {
 		if segment.Gap {
 			continue
 		}
+		// A segment that cannot be fetched is named like a playlist that cannot
+		// be read, and the next one is not skipped: the buffer records the gap
+		// itself (with the reason) and the segment is attempted again on the
+		// next poll, so a read that starts working again is noticed without
+		// pretending the gap never happened.
 		if _, err := r.buffer.Add(ctx, r.client, segment); err != nil {
-			log.Printf("dvr: %s: %v", shortURI(r.uri), err)
+			r.noteReadFailure(fmt.Errorf("segment %d: %w", segment.Sequence, err))
+			continue
 		}
-		added++
+		stored++
 		r.mu.Lock()
 		r.started = true
 		r.next = segment.Sequence + 1
@@ -155,7 +144,13 @@ func (r *dvrRunner) pollOnce() {
 		// keeps ffprobe off the drawing thread. See replay_clock.go.
 		r.refreshAnchor()
 	}
-	if added == 0 && len(info.Segments) > 0 {
+	// Only a segment that was actually stored says the source is readable
+	// again: a playlist that parses while its segments fail is still an outage,
+	// and the page must keep saying so.
+	if stored > 0 {
+		r.noteReadSuccess()
+	}
+	if stored == 0 && len(info.Segments) > 0 {
 		log.Printf("dvr: %s: poll %d added nothing: %d segments %d..%d, next %d",
 			shortURI(r.uri), next, len(info.Segments),
 			info.Segments[0].Sequence, info.Segments[len(info.Segments)-1].Sequence, r.next)
@@ -170,6 +165,34 @@ func (r *dvrRunner) pollOnce() {
 	})
 	if len(removed) > 0 {
 		log.Printf("dvr: %s evicted segments %v", shortURI(r.uri), removed)
+	}
+}
+
+// noteReadFailure records why the buffer cannot be read right now. It covers both
+// a playlist that cannot be fetched and a segment that cannot be stored: the page
+// names whichever read failed, and a source that is simply away fails every
+// second, so the log says it once and then every tenth attempt.
+func (r *dvrRunner) noteReadFailure(err error) {
+	r.mu.Lock()
+	r.lastErr = err
+	r.failures++
+	failures := r.failures
+	r.mu.Unlock()
+	if failures == 1 || failures%10 == 0 {
+		log.Printf("dvr: read %s (attempt %d): %v", shortURI(r.uri), failures, err)
+	}
+}
+
+// noteReadSuccess clears the failure only because something was stored: a
+// playlist that parses while its segments fail is still an outage.
+func (r *dvrRunner) noteReadSuccess() {
+	r.mu.Lock()
+	failures := r.failures
+	r.lastErr = nil
+	r.failures = 0
+	r.mu.Unlock()
+	if failures > 0 {
+		log.Printf("dvr: reading %s works again after %d failed attempt(s)", shortURI(r.uri), failures)
 	}
 }
 

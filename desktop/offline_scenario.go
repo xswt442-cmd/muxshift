@@ -96,14 +96,21 @@ func offlineBody(window *mygo.Window, a *appState, dir string) {
 	}
 	check(stalled, "the buffer never stopped growing; the source was not taken away")
 
-	// A page that only shows a number standing still is not saying why. While the
-	// source is away, the buffer's own row should name the read that failed.
-	if usage := runner.usage(); usage.readErr == "" {
-		check(false, "the buffer line does not say the source cannot be read")
+	// The two ways a source can go away do not read the same. A refused
+	// connection is a read failure and must be named. A publisher that stops
+	// while its server keeps answering is not a read failure: the buffer stands
+	// still because nothing new arrives, and inventing an error there would be a
+	// lie. The mode says which one this run arranged, and each is checked for
+	// what it should say, not for the other's.
+	expectReadError := outageMode == "server"
+	usage := runner.usage()
+	logf(scenario, "%s outage: the page's buffer line says %q", outageMode, usage.readErr)
+	if expectReadError {
+		check(usage.readErr != "", "a refused connection left the buffer line without a reason")
 	} else {
-		logf(scenario, "the page's buffer line says: %s", usage.readErr)
+		check(usage.readErr == "", "a stalled publisher was reported as a read failure: %s", usage.readErr)
 	}
-	step(window, a, dir, scenario, "1-during-the-outage.png", "the source is away and the page says so", func(a *appState) {
+	step(window, a, dir, scenario, "1-during-the-outage.png", "the source is away and the page says what it can", func(a *appState) {
 		a.workspace = workspaceDiagnostics
 	})
 	if !stalled {
@@ -130,8 +137,8 @@ func offlineBody(window *mygo.Window, a *appState, dir string) {
 		}
 	}
 	check(resumed, "the buffer did not grow again within two minutes of the source coming back")
-	if usage := runner.usage(); usage.readErr != "" {
-		check(false, "the buffer still says the source cannot be read after it came back: %s", usage.readErr)
+	if back := runner.usage(); back.readErr != "" {
+		check(false, "the buffer still says the source cannot be read after it came back: %s", back.readErr)
 	} else {
 		logf(scenario, "the buffer reads fine again; its row no longer mentions a failure")
 	}

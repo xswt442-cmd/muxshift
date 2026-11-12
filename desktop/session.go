@@ -1360,6 +1360,7 @@ func shortURI(uri string) string {
 	if uri == "" {
 		return "none"
 	}
+	uri = stripSecrets(uri)
 	trimmed := strings.TrimSuffix(strings.ReplaceAll(uri, "\\", "/"), "/")
 	parts := strings.Split(trimmed, "/")
 	last := parts[len(parts)-1]

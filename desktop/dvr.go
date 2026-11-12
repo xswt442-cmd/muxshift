@@ -115,6 +115,8 @@ func (r *dvrRunner) pollOnce() {
 	next := r.next
 	r.mu.Unlock()
 	stored := 0
+	// firstFailure names the segment this poll stopped at, if any.
+	firstFailure := -1
 	for _, segment := range info.Segments {
 		r.mu.Lock()
 		started, next := r.started, r.next
@@ -126,13 +128,17 @@ func (r *dvrRunner) pollOnce() {
 			continue
 		}
 		// A segment that cannot be fetched is named like a playlist that cannot
-		// be read, and the next one is not skipped: the buffer records the gap
-		// itself (with the reason) and the segment is attempted again on the
-		// next poll, so a read that starts working again is noticed without
-		// pretending the gap never happened.
+		// be read, and this poll stops there: continuing would store the segment
+		// after it and move the cursor past the one that failed, so the failed
+		// segment would never be fetched even after it becomes readable again.
+		// Stopping keeps the cursor on it and retries next poll; the buffer
+		// records the gap itself, with the reason. If the live window moves past
+		// it the playlist no longer offers it at all, and the poll after that
+		// picks up where the window now starts (see below).
 		if _, err := r.buffer.Add(ctx, r.client, segment); err != nil {
 			r.noteReadFailure(fmt.Errorf("segment %d: %w", segment.Sequence, err))
-			continue
+			firstFailure = segment.Sequence
+			break
 		}
 		stored++
 		r.mu.Lock()
@@ -145,10 +151,28 @@ func (r *dvrRunner) pollOnce() {
 		r.refreshAnchor()
 	}
 	// Only a segment that was actually stored says the source is readable
-	// again: a playlist that parses while its segments fail is still an outage,
-	// and the page must keep saying so.
-	if stored > 0 {
+	// again, and only if nothing failed in this poll: a playlist that parses
+	// while its segments fail is still an outage, and the page must keep saying
+	// so even when the segments before the failure were stored.
+	if stored > 0 && firstFailure < 0 {
 		r.noteReadSuccess()
+	}
+	if firstFailure >= 0 && len(info.Segments) > 0 {
+		oldest := info.Segments[0].Sequence
+		r.mu.Lock()
+		next := r.next
+		r.mu.Unlock()
+		if oldest > next {
+			// The segment we were retrying has left the live window, so waiting
+			// for it would never make progress. The window is allowed to have
+			// moved on: the gap is the Core's to record, and it does so when the
+			// first segment after it is stored.
+			r.mu.Lock()
+			r.next = oldest
+			r.started = true
+			r.mu.Unlock()
+			log.Printf("dvr: %s: segment %d left the window; continuing from %d", shortURI(r.uri), next, oldest)
+		}
 	}
 	if stored == 0 && len(info.Segments) > 0 {
 		log.Printf("dvr: %s: poll %d added nothing: %d segments %d..%d, next %d",
@@ -173,13 +197,17 @@ func (r *dvrRunner) pollOnce() {
 // names whichever read failed, and a source that is simply away fails every
 // second, so the log says it once and then every tenth attempt.
 func (r *dvrRunner) noteReadFailure(err error) {
+	// The HTTP client quotes the address it could not reach, and a signed
+	// address carries its token in the query: the reason is kept, the secret is
+	// not, wherever this error is shown or logged.
+	reason := redactSecrets(err.Error())
 	r.mu.Lock()
-	r.lastErr = err
+	r.lastErr = fmt.Errorf("%s", reason)
 	r.failures++
 	failures := r.failures
 	r.mu.Unlock()
 	if failures == 1 || failures%10 == 0 {
-		log.Printf("dvr: read %s (attempt %d): %v", shortURI(r.uri), failures, err)
+		log.Printf("dvr: read %s (attempt %d): %s", shortURI(r.uri), failures, reason)
 	}
 }
 

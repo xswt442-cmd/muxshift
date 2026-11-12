@@ -144,6 +144,12 @@ var (
 	// check can watch a child that is still running when the window closes. The
 	// close path under test is the product's: same context, same kill, same Wait.
 	scenarioDecoder string
+
+	// outageMode says which outage the offline check arranged: a server that
+	// stops answering, or a publisher that stops while its server keeps serving.
+	// The two read differently on the page, and the check must not demand the
+	// same words from both.
+	outageMode string
 )
 
 // handOver waits for the replacement player of a reopen to show a picture, then
@@ -704,6 +710,7 @@ func main() {
 	settingsFile := flag.String("settings", "", "settings file to read and write; empty uses the per-user configuration directory")
 	flag.StringVar(&extraMedia, "scenario-extra", "", "with -scenario sourcememory: the address the check adds by hand")
 	flag.StringVar(&scenarioDecoder, "scenario-decoder", "", "with -scenario probeclose: the program a comparison starts instead of ffmpeg")
+	flag.StringVar(&outageMode, "scenario-outage", "server", "with -scenario offline: whether the check arranged a stopped server or a stopped publisher")
 	frameFlag := flag.String("frame", "", "place the window at x,y,width,height instead of restoring it (a check's starting point)")
 	flag.DurationVar(&syncAt, "at", 10*time.Second, "syncmap: the shared event time to measure")
 	flag.DurationVar(&syncOffset, "offset", 0, "syncmap: the offset applied to the measured source")
@@ -726,6 +733,12 @@ func main() {
 			log.Fatalf("muxshift-desktop: -scenario-decoder only goes with -scenario probeclose")
 		}
 		decodeProgram = scenarioDecoder
+	}
+	if outageMode != "server" && outageMode != "publisher" {
+		log.Fatalf("muxshift-desktop: -scenario-outage is server or publisher, not %q", outageMode)
+	}
+	if outageMode != "server" && *scenario != "offline" {
+		log.Fatalf("muxshift-desktop: -scenario-outage only goes with -scenario offline")
 	}
 	if *replay != "" {
 		// A recording is played by a process of its own: this build cannot put a

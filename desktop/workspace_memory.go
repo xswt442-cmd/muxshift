@@ -237,7 +237,10 @@ func (a *appState) saveWorkspaceOnExit(window *mygo.Window) {
 		return
 	}
 	a.rememberWorkspace(window)
-	if err := saveSettings(a.settingsPath, a.settings); err != nil {
+	// The window closes while a remembered preference may still be on its way
+	// to disk. Both writes go through the same lock and the same ticket order,
+	// so the one built last wins instead of the one scheduled last.
+	if err := a.saveSettingsSerialized(cloneSettings(a.settings), a.saveTicket()); err != nil {
 		log.Printf("workspace: not saved: %v", err)
 		return
 	}

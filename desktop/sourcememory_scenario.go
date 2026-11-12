@@ -158,6 +158,86 @@ func sourceMemoryBody(window *mygo.Window, a *appState, dir string) {
 	})
 }
 
+// runSourceMemoryClear is the third process: it starts from the file the first
+// one wrote and does what only an explicit Clear may do. It is separate because
+// the restore check needs the entry to still be there.
+func runSourceMemoryClear(window *mygo.Window, a *appState, dir string) {
+	go sourceMemoryClearBody(window, a, dir)
+}
+
+func sourceMemoryClearBody(window *mygo.Window, a *appState, dir string) {
+	scenario := "sourcememory-clear"
+	failures := 0
+	check := func(ok bool, format string, args ...any) {
+		if ok {
+			logf(scenario, "ok: "+format, args...)
+			return
+		}
+		failures++
+		logf(scenario, "CHECK FAILED: "+format, args...)
+	}
+
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		ready := false
+		mygoRunOnMain(func() { ready = len(a.items) > 0 && a.items[0].player != nil })
+		if ready {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	mygoRunOnMain(func() {
+		check(len(a.settings.SourceMemory.Entries) == 1, "the file starts with one remembered address (%d)", len(a.settings.SourceMemory.Entries))
+	})
+
+	// The snapshot below is taken before the Clear, so its ticket is older: it
+	// is the write that must never land.
+	var staleWritten bool
+	mygoRunOnMain(func() {
+		stale := cloneSettings(a.settings)
+		staleTicket := a.saveTicket()
+		a.workspace = workspaceSettings
+		a.settingsSection = "Sources"
+		a.beginDraft(a.settings)
+		a.settingsDraft.SourceMemory.clear()
+		a.draftCleared = true
+		a.applySettingsCommand()
+		check(a.settingsErr == "", "Apply after Clear reported %q", a.settingsErr)
+		check(len(a.settings.SourceMemory.Entries) == 0,
+			"Clear emptied the applied list (%d entr(ies))", len(a.settings.SourceMemory.Entries))
+		if err := a.saveSettingsSerialized(stale, staleTicket); err != nil {
+			logf(scenario, "the stale snapshot reported %v", err)
+		}
+		staleWritten = true
+		// With remembering off, nothing is written at all.
+		a.settings.SourceMemory.Remember = false
+		a.rememberSource(&item{uri: a.items[0].uri, volume: 0.9, muted: false, origin: originAdded})
+		a.settings.SourceMemory.Remember = true
+	})
+	if !staleWritten {
+		failures++
+		logf(scenario, "CHECK FAILED: the clear phase did not run")
+	}
+	time.Sleep(700 * time.Millisecond)
+	cleared, note := loadSettings(a.settingsPath)
+	mygoRunOnMain(func() {
+		check(note == "", "the file loaded after Clear (%s)", note)
+		check(len(cleared.SourceMemory.Entries) == 0,
+			"the file kept the forgotten entries (%d entr(ies))", len(cleared.SourceMemory.Entries))
+	})
+	step(window, a, dir, scenario, "1-cleared.png",
+		"the list is empty after an explicit Clear, and a late older write did not fill it again",
+		func(a *appState) {
+			a.workspace = workspaceSettings
+			a.settingsSection = "Sources"
+		})
+	mygoRunOnMain(func() {
+		logf(scenario, "checks failed: %d", failures)
+		a.release()
+		mygo.App.Quit()
+	})
+}
+
 // runSourceMemoryRestore is the second process: it starts with the file the
 // first one wrote and the same hand-added address on the command line, so the
 // remembered sound must already be in force when the first scene is applied.
@@ -201,6 +281,30 @@ func sourceMemoryRestoreBody(window *mygo.Window, a *appState, dir string) {
 			logf(scenario, "source 1 came back at %.2f muted=%v", it.volume, it.muted)
 			check(it.volume == 0.25, "the level came back at %.2f", it.volume)
 			check(it.muted, "the source came back muted")
+			// The card and the output have to agree: the scene level is what
+			// the player is handed, so a memory that stops at it.volume would
+			// leave the file saying 25% while the sound plays at 100%.
+			level, routed := a.sceneLevel(it)
+			check(routed && level.Volume == 0.25,
+				"the scene plays it at %.2f (the remembered 0.25)", level.Volume)
+			if !a.heard(it) {
+				// It comes back muted, so nothing is heard yet and a silent
+				// player is not handed a level. Unmute the way a person would,
+				// and confirm its place, to read what the output was given.
+				logf(scenario, "source 1 is silent for now (%s); unmuting it to read the output", joinWords(a.silences(it)))
+				if _, err := a.toggleMute(0); err != nil {
+					logf(scenario, "unmute: %v", err)
+				}
+				if err := a.sync.timeline.SetShift(it.audio, 0); err != nil {
+					logf(scenario, "confirm the track's shift: %v", err)
+				}
+				a.apply()
+			}
+			if it.player != nil {
+				check(a.heard(it), "the remembered source is audible once its place is confirmed")
+				check(it.player.Volume() == a.volumeFor(0.25),
+					"the player was handed %.2f (want %.2f)", it.player.Volume(), a.volumeFor(0.25))
+			}
 			// A command line source is never written back, even when its sound
 			// came from memory: this start must leave the file alone.
 			check(it.origin == originCommandLine, "the source came from the command line")

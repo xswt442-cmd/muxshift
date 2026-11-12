@@ -60,6 +60,7 @@ var scenarios = map[string]scenario{
 	// refuses to write.
 	"sourcememory":         runSourceMemory,
 	"sourcememory-restore": runSourceMemoryRestore,
+	"sourcememory-clear":   runSourceMemoryClear,
 	"hidden":               runHidden,
 	"contract":             runContract,
 	"lease":                runLease,

@@ -402,9 +402,38 @@ func (a *appState) applySettingsState(next settings) error {
 	// after Apply, and a shared array would let the next draft edit change what
 	// the applied settings say.
 	a.settings = cloneSettings(next)
-	a.settingsDraft = cloneSettings(next)
+	a.beginDraft(next)
 	a.apply()
 	return nil
+}
+
+// beginDraft starts a fresh draft from the given settings and clears the mark
+// that says this draft asked to forget the remembered sources. Nothing reaches
+// the session until Apply, so the draft is the only place a Clear lives until
+// then.
+func (a *appState) beginDraft(from settings) {
+	a.settingsDraft = cloneSettings(from)
+	a.draftCleared = false
+}
+
+// mergeMemory joins the live remembered sources with the draft's list: the live
+// entries are the newest, so they come first and keep their values, and an entry
+// only the draft still holds is kept as the draft has it. It is what makes an
+// Apply that never opened the Sources section leave the list alone.
+func mergeMemory(live, draft sourceMemory) []sourceMemoryEntry {
+	merged := make([]sourceMemoryEntry, 0, len(live.Entries)+len(draft.Entries))
+	seen := make(map[string]bool, len(live.Entries))
+	for _, entry := range live.Entries {
+		merged = append(merged, entry)
+		seen[entry.Address] = true
+	}
+	for _, entry := range draft.Entries {
+		if seen[entry.Address] {
+			continue
+		}
+		merged = append(merged, entry)
+	}
+	return merged
 }
 
 // volumeFor is the level a player gets for a scene level: the scene's own
@@ -453,14 +482,14 @@ func (a *appState) settingsPage(c *ui.Context) {
 					a.applySettingsCommand()
 				}
 				if ui.Button(c.Key("settings-cancel"), "Cancel").Width(100).Disabled(!dirty).Clicked() {
-					a.settingsDraft = cloneSettings(a.settings)
+					a.beginDraft(a.settings)
 					a.settingsErr = ""
 					a.settingsNote = "cancelled: the draft is back to what is applied"
 				}
 				if ui.Button(c.Key("settings-reset"), "Reset to defaults").Width(160).Clicked() {
-					a.settingsDraft = cloneSettings(defaultSettings())
+					a.beginDraft(defaultSettings())
 					a.settingsErr = ""
-					a.settingsNote = "the draft is back to the defaults; Apply writes them"
+					a.settingsNote = "the draft is back to the defaults; Apply writes them (remembered addresses stay until you forget them)"
 				}
 			})
 		})
@@ -532,6 +561,7 @@ func (a *appState) settingsForm(c *ui.Context) {
 			}
 			if ui.Button(c.Key("settings-memory-clear"), "Forget every remembered address").Width(280).Clicked() {
 				forgotten := a.settingsDraft.SourceMemory.clear()
+				a.draftCleared = true
 				a.settingsNote = fmt.Sprintf("forgot %d remembered source(s); Apply writes the empty list", forgotten)
 			}
 		}
@@ -673,6 +703,14 @@ func (a *appState) resolveBudget() error { return a.resolveBudgetFor(a.settings)
 // applySettingsCommand is the Apply button: validate, apply, write, report.
 func (a *appState) applySettingsCommand() {
 	next := cloneSettings(a.settingsDraft)
+	// A page that never cleared the Sources list applies its other sections
+	// without deleting what was remembered while the draft was open: the live
+	// entries come first (they are the newest), and any entry the draft still
+	// holds but the live set dropped is kept as the draft has it. Only a Clear
+	// in this draft empties the list.
+	if !a.draftCleared {
+		next.SourceMemory.Entries = mergeMemory(a.settings.SourceMemory, next.SourceMemory)
+	}
 	// Turning the memory on from the page means "this window, as it is now":
 	// the frame the page cannot see is filled in here, before validation gets a
 	// chance to refuse a zero size.

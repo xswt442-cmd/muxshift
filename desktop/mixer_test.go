@@ -405,3 +405,7 @@ func TestVolumeIsCheckedAgainstItsRange(t *testing.T) {
 		t.Fatalf("the refused change moved the level: %v", it.volume)
 	}
 }
+
+// mutePlayer needs the getter too, so a test can read back the level the
+// adapter was handed rather than only the one it stored.
+func (p *mutePlayer) Volume() float64 { return p.volume }

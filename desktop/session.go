@@ -234,12 +234,17 @@ type appState struct {
 	// Settings page edits until Apply. settingsPath is where applied values are
 	// written, and settingsSaved says this start has written that file, so the
 	// page can be exact about the persistence boundary.
-	settings        settings
-	settingsDraft   settings
-	settingsPath    string
-	settingsSaved   atomic.Bool
-	settingsErr     string
-	settingsNote    string
+	settings      settings
+	settingsDraft settings
+	settingsPath  string
+	settingsSaved atomic.Bool
+	settingsErr   string
+	settingsNote  string
+	// draftCleared marks a Settings draft that asked to forget the remembered
+	// sources. Only such a draft may apply an empty list; every other Apply
+	// merges what the live settings hold instead of deleting what was
+	// remembered while the page was open.
+	draftCleared    bool
 	settingsSection string
 	// settingsTrusted says the file on disk was read and understood. A start
 	// that fell back to the defaults must not write over the person's file with
@@ -363,7 +368,11 @@ func newAppStateWithSettings(uris []string, loaded settings) (*appState, error) 
 	}
 	for _, it := range app.items {
 		if it.audio != "" {
-			if _, err := session.SetSceneAudio(app.scene, it.audio, 1, false); err != nil {
+			// The first level comes from the source itself, which is where a
+			// remembered preference already sits. Routing at 1 here would make
+			// the memory a decoration: the scene would say 100% and the player
+			// would be told 100%, whatever the file remembered.
+			if _, err := session.SetSceneAudio(app.scene, it.audio, it.volume, false); err != nil {
 				app.lastErr = err
 			}
 			break
@@ -968,6 +977,17 @@ func (a *appState) applySourceMemory(it *item) {
 		// decided by the timeline and the Allow button on every start.
 		it.muted = true
 	}
+	// A source that is already in the scene carries its level there, and that
+	// is the number the player is handed: setting the item's copy alone would
+	// show 25% on the card while the output kept playing at the scene's 100%.
+	if a.session != nil {
+		if level, routed := a.sceneLevel(it); routed && level.Volume != volume {
+			if _, err := a.session.SetSceneAudio(a.scene, it.audio, volume, level.Muted); err != nil {
+				log.Printf("source memory: %s stays at the scene's level: %v", identityDigest(identity), err)
+			}
+		}
+		a.apply()
+	}
 	log.Printf("source memory: %s comes back at %.0f%%%s", identityDigest(identity), volume*100, muteWord(muted))
 }
 
@@ -995,6 +1015,14 @@ func (a *appState) noteSourcePreference(it *item) {
 func (a *appState) rememberSource(it *item) {
 	memory := a.settings.SourceMemory
 	if !memory.On || !memory.Remember {
+		return
+	}
+	// A start that could not read the settings file must not write it: the file
+	// may be holding a configuration this start never applied, and replacing it
+	// with the in-memory defaults would lose it. The same rule already protects
+	// the workspace save.
+	if !a.settingsTrusted {
+		log.Printf("source memory: not saved, the settings file was not loaded")
 		return
 	}
 	if it.origin == originCommandLine {

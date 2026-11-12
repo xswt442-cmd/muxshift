@@ -372,3 +372,180 @@ func waitForSettingsFile(t *testing.T, path string) (settings, string) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// memoryFixture builds a session with one routed source whose address can be an
+// identity, so a remembered level has somewhere to land.
+func memoryFixture(t *testing.T) (*appState, *item, *mutePlayer) {
+	t.Helper()
+	session := core.NewSession("memory test")
+	scene, err := session.AddScene("main")
+	if err != nil {
+		t.Fatalf("scene: %v", err)
+	}
+	uri := filepath.Join(t.TempDir(), "sample.mp4")
+	source, err := session.AddSource(uri)
+	if err != nil {
+		t.Fatalf("source: %v", err)
+	}
+	video, err := session.AddTrack(source.ID, core.MediaVideo, "picture")
+	if err != nil {
+		t.Fatalf("video: %v", err)
+	}
+	sound, err := session.AddTrack(source.ID, core.MediaAudio, "sound")
+	if err != nil {
+		t.Fatalf("sound: %v", err)
+	}
+	if _, err := session.SetSceneAudio(scene.ID, sound.ID, 1, false); err != nil {
+		t.Fatalf("route: %v", err)
+	}
+	player := &mutePlayer{fakeSeekPlayer: &fakeSeekPlayer{}}
+	it := &item{uri: uri, source: source, video: video.ID, audio: sound.ID, volume: 1, player: player}
+	app := &appState{
+		session:  session,
+		scene:    scene.ID,
+		settings: defaultSettings(),
+		audible:  map[core.TrackID]bool{},
+		sync:     newSyncState(),
+	}
+	app.items = []*item{it}
+	return app, it, player
+}
+
+// TestRestoredSoundReachesTheSceneAndThePlayer pins the difference between the
+// card saying 25% and the output playing 25%: the scene level has to carry the
+// remembered number, because that is the number the player is handed.
+func TestRestoredSoundReachesTheSceneAndThePlayer(t *testing.T) {
+	app, it, player := memoryFixture(t)
+	// The unaligned protection would keep the player silent, and a silent
+	// player is not handed a level: confirm the track's place first, so the
+	// assertion below is about the remembered number and not about the guard.
+	if err := app.sync.timeline.SetShift(it.audio, 0); err != nil {
+		t.Fatalf("confirm the track's shift: %v", err)
+	}
+	identity := identityOf(it.uri)
+	if identity == "" {
+		t.Fatalf("the fixture's address is not an identity")
+	}
+	app.settings.SourceMemory = sourceMemory{On: true, Entries: []sourceMemoryEntry{
+		{Address: identity, Volume: 0.25},
+	}}
+	app.applySourceMemory(it)
+	if it.volume != 0.25 {
+		t.Fatalf("the item kept %.2f", it.volume)
+	}
+	level, routed := app.sceneLevel(it)
+	if !routed {
+		t.Fatal("the fixture's source is not routed")
+	}
+	if level.Volume != 0.25 {
+		t.Fatalf("the scene plays it at %.2f, not at the remembered 0.25", level.Volume)
+	}
+	if player.volume != app.volumeFor(0.25) {
+		t.Fatalf("the player was handed %.2f, not %.2f", player.volume, app.volumeFor(0.25))
+	}
+}
+
+// TestAnApplyKeepsWhatWasRememberedAfterTheDraftOpened is the case the page
+// creates by accident: a draft opened before a source was remembered, then
+// Apply on an unrelated field. The list must not go back to the older copy.
+func TestAnApplyKeepsWhatWasRememberedAfterTheDraftOpened(t *testing.T) {
+	app, _, _ := memoryFixture(t)
+	app.settingsPath = filepath.Join(t.TempDir(), "settings.json")
+	open := "https://example.com/open.m3u8"
+	added := "https://example.com/added.m3u8"
+	app.settings.SourceMemory = sourceMemory{On: true, Remember: true, Entries: []sourceMemoryEntry{
+		{Address: open, Volume: 0.8},
+	}}
+	app.beginDraft(app.settings)
+	// A source is remembered while the page is open, so the live settings are
+	// newer than the draft in exactly one entry.
+	next := cloneSettings(app.settings)
+	next.SourceMemory.Entries = append([]sourceMemoryEntry{{Address: added, Volume: 0.5}}, next.SourceMemory.Entries...)
+	app.settings = next
+	// Apply something else.
+	app.settingsDraft.DefaultVolume = 0.42
+	app.applySettingsCommand()
+	if app.settingsErr != "" {
+		t.Fatalf("Apply failed: %s", app.settingsErr)
+	}
+	entries := app.settings.SourceMemory.Entries
+	if len(entries) != 2 {
+		t.Fatalf("Apply changed the list to %d entr(ies): %+v", len(entries), entries)
+	}
+	if entries[0].Address != added || entries[1].Address != open {
+		t.Fatalf("the newest entry is not first: %+v", entries)
+	}
+}
+
+// TestAClearInTheDraftStillEmptiesTheList keeps the merge from making the
+// Forget button a decoration: an explicit Clear is the one Apply that deletes.
+func TestAClearInTheDraftStillEmptiesTheList(t *testing.T) {
+	app, _, _ := memoryFixture(t)
+	app.settingsPath = filepath.Join(t.TempDir(), "settings.json")
+	app.settings.SourceMemory = sourceMemory{On: true, Entries: []sourceMemoryEntry{
+		{Address: "https://example.com/a.m3u8", Volume: 0.8},
+		{Address: "https://example.com/b.m3u8", Volume: 0.6},
+	}}
+	app.beginDraft(app.settings)
+	app.settingsDraft.SourceMemory.clear()
+	app.draftCleared = true
+	app.applySettingsCommand()
+	if app.settingsErr != "" {
+		t.Fatalf("Apply failed: %s", app.settingsErr)
+	}
+	if len(app.settings.SourceMemory.Entries) != 0 {
+		t.Fatalf("the clear did not reach the applied settings: %+v", app.settings.SourceMemory.Entries)
+	}
+	if loaded, note := loadSettings(app.settingsPath); note != "" || len(loaded.SourceMemory.Entries) != 0 {
+		t.Fatalf("the file still holds entries (%s): %+v", note, loaded.SourceMemory.Entries)
+	}
+}
+
+// TestRememberSourceRefusesAnUntrustedFile closes the hole the workspace save
+// already closed: a start that could not read the file must not replace it.
+func TestRememberSourceRefusesAnUntrustedFile(t *testing.T) {
+	app, it, _ := memoryFixture(t)
+	app.settingsPath = filepath.Join(t.TempDir(), "settings.json")
+	app.settingsTrusted = false
+	app.settings.SourceMemory = sourceMemory{On: true, Remember: true}
+
+	app.rememberSource(it)
+
+	if len(app.settings.SourceMemory.Entries) != 0 {
+		t.Fatalf("an untrusted start remembered %d entr(ies)", len(app.settings.SourceMemory.Entries))
+	}
+	if _, err := os.Stat(app.settingsPath); err == nil {
+		t.Fatal("an untrusted start wrote the settings file")
+	}
+}
+
+// TestAStaleSnapshotCannotUndoAClear orders two writes by when their snapshots
+// were made, not by which goroutine finished first: the snapshot taken before a
+// Clear must not put the forgotten entries back.
+func TestAStaleSnapshotCannotUndoAClear(t *testing.T) {
+	app, _, _ := memoryFixture(t)
+	app.settingsPath = filepath.Join(t.TempDir(), "settings.json")
+	app.settings.SourceMemory = sourceMemory{On: true, Remember: true, Entries: []sourceMemoryEntry{
+		{Address: "https://example.com/a.m3u8", Volume: 0.8},
+	}}
+	stale := cloneSettings(app.settings)
+	staleTicket := app.saveTicket()
+
+	// The Clear happens after that snapshot was taken.
+	next := cloneSettings(app.settings)
+	next.SourceMemory.Entries = nil
+	if err := app.saveSettingsSerialized(next, app.saveTicket()); err != nil {
+		t.Fatalf("the clear did not write: %v", err)
+	}
+	// The older write arrives late.
+	if err := app.saveSettingsSerialized(stale, staleTicket); err != nil {
+		t.Fatalf("a skipped older write reported %v", err)
+	}
+	loaded, note := loadSettings(app.settingsPath)
+	if note != "" {
+		t.Fatalf("the file loaded with a complaint: %s", note)
+	}
+	if len(loaded.SourceMemory.Entries) != 0 {
+		t.Fatalf("the older snapshot put %d entr(ies) back", len(loaded.SourceMemory.Entries))
+	}
+}

@@ -709,6 +709,12 @@ func main() {
 	flag.DurationVar(&commonShift, "common-shift", commonShift,
 		"common: the timestamp shift the second fixture was built with; 0 for two identical fixtures")
 	flag.Parse()
+	// -scenario-extra is a check's input, not an option a person can hand to a
+	// normal start: an address passed with it would look like a source and be
+	// dropped without a word.
+	if extraMedia != "" && *scenario != "sourcememory" {
+		log.Fatalf("muxshift-desktop: -scenario-extra only goes with -scenario sourcememory")
+	}
 	if *replay != "" {
 		// A recording is played by a process of its own: this build cannot put a
 		// recording on screen inside a session that already presents sources, but

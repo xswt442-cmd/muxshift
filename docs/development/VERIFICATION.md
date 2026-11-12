@@ -69,7 +69,7 @@ fails, the release stops instead of shipping a half-written `THIRD-PARTY.md`.
 `scripts\verify-release.ps1` proves the build does not depend on the checkout it
 was made in: it clones the repository into a temporary directory, builds there
 with the same script, runs `-version`, and checks the binary names the clone's
-commit, carries no path from the building machine (`-trimpath`), holds the icon from `desktop\rsrc_windows_amd64.syso`, and that two builds of the same commit give the same bytes.
+commit, carries no path from the building machine (`-trimpath`), carries the icon and the version block from `desktop\rsrc_windows_amd64.syso` (read from the PE resource directory, not scanned for), and that two builds of the same commit give the same bytes.
 
 What a release does **not** carry: no sample media, no vocal-separation weights,
 no ffmpeg. `RUNNING.txt` says what the machine has to provide.

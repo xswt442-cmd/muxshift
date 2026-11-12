@@ -50,6 +50,7 @@ var scenarios = map[string]scenario{
 	"windows":           runWindows,
 	"pages":             runPages,
 	"focus":             runFocus,
+	"realdpi":           runRealDPI,
 	"workspace":         runWorkspace,
 	"workspace-restore": runWorkspaceRestore,
 	"hidden":            runHidden,

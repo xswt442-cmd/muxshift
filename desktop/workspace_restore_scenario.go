@@ -84,17 +84,24 @@ func workspaceRestoreBody(window *mygo.Window, a *appState, dir string) {
 	time.Sleep(700 * time.Millisecond)
 	mygoRunOnMain(func() {
 		b := window.Bounds()
-		logf(scenario, "loaded page %q, rail %q, inspector %q, dock %q",
-			a.settings.Workspace.Page, a.settings.Workspace.Rail,
-			a.settings.Workspace.Inspector, a.settings.Workspace.Dock)
+		want := a.settings.Workspace
+		logf(scenario, "loaded page %q, rail %q, inspector %q, dock %q, on %v",
+			want.Page, want.Rail, want.Inspector, want.Dock, want.On)
 		logf(scenario, "the window is at %d,%d %dx%d, page %v, rail %s",
 			b.X, b.Y, b.Width, b.Height, a.workspace, paneModeName(a.rail))
-		check(b.X == 180 && b.Y == 120 && b.Width == 1000 && b.Height == 760,
-			"the frame came back as %d,%d %dx%d (want 180,120 1000x760)", b.X, b.Y, b.Width, b.Height)
-		check(a.workspace == workspaceSources,
-			"the page came back as %v (want Sources)", a.workspace)
-		check(a.rail == paneClosed,
-			"the rail came back as %s (want closed)", paneModeName(a.rail))
+		// The claim is that the window comes back the way the file says, so the
+		// check reads what came back against what the file asked for; a frame
+		// hard-coded here would only pass for one run.
+		check(want.On, "the file asked for the window to come back")
+		check(b.X == want.X && b.Y == want.Y && b.Width == want.Width && b.Height == want.Height,
+			"the frame came back as %d,%d %dx%d (the file asked for %d,%d %dx%d)",
+			b.X, b.Y, b.Width, b.Height, want.X, want.Y, want.Width, want.Height)
+		wantPage, pageOK := parseWorkspaceID(want.Page)
+		check(pageOK && a.workspace == wantPage,
+			"the page came back as %v (the file asked for %q)", a.workspace, want.Page)
+		wantRail, railOK := parsePaneMode(want.Rail)
+		check(railOK && a.rail == wantRail,
+			"the rail came back as %s (the file asked for %q)", paneModeName(a.rail), want.Rail)
 		capture(window, dir+`\1-restored.png`)
 		logf(scenario, "checks failed: %d", failures)
 		a.release()

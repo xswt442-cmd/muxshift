@@ -693,6 +693,7 @@ func main() {
 	flag.StringVar(&wakeMode, "wake", wakeMode, "nudge a network player once for its first frame, or none to record what happens without it")
 	flag.DurationVar(&handoverWait, "handover", handoverWait, "how long a reopened player may take to show a picture before the previous one is kept")
 	settingsFile := flag.String("settings", "", "settings file to read and write; empty uses the per-user configuration directory")
+	frameFlag := flag.String("frame", "", "place the window at x,y,width,height instead of restoring it (a check's starting point)")
 	flag.DurationVar(&syncAt, "at", 10*time.Second, "syncmap: the shared event time to measure")
 	flag.DurationVar(&syncOffset, "offset", 0, "syncmap: the offset applied to the measured source")
 	flag.StringVar(&dvrDir, "dvr-dir", dvrDir, "directory the replay buffer keeps its segments in")
@@ -851,8 +852,18 @@ func main() {
 		s.window = window
 		// A scripted run says what size it needs; a person's window comes back
 		// the way they left it (P18.1). The restore check is the one scripted
-		// run that has to see the restore itself.
-		if *scenario == "" || *scenario == "workspace-restore" {
+		// run that has to see the restore itself. A frame given on the command
+		// line is where a check starts, so the window goes there and the saved
+		// frame is left alone.
+		switch {
+		case *frameFlag != "" && *scenario == "":
+			if frame, ok := parseFrame(*frameFlag); ok {
+				window.SetBounds(frame)
+				log.Printf("window: placed at %d,%d %dx%d from -frame", frame.X, frame.Y, frame.Width, frame.Height)
+			} else {
+				log.Printf("window: -frame %q is not x,y,width,height", *frameFlag)
+			}
+		case *scenario == "" || *scenario == "workspace-restore":
 			s.restoreWorkspace(window, mygo.Screen.Displays())
 		}
 		if *scenario == "webview" {

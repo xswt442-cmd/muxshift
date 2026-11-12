@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -45,12 +47,21 @@ func (r *dvrRunner) usageLine(uri string) string {
 }
 
 // instanceName shortens a buffer instance to something a row can carry. The head
-// of the name is its creation time, which no reader can compare by eye.
+// is the moment the buffer was made, which no reader can compare by eye, so a
+// digest of the whole id goes with it: two buffers made in the same second would
+// otherwise shorten to the same name and the page would claim they are one.
 func instanceName(instance string) string {
-	if len(instance) <= 14 {
-		return instance
+	if instance == "" {
+		return "buffer"
 	}
-	return instance[:14]
+	sum := sha256.Sum256([]byte(instance))
+	digest := hex.EncodeToString(sum[:])[:4]
+	head := instance
+	const readable = 12
+	if len(head) > readable {
+		head = head[:readable]
+	}
+	return head + "-" + digest
 }
 
 // dvrCleanup is what one pass over a buffer did, in the form the page and the log

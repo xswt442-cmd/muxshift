@@ -56,3 +56,24 @@ func TestTheBudgetLineIsStatedAsALimit(t *testing.T) {
 		t.Fatalf("line = %q, want where the limit came from", line)
 	}
 }
+
+// TestTwoBuffersMadeInTheSameSecondReadApart keeps the page from claiming two
+// buffers are one: instance ids carry a nanosecond stamp, and a short name that
+// only keeps the head would cut them down to the same string.
+func TestTwoBuffersMadeInTheSameSecondReadApart(t *testing.T) {
+	first := "buf-1794510388123456789-1"
+	second := "buf-1794510388999999999-2"
+	if instanceName(first) == instanceName(second) {
+		t.Fatalf("two instances read as one name: %q", instanceName(first))
+	}
+	name := instanceName(first)
+	if !strings.HasPrefix(name, "buf-1794510") {
+		t.Fatalf("the name lost the moment it was made: %q", name)
+	}
+	if len(name) > 24 {
+		t.Fatalf("the name is not short enough for a row: %q (%d characters)", name, len(name))
+	}
+	if instanceName("") != "buffer" {
+		t.Fatalf("an empty instance reads %q", instanceName(""))
+	}
+}

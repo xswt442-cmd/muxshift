@@ -721,7 +721,14 @@ func main() {
 		"bytes of recordings one buffer may keep; 0 means no limit and may fill the disk")
 	flag.DurationVar(&commonShift, "common-shift", commonShift,
 		"common: the timestamp shift the second fixture was built with; 0 for two identical fixtures")
+	showVersion := flag.Bool("version", false, "print the build and exit")
 	flag.Parse()
+	if *showVersion {
+		// Before every other check: asking a binary what it is must not need a
+		// media address, a window, or a display.
+		fmt.Println(buildLine())
+		return
+	}
 	// -scenario-extra is a check's input, not an option a person can hand to a
 	// normal start: an address passed with it would look like a source and be
 	// dropped without a word.

@@ -48,6 +48,29 @@ go vet ./...             # in each module
 | Long-running sessions (hours) | Every scenario is minutes long; drift over hours is unmeasured |
 | `tools/separate` separation quality | Needs the ONNX weights, which the repository does not ship |
 
+## 3a. Release build
+
+The desktop binary is built by a script rather than by hand, so the version and
+the commit it names come from git and the third-party notice comes from what the
+binary links:
+
+```powershell
+scripts\release.ps1 -Version 0.1.0-dev
+```
+
+The output is `dist\muxshift-<version>-windows-amd64\` holding `muxshift.exe`,
+`VERSION.txt` (version, commit, build time, sha256, and what `-version` prints),
+`THIRD-PARTY.md`, `LICENSE`, `README.md` and `RUNNING.txt`. The script refuses a
+working tree with changes unless `-AllowDirty` is passed, and then names the
+build `+dirty` instead of pretending it is the commit.
+
+`scripts\verify-release.ps1` proves the build does not depend on the checkout it
+was made in: it clones the repository into a temporary directory, builds there
+with the same script, runs `-version`, and checks the binary names the clone's
+commit and carries no path from the building machine (`-trimpath`).
+
+What a release does **not** carry: no sample media, no vocal-separation weights,
+no ffmpeg. `RUNNING.txt` says what the machine has to provide.
 ## 4. Evidence
 
 Scenario captures, logs and notes live in the Git-ignored `testplace/` directory (`testplace/evidence/...`). They are the maintainer's machine-local record: this document and the architecture state the conclusions, and `testplace/` is where the raw runs that support them were kept. A fresh clone has the code and these documents; it does not have the captures.

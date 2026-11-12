@@ -39,7 +39,7 @@ if ($reported -notmatch [regex]::Escape($commit)) {
 }
 Write-Output "ok: the binary says $reported"
 
-$info = & go version -m $exe
+$info = (& go version -m $exe) -join "`n"
 if ($info -notmatch "-trimpath=true") {
     throw "the binary was not built with -trimpath"
 }
@@ -51,6 +51,33 @@ if ($leak) {
 }
 Write-Output "ok: no path from this checkout is in the binary"
 
+# The executable's own file icon comes from the resource file beside the
+# sources; a build without it still runs and still says the right version, so
+# this is the only check that would notice.
+$iconBytes = [IO.File]::ReadAllBytes((Join-Path $clone "desktop\icon.ico"))
+$exeBytes = [IO.File]::ReadAllBytes($exe)
+$start = [int]($iconBytes.Length / 2)
+$needle = $iconBytes[$start..($start + 63)]
+$found = $false
+for ($i = 0; $i -le $exeBytes.Length - $needle.Length; $i++) {
+    if ($exeBytes[$i] -ne $needle[0] -or $exeBytes[$i + 1] -ne $needle[1]) { continue }
+    $same = $true
+    for ($j = 0; $j -lt $needle.Length; $j++) {
+        if ($exeBytes[$i + $j] -ne $needle[$j]) { $same = $false; break }
+    }
+    if ($same) { $found = $true; break }
+}
+if (-not $found) { throw "the icon payload is not in the binary, so its file icon is the toolchain's default" }
+Write-Output "ok: the icon is part of the executable"
 $sha = (Get-FileHash -Algorithm SHA256 $exe).Hash.ToLower()
 Write-Output "sha256 $sha"
-Write-Output "like-for-like: build the same commit twice and this should not change"
+
+# The same commit built twice has to give the same bytes, or a checksum in a
+# VERSION.txt file says nothing about what a person downloaded.
+& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $clone "scripts\release.ps1") -Version $Version -OutRoot "dist2" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "the second build failed" }
+$again = (Get-FileHash -Algorithm SHA256 (Join-Path $clone "dist2\muxshift-$Version-windows-amd64\muxshift.exe")).Hash.ToLower()
+if ($again -ne $sha) {
+    throw "two builds of the same commit differ: $sha then $again"
+}
+Write-Output "ok: the same commit built twice gives the same bytes"

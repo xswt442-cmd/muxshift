@@ -67,7 +67,7 @@ build `+dirty` instead of pretending it is the commit.
 `scripts\verify-release.ps1` proves the build does not depend on the checkout it
 was made in: it clones the repository into a temporary directory, builds there
 with the same script, runs `-version`, and checks the binary names the clone's
-commit and carries no path from the building machine (`-trimpath`).
+commit, carries no path from the building machine (`-trimpath`), holds the icon from `desktop\rsrc_windows_amd64.syso`, and that two builds of the same commit give the same bytes.
 
 What a release does **not** carry: no sample media, no vocal-separation weights,
 no ffmpeg. `RUNNING.txt` says what the machine has to provide.

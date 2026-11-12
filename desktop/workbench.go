@@ -119,6 +119,19 @@ func (a *appState) topBar(c *ui.Context, width, height float32) {
 				}
 			}
 		}
+		if width < railAutoWidth {
+			// The rail is where the pages live, and it folds below this width.
+			// Without this switch the only way to change page would be a
+			// keyboard shortcut nobody can see, so the bar names the page it is
+			// on and steps to the next one.
+			next := (a.workspace + 1) % workspaceCount
+			if ui.Button(c.Key("top-page"), a.workspace.title()+" ›").Width(104).Height(28).
+				Tooltip(fmt.Sprintf("page %s; press for %s (Ctrl+1..4 pick a page directly)", a.workspace.title(), next.title())).
+				Description("switch the workspace page").
+				Clicked() {
+				a.workspace = next
+			}
+		}
 		a.paneButton(c, paneRail, "Rail", a.rail.shown(width >= railAutoWidth))
 		a.paneButton(c, paneInspector, "Inspect", a.inspector.shown(width >= inspectorAutoWidth))
 		a.paneButton(c, paneDock, "Dock", a.dock.shown(a.settings.DockOpen && height >= dockAutoHeight))

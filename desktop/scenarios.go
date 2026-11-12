@@ -47,6 +47,8 @@ var scenarios = map[string]scenario{
 	"sizes":            runSizes,
 	"sizes-empty":      runSizesEmpty,
 	"dpi":              runDPI,
+	"windows":          runWindows,
+	"pages":            runPages,
 	"hidden":           runHidden,
 	"contract":         runContract,
 	"lease":            runLease,

@@ -54,7 +54,7 @@ func (a *appState) reopenPlayer(it *item) {
 	previous := it.player
 	player, err := openPlayerOnMain(it.uri)
 	if err != nil {
-		it.openErr = err
+		it.openErr = safeOpenError(err)
 		return
 	}
 	it.openErr = nil

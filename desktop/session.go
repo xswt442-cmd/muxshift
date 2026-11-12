@@ -368,7 +368,7 @@ func newAppStateWithSettings(uris []string, loaded settings) (*appState, error) 
 		if err != nil {
 			// One unreachable source does not take the session down: the item
 			// keeps its open error so the window can report it.
-			app.lastErr = err
+			app.lastErr = safeOpenError(err)
 		}
 		app.items = append(app.items, it)
 	}
@@ -379,7 +379,7 @@ func newAppStateWithSettings(uris []string, loaded settings) (*appState, error) 
 	for _, it := range app.items {
 		if it.video != "" {
 			if _, err := session.SetSceneVideo(app.scene, it.video); err != nil {
-				app.lastErr = err
+				app.lastErr = safeOpenError(err)
 			}
 			break
 		}
@@ -391,7 +391,7 @@ func newAppStateWithSettings(uris []string, loaded settings) (*appState, error) 
 			// the memory a decoration: the scene would say 100% and the player
 			// would be told 100%, whatever the file remembered.
 			if _, err := session.SetSceneAudio(app.scene, it.audio, it.volume, false); err != nil {
-				app.lastErr = err
+				app.lastErr = safeOpenError(err)
 			}
 			break
 		}
@@ -432,7 +432,7 @@ func (a *appState) addFrom(uri string, origin sourceOrigin) (*item, error) {
 	a.applySourceMemory(it)
 	player, err := openPlayerOnMain(uri)
 	if err != nil {
-		it.openErr = err
+		it.openErr = safeOpenError(err)
 		return it, err
 	}
 	it.player = player
@@ -461,7 +461,7 @@ func (a *appState) addProbed(it *item) error {
 	defer cancel()
 	stream, err := hls.Probe(ctx, it.uri, hls.Options{})
 	if err != nil {
-		it.openErr = err
+		it.openErr = safeOpenError(err)
 		return err
 	}
 	return a.attachStream(it, stream)
@@ -474,7 +474,7 @@ func (a *appState) addProbed(it *item) error {
 func (a *appState) attachStream(it *item, stream hls.Stream) error {
 	source, attachments, err := stream.Attach(a.session)
 	if err != nil {
-		it.openErr = err
+		it.openErr = safeOpenError(err)
 		return err
 	}
 	it.source = source
@@ -499,7 +499,7 @@ func (a *appState) attachStream(it *item, stream hls.Stream) error {
 func (a *appState) addLocal(it *item) error {
 	source, err := a.session.AddSource(it.uri)
 	if err != nil {
-		it.openErr = err
+		it.openErr = safeOpenError(err)
 		return err
 	}
 	it.source = source
@@ -577,10 +577,10 @@ func (a *appState) importSource(ctx context.Context, uri string, token int) {
 		a.importText = ""
 		result := commandResult{Command: command{Kind: commandAdd, URI: uri}, At: time.Now()}
 		if err != nil {
-			it.openErr = err
-			result.Err = err
+			it.openErr = safeOpenError(err)
+			result.Err = safeOpenError(err)
 			result.Message = fmt.Sprintf("could not import %s", shortURI(uri))
-			a.lastErr = err
+			a.lastErr = safeOpenError(err)
 		} else {
 			result.Message = fmt.Sprintf("imported %s as %s; it is selected, Show puts it on the stage", shortURI(uri), it.source.ID)
 		}
@@ -629,7 +629,7 @@ func (a *appState) closeImportTicker() {
 func (a *appState) apply() {
 	scene, err := a.session.Scene(a.scene)
 	if err != nil {
-		a.lastErr = err
+		a.lastErr = safeOpenError(err)
 		return
 	}
 	shown := make(map[core.TrackID]bool, len(scene.Video))
@@ -697,7 +697,7 @@ func (a *appState) ensurePlayer(it *item) error {
 	}
 	player, err := openPlayerOnMain(it.uri)
 	if err != nil {
-		it.openErr = err
+		it.openErr = safeOpenError(err)
 		return err
 	}
 	it.openErr = nil
@@ -1202,7 +1202,7 @@ func (a *appState) shutdown() {
 	}
 	if a.dvrSession != nil {
 		if err := a.dvrSession.Close(); err != nil && a.lastErr == nil {
-			a.lastErr = err
+			a.lastErr = safeOpenError(err)
 		}
 		a.dvrSession = nil
 	}

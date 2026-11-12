@@ -111,11 +111,11 @@ func (a *appState) itemBySource(id core.SourceID) (*item, int, error) {
 func (a *appState) runCommand(cmd command) commandResult {
 	result := commandResult{Command: cmd, At: time.Now()}
 	finish := func(err error, message string) commandResult {
-		result.Err = err
+		result.Err = safeOpenError(err)
 		result.Message = message
 		a.lastCommand = result
 		if err != nil {
-			a.lastErr = err
+			a.lastErr = safeOpenError(err)
 		}
 		return result
 	}

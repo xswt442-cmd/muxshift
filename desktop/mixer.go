@@ -3,8 +3,6 @@ package main
 import (
 	"fmt"
 	"log"
-
-	"github.com/xswt442-cmd/muxshift/core"
 )
 
 // The mixer state in this build is a listening overlay, not a mixing bus.
@@ -201,5 +199,3 @@ func joinWords(words []string) string {
 	}
 	return out
 }
-
-var _ core.SourceID

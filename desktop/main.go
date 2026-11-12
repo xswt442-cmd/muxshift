@@ -602,7 +602,14 @@ func (a *appState) status() string {
 	if label := a.syncLabel(); label != "" {
 		line += "   ·  " + label
 	}
-	if a.syncNote != "" {
+	// A probe's own summary is rendered from the report rather than from the
+	// text stored when it finished, so a suggestion the session has outgrown
+	// reads as expired here too.
+	if a.lastProbe.Target.Source != "" {
+		if summary := a.alignLine(); summary != "" {
+			line += "   ·  " + summary
+		}
+	} else if a.syncNote != "" {
 		line += "   ·  " + a.syncNote
 	}
 	if a.lastErr != nil {

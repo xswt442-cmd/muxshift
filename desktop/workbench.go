@@ -247,6 +247,7 @@ func (a *appState) inspectorPane(c *ui.Context, width, height float32) {
 					a.inspectorSession(c)
 				}
 				a.inspectorAccount(c)
+				a.inspectorAlign(c)
 			})
 		})
 	})
@@ -464,6 +465,27 @@ func (a *appState) inspectorAccount(c *ui.Context) {
 	for index, line := range lines {
 		text := ui.Text(c, line).FontSize(textSmall).TextColor(tone).Wrap()
 		if index == 0 {
+			text.FontFeatures("tnum")
+		}
+	}
+}
+
+// inspectorAlign shows the newest alignment comparison, read-only. It is the
+// same account the status bar summarises, with the fields that answer "why this
+// value": both sources, both windows, how much matched, how strong the peak is
+// against the next candidate, what it suggests against what the timeline holds,
+// and whether the session has moved since the probe started.
+func (a *appState) inspectorAlign(c *ui.Context) {
+	lines := a.alignLines()
+	if len(lines) == 0 {
+		return
+	}
+	tone := alignTone(a.reportOf(a.lastProbe).state())
+	ui.Box(c).Height(1).WidthPercent(100).Background(colorLine)
+	ui.Text(c, "align").FontSize(textMicro).TextColor(colorDim)
+	for index, line := range lines {
+		text := ui.Text(c, line).FontSize(textSmall).TextColor(tone).Wrap()
+		if index < 3 {
 			text.FontFeatures("tnum")
 		}
 	}

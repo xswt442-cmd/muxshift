@@ -152,6 +152,30 @@ A single-source switch (`playRecording`) and a multi-source transaction can over
 Closing the session aborts an open transaction first, so leases and players go back through the same path a failure takes. The two-second budget there is a reporting threshold, not permission to close underneath the work: a preparation may still be inside a cut, an ffprobe or a player open and still reading the buffer, so the close logs that it has waited past the budget and then waits for the preparation to return before it closes any buffer. The preparing work also checks ownership after it opens a player, and closes that player itself if the session or a newer transaction has taken over; each transaction signals when its work has returned, and closing the session waits for that signal (bounded by `seekShutdownWait`) before it closes the buffers the files were cut from. The scenario `interleave` runs both orders and the closing case in one session and reports on leases and generations (`testplace/evidence/P16/interleave.md`).
 
 The same wait cannot be allowed to hold the thread the preparation needs: a window that closes while a transaction is preparing waits for it from a close listener on the drawing thread, so every step the preparation posts to that thread is bounded (seekDispatchWait) and gives up instead of waiting forever. The post itself runs on a goroutine of the transaction, because `mygoRunOnMain` blocks until the drawing thread runs the callback, so a budget applied after it returns would never start. A step that arrives after the transaction was stopped does nothing, and every step runs under the same lock a stop takes: a stop either waits for the call the step is making inside its player, or gets there first and leaves nothing to call. That includes reading whether a player is ready: the picture check is a step like any other. A dispatch hands its result back on a private channel rather than through the caller's variables, so a step that timed out cannot write into state its caller has already returned from. Stopping a transaction also cancels the probe it started, so the close does not wait for an ffprobe whose answer no longer matters.
+### Showing what a comparison found, and whether it still holds (P17.2)
+
+A probe compares two windows of audio and offers an offset. The inspector shows
+that offer as an account, not as a number:
+
+- **What was compared**: both sources, both windows, and how much of them
+  actually overlapped at the proposed offset. A proposal built on four seconds of
+  overlap and one built on thirty are different kinds of evidence.
+- **How strong it is**: the peak, the next candidate and where it sits, and the
+  confidence the comparison computed from the gap between them. A peak of
+  `1.000` next to a runner-up of `0.105` is a match; two peaks a hair apart are
+  not, and the numbers say so before anyone applies them.
+- **What it would change**: the suggested offset, the offset the timeline holds,
+  and the difference between the two.
+- **Whether it still holds**: the probe records the state it started from, so a
+  nudge made while it ran (or after it finished) turns the account into
+  `expired: …` with the reason. The status bar renders its summary from the same
+  report, so it cannot keep saying `now +0.000s` for a session that moved.
+
+The account is read-only. It derives from a finished suggestion plus the
+session as it is now, and rendering it writes no shift, so a window that redraws
+cannot align anything. Refusals keep their measurements visible: a refused
+comparison still shows the windows it read and the peak it found, because that is
+what makes the refusal checkable, but it never shows a proposal.
 ### Reading the timeline without moving it (P17.1)
 
 The dock is a read-only view of what the session actually knows, one line per

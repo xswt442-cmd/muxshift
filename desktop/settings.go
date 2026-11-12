@@ -41,6 +41,10 @@ type settings struct {
 
 	// Compact tightens the spacing of the workbench.
 	Compact bool `json:"compact"`
+
+	// Workspace is the remembered shape of the window: its frame, the page it
+	// was on and the panes a person left open or closed (P18.1).
+	Workspace workspaceMemory `json:"workspace"`
 }
 
 // defaultSettings is both the first-run state and what Reset restores.
@@ -73,6 +77,9 @@ func validateSettings(s settings) error {
 	}
 	if s.MasterVolume < 0 || s.MasterVolume > 1 {
 		return fmt.Errorf("masterVolume %.3f is not a level between 0 and 1", s.MasterVolume)
+	}
+	if err := validateWorkspaceMemory(s.Workspace); err != nil {
+		return err
 	}
 	return nil
 }
@@ -252,6 +259,8 @@ func (a *appState) settingsForm(c *ui.Context) {
 	case "General":
 		a.settingsRow(c, "Open on", func() { ui.Select(c, &a.settingsDraft.StartPage, []string{"stage", "sources"}).Width(220) })
 		a.settingsHint(c, "the start page is read when the window opens, so it takes effect on the next start")
+		ui.Checkbox(c, &a.settingsDraft.Workspace.On, "Come back to the window I left: its frame, page and panes")
+		a.settingsHint(c, "written when the window closes; a frame no display can show falls back to the primary display, and a page or pane name this build does not know is refused")
 	case "Playback":
 		a.settingsSlider(c, "Default volume for new sources", &a.settingsDraft.DefaultVolume, 0, 1)
 		ui.Checkbox(c, &a.settingsDraft.MuteUnaligned, "Mute a source until its place on the shared timeline is known")
@@ -314,6 +323,12 @@ func (a *appState) settingsHint(c *ui.Context, text string) {
 // applySettingsCommand is the Apply button: validate, apply, write, report.
 func (a *appState) applySettingsCommand() {
 	next := a.settingsDraft
+	// Turning the memory on from the page means "this window, as it is now":
+	// the frame the page cannot see is filled in here, before validation gets a
+	// chance to refuse a zero size.
+	if next.Workspace.On && (next.Workspace.Width == 0 || next.Workspace.Height == 0) {
+		next.Workspace = a.workspaceFromWindow(a.window, true)
+	}
 	if err := validateSettings(next); err != nil {
 		a.settingsErr = err.Error()
 		return

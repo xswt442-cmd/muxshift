@@ -224,6 +224,10 @@ type appState struct {
 	settingsErr     string
 	settingsNote    string
 	settingsSection string
+	// settingsTrusted says the file on disk was read and understood. A start
+	// that fell back to the defaults must not write over the person's file with
+	// its defaults, so the workspace memory checks this before saving.
+	settingsTrusted bool
 
 	// rail, inspector and dock say whether each pane follows the window-size
 	// rule or a person's explicit choice; see workbench.go. The zero value is

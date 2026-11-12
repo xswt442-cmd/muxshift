@@ -758,6 +758,7 @@ func main() {
 	loaded, note := loadSettings(s.settingsPath)
 	s.settings = loaded
 	s.settingsDraft = loaded
+	s.settingsTrusted = note == ""
 	if note != "" {
 		log.Printf("settings: %s", note)
 	}
@@ -834,6 +835,12 @@ func main() {
 		})
 		installWindowIcon(window)
 		s.window = window
+		// A scripted run says what size it needs; a person's window comes back
+		// the way they left it (P18.1). The restore check is the one scripted
+		// run that has to see the restore itself.
+		if *scenario == "" || *scenario == "workspace-restore" {
+			s.restoreWorkspace(window, mygo.Screen.Displays())
+		}
 		if *scenario == "webview" {
 			view, err := window.NewWebView(mygo.WebViewOptions{URL: "/panel.html"})
 			if err != nil {
@@ -844,7 +851,14 @@ func main() {
 			// the window has to build one that does.
 			window.Invalidate()
 		}
-		window.OnClose(func(*mygo.CloseEvent) { s.release() })
+		window.OnClose(func(*mygo.CloseEvent) {
+			// The window is still the window here, so this is the last moment
+			// its bounds can be read; a scripted run leaves the file alone.
+			if *scenario == "" {
+				s.saveWorkspaceOnExit(window)
+			}
+			s.release()
+		})
 		if *shot != "" {
 			time.AfterFunc(*shotDelay, func() {
 				// The window and the players belong to the main thread: capturing and

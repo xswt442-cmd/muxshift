@@ -102,6 +102,13 @@ type appState struct {
 	items   []*item
 	lastErr error
 
+	// bgMu guards the background failure ledger: bgFailures counts what went
+	// wrong away from the drawing thread this run, bgLast keeps the newest one.
+	// Clearing the status bar's message leaves both alone; see background.go.
+	bgMu       sync.Mutex
+	bgFailures int
+	bgLast     backgroundFailure
+
 	// solo names the one source the mixer keeps audible, empty when nobody is
 	// soloed. masterMute silences everything while it is on. Both are listening
 	// overlays: neither edits the scene's routing or any source's own state.
@@ -1065,6 +1072,7 @@ func (a *appState) rememberSource(it *item) {
 	go func() {
 		if err := a.saveSettingsSerialized(saved, ticket); err != nil {
 			log.Printf("source memory: could not save %s: %v", digest, err)
+			a.noteBackgroundFailure("saving a source's remembered sound", err)
 			return
 		}
 		// The flag the page reads is owned by the drawing thread like the rest

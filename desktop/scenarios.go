@@ -80,6 +80,7 @@ var scenarios = map[string]scenario{
 	"alignreport":          runAlignReport,
 	"probeclose":           runProbeClose,
 	"replaybuffers":        runReplayBuffers,
+	"background":           runBackground,
 	"mixer":                runMixer,
 	"mutehold":             runMuteHold,
 	"clock":                runClock,

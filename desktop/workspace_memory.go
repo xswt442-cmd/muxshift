@@ -242,6 +242,7 @@ func (a *appState) saveWorkspaceOnExit(window *mygo.Window) {
 	// so the one built last wins instead of the one scheduled last.
 	if err := a.saveSettingsSerialized(cloneSettings(a.settings), a.saveTicket()); err != nil {
 		log.Printf("workspace: not saved: %v", err)
+		a.noteBackgroundFailure("saving the window's remembered shape", err)
 		return
 	}
 	w := a.settings.Workspace

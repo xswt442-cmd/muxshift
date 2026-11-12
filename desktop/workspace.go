@@ -169,6 +169,17 @@ func (a *appState) diagnosticsPage(c *ui.Context) {
 				ui.Text(c, "last cleanup: "+a.dvrNote).FontSize(textMicro).TextColor(colorTextDim)
 			}
 		}
+		ui.Text(c, "background work").FontSize(textMicro).TextColor(colorTextDim)
+		{
+			count, last := a.backgroundFailures()
+			line := fmt.Sprintf("%d failure(s) this run · %s", count, last.line())
+			if count == 0 {
+				line = last.line()
+			}
+			ui.Text(c, line).FontSize(textSmall).TextColor(colorText).Wrap()
+			ui.Text(c, "Dismissing the notification in the status bar hides the message; this count keeps the record.").
+				FontSize(textMicro).TextColor(colorTextDim)
+		}
 		ui.Text(c, "session events").FontSize(textMicro).TextColor(colorTextDim)
 		events := a.session.Events()
 		start := 0

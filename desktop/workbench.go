@@ -100,7 +100,6 @@ func (a *appState) topBar(c *ui.Context, width, height float32) {
 			ui.Text(c, a.globalStatus()).FontSize(textSmall).TextColor(colorTextDim).
 				FontFeatures("tnum")
 			ui.Button(c.Key("top-open"), "Open…").Width(76).Height(28).
-				Disabled(true).
 				Tooltip("opening a file from the desktop is not implemented; use the Sources page's address field or -media").
 				Description("Open a file picked on the desktop (not available in this build)")
 			open := a.workspace == workspaceSettings
@@ -183,8 +182,10 @@ const (
 	paneDock
 )
 
-// rail is the left navigation. The three real pages are buttons; Mixer and DVR
-// are visible but disabled with a tooltip, because neither exists yet.
+// rail is the left navigation. Every page the build has is a button here. The
+// disabled DVR placeholder that used to sit under them said history playback
+// was unverified; P16 verified it, and what the replay buffer holds is now
+// reported where it can be acted on, on the diagnostics page (P18.3).
 func (a *appState) railPane(c *ui.Context, width, height float32) {
 	if !a.rail.shown(width >= railAutoWidth) {
 		return
@@ -204,9 +205,6 @@ func (a *appState) railPane(c *ui.Context, width, height float32) {
 			}
 		}
 
-		ui.Button(c.Key("rail-dvr"), "DVR").Width(railWidth - 2*spaceSm).Height(34).
-			Disabled(true).
-			Tooltip("the replay buffer is read-only until history playback is verified").TextColor(colorDim)
 		ui.Box(c).Grow(1)
 		if ui.Button(c.Key("rail-fold"), "Hide rail").Width(railWidth - 2*spaceSm).Height(30).Clicked() {
 			a.rail = paneClosed
@@ -432,7 +430,7 @@ func (a *appState) statusBar(c *ui.Context) {
 			ui.Box(c).Grow(1)
 			if ui.Button(c.Key("status-dismiss"), "Dismiss error").Width(120).Height(22).
 				FontSize(textSmall).Tooltip("clear the last error; the log keeps its record").Clicked() {
-				a.lastErr = nil
+				a.dismissError()
 			}
 		}
 	})

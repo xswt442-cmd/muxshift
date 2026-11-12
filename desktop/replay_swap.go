@@ -96,6 +96,7 @@ func (a *appState) settleReplay(swap *replaySwap) {
 			anchor, anchorErr := measureRecordingAnchor(recording)
 			if anchorErr != nil {
 				logf("replay", "no measured anchor for %s: %v", recording.FileName(), anchorErr)
+				a.noteBackgroundFailure("measuring a recording's anchor", anchorErr)
 			}
 			a.commitReplay(swap, anchor, anchorErr)
 			return

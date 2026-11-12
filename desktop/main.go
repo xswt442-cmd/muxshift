@@ -834,7 +834,7 @@ func main() {
 	s.apply()
 	log.Printf("settings: start page %q, file %s", loaded.StartPage, s.settingsPath)
 	for i, it := range s.items {
-		log.Printf("source %d: %s · video=%q audio=%q open=%v", i+1, it.uri, it.video, it.audio, errorString(it.openErr))
+		log.Printf("source %d: %s · video=%q audio=%q open=%v", i+1, shortURI(it.uri), it.video, it.audio, errorString(it.openErr))
 	}
 	log.Printf("scene %s: %s", s.scene, s.sceneLabel())
 	// The shared event clock is wall time while the group plays and stands

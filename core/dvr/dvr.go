@@ -401,12 +401,18 @@ func (b *Buffer) noteGap(segment hls.Segment, err error) {
 
 // recordGap appends a gap, merging it into an open one that has no measured end
 // yet. The caller holds the lock.
+//
+// The reason is kept, the address that produced it is not: a signed segment
+// carries its token in the query, and an HTTP client quotes the address it could
+// not fetch, so a stored reason would otherwise repeat the secret in every
+// window that shows a gap and every log line that prints one.
 func (b *Buffer) recordGap(err error) {
+	reason := hls.Redact(err.Error())
 	if b.pending != nil {
-		b.pending.Reason += "; " + err.Error()
+		b.pending.Reason += "; " + reason
 		return
 	}
-	gap := Gap{Start: b.next, End: b.next, Reason: err.Error()}
+	gap := Gap{Start: b.next, End: b.next, Reason: reason}
 	b.gaps = append(b.gaps, gap)
 	b.pending = &b.gaps[len(b.gaps)-1]
 }

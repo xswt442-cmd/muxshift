@@ -267,6 +267,9 @@ type appState struct {
 	budgetFrom  string
 	flagBudget  dvrBudget
 	budgetFlags map[string]bool
+	// dvrNote is the outcome of the last cleanup pass, kept beside the button so
+	// a file that stayed on disk says why it stayed.
+	dvrNote string
 
 	// rail, inspector and dock say whether each pane follows the window-size
 	// rule or a person's explicit choice; see workbench.go. The zero value is

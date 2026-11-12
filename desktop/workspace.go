@@ -157,6 +157,18 @@ func (a *appState) diagnosticsPage(c *ui.Context) {
 		if a.syncNote != "" {
 			ui.Text(c, a.syncNote).FontSize(textSmall).TextColor(colorTextDim)
 		}
+		if rows := a.dvrRows(); len(rows) > 0 {
+			ui.Text(c, "replay buffers (live)").FontSize(textMicro).TextColor(colorTextDim)
+			for _, row := range rows {
+				ui.Text(c, row).FontSize(textSmall).TextColor(colorText).FontFeatures("tnum")
+			}
+			ui.Text(c, a.budgetLine()).FontSize(textMicro).TextColor(colorTextDim)
+			ui.Button(c.Key("dvr-cleanup"), "Forget recordings nothing plays").Height(28).Width(268).
+				OnClick(func() { a.cleanupDVR() })
+			if a.dvrNote != "" {
+				ui.Text(c, "last cleanup: "+a.dvrNote).FontSize(textMicro).TextColor(colorTextDim)
+			}
+		}
 		ui.Text(c, "session events").FontSize(textMicro).TextColor(colorTextDim)
 		events := a.session.Events()
 		start := 0

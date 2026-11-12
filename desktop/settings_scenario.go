@@ -66,11 +66,19 @@ func runSettings(window *mygo.Window, a *appState, dir string) {
 				a.settings.StartPage, a.settingsDraft.StartPage)
 		})
 
-		step(window, a, dir, "settings", "6-dvr-disabled.png",
-			"the DVR section is shown disabled with the reason, not hidden",
+		step(window, a, dir, "settings", "6-dvr.png",
+			"the DVR section shows the budget in force, the rule it came from, and a warning when a limit is zero",
 			func(a *appState) {
 				a.settingsSection = "DVR"
+				a.settingsDraft = a.settings
 			})
+		mygoRunOnMain(func() {
+			logf("settings", "the budget in force is %s from %s; the draft asks for %s",
+				a.budget.line(), a.budgetFrom, a.settingsDraft.DVR.line())
+			if a.budgetFrom == "" {
+				logf("settings", "CHECK FAILED: the page cannot say where the budget came from")
+			}
+		})
 
 		step(window, a, dir, "settings", "7-diagnostics.png",
 			"Diagnostics shows the real event count and the settings path",

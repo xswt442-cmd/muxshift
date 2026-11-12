@@ -241,6 +241,16 @@ type appState struct {
 	// its defaults, so the workspace memory checks this before saving.
 	settingsTrusted bool
 
+	// budget is the DVR budget a buffer opened now would get, and budgetFrom
+	// names the rule that produced it: the command line, the settings file or
+	// the built-in defaults. flagBudget and budgetFlags keep what the flags were
+	// and which of them a person actually typed, because a flag left at its
+	// default is not an override (P18.2).
+	budget      dvrBudget
+	budgetFrom  string
+	flagBudget  dvrBudget
+	budgetFlags map[string]bool
+
 	// rail, inspector and dock say whether each pane follows the window-size
 	// rule or a person's explicit choice; see workbench.go. The zero value is
 	// paneAuto, so an untouched window behaves as the size rule says.

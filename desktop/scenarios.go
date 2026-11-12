@@ -54,6 +54,7 @@ var scenarios = map[string]scenario{
 	"workspace":         runWorkspace,
 	"workspace-restore": runWorkspaceRestore,
 	"crash":             runCrash,
+	"budget":            runBudget,
 	"hidden":            runHidden,
 	"contract":          runContract,
 	"lease":             runLease,

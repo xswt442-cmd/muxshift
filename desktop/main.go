@@ -780,6 +780,19 @@ func main() {
 	if loaded.StartPage == "sources" {
 		s.workspace = workspaceSources
 	}
+	// P18.2: a buffer opened now gets the budget from "explicit flag > settings
+	// file > built-in defaults". Which flags were actually typed matters, so it
+	// is read from flag.Visit rather than by comparing values with the defaults:
+	// "-dvr-max-bytes 0" is an explicit choice and must stay one.
+	explicit := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
+	s.budgetFlags = explicit
+	s.flagBudget = dvrBudget{
+		RetentionSeconds: int(dvrRetention / time.Second),
+		MaxBytes:         dvrMaxBytes,
+		RecordingBytes:   dvrRecordingBytes,
+	}
+	s.resolveBudget()
 	for _, it := range s.items {
 		it.volume = s.settingsSourceVolume()
 	}

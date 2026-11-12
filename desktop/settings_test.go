@@ -63,6 +63,7 @@ func TestSaveLoadSettingsRoundTrip(t *testing.T) {
 		MasterVolume:  0.4,
 		DockOpen:      false,
 		Compact:       true,
+		DVR:           dvrBudget{RetentionSeconds: 120, MaxBytes: 4 << 20, RecordingBytes: 64 << 20},
 	}
 	if err := saveSettings(path, want); err != nil {
 		t.Fatalf("save: %v", err)

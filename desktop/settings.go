@@ -45,6 +45,95 @@ type settings struct {
 	// Workspace is the remembered shape of the window: its frame, the page it
 	// was on and the panes a person left open or closed (P18.1).
 	Workspace workspaceMemory `json:"workspace"`
+
+	// DVR is the cache budget a new replay buffer starts with (P18.2). A
+	// command line flag given explicitly wins over this, so a check can ask for
+	// a different budget without editing the file.
+	DVR dvrBudget `json:"dvr"`
+}
+
+// dvrBudget is the replay buffer's share of the disk. Both byte limits use zero
+// to mean "no limit of that kind": only the retention or the disk itself stops
+// the buffer growing, which the page warns about rather than hiding.
+type dvrBudget struct {
+	RetentionSeconds int   `json:"retentionSeconds"`
+	MaxBytes         int64 `json:"maxBytes"`
+	RecordingBytes   int64 `json:"recordingBytes"`
+}
+
+// builtinDVRBudget is the third rule in "explicit flag > settings file > this".
+func builtinDVRBudget() dvrBudget {
+	return dvrBudget{RetentionSeconds: 60, MaxBytes: 0, RecordingBytes: 256 << 20}
+}
+
+// dvrBudgetLimits bound what a settings file may ask for. They are wide: the
+// point is to refuse typos and absurd values, not to second-guess a person with
+// a big disk.
+const (
+	minRetentionSeconds = 5
+	maxRetentionSeconds = 3600
+	maxBudgetBytes      = int64(1) << 40 // 1 TiB
+)
+
+// validateDVRBudget rejects a budget the buffer cannot run with.
+func validateDVRBudget(b dvrBudget) error {
+	if b.RetentionSeconds < minRetentionSeconds || b.RetentionSeconds > maxRetentionSeconds {
+		return fmt.Errorf("dvr.retentionSeconds %d is not between %d and %d", b.RetentionSeconds, minRetentionSeconds, maxRetentionSeconds)
+	}
+	if b.MaxBytes < 0 || b.MaxBytes > maxBudgetBytes {
+		return fmt.Errorf("dvr.maxBytes %d is not between 0 (no limit) and %d", b.MaxBytes, maxBudgetBytes)
+	}
+	if b.RecordingBytes < 0 || b.RecordingBytes > maxBudgetBytes {
+		return fmt.Errorf("dvr.recordingBytes %d is not between 0 (no limit) and %d", b.RecordingBytes, maxBudgetBytes)
+	}
+	return nil
+}
+
+// dvrBudgetInForce resolves which budget a new buffer gets: a flag the person
+// actually typed beats the file, and the file beats the built-in defaults. The
+// second result names the rule that won, for the page and the log.
+func dvrBudgetInForce(from settings, explicit map[string]bool, flags dvrBudget) (dvrBudget, string) {
+	effective := from.DVR
+	won := "the settings file"
+	var named []string
+	if explicit["dvr-retention"] {
+		effective.RetentionSeconds = flags.RetentionSeconds
+		named = append(named, "-dvr-retention")
+	}
+	if explicit["dvr-max-bytes"] {
+		effective.MaxBytes = flags.MaxBytes
+		named = append(named, "-dvr-max-bytes")
+	}
+	if explicit["dvr-recording-bytes"] {
+		effective.RecordingBytes = flags.RecordingBytes
+		named = append(named, "-dvr-recording-bytes")
+	}
+	if len(named) > 0 {
+		won = "the command line (" + strings.Join(named, ", ") + ")"
+	}
+	return effective, won
+}
+
+// bytesLine spells a byte limit for the page and the log. Zero is not a number
+// here: it is the absence of that limit.
+func bytesLine(n int64) string {
+	switch {
+	case n == 0:
+		return "no limit"
+	case n >= 1<<30:
+		return fmt.Sprintf("%.1f GiB", float64(n)/(1<<30))
+	case n >= 1<<20:
+		return fmt.Sprintf("%.0f MiB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.0f KiB", float64(n)/(1<<10))
+	default:
+		return fmt.Sprintf("%d bytes", n)
+	}
+}
+
+// budgetLine spells all three limits, in the order the page shows them.
+func (b dvrBudget) line() string {
+	return fmt.Sprintf("keeps %ds, buffer %s, recordings %s", b.RetentionSeconds, bytesLine(b.MaxBytes), bytesLine(b.RecordingBytes))
 }
 
 // defaultSettings is both the first-run state and what Reset restores.
@@ -57,6 +146,7 @@ func defaultSettings() settings {
 		MasterVolume:  1,
 		DockOpen:      true,
 		Compact:       false,
+		DVR:           builtinDVRBudget(),
 	}
 }
 
@@ -79,6 +169,9 @@ func validateSettings(s settings) error {
 		return fmt.Errorf("masterVolume %.3f is not a level between 0 and 1", s.MasterVolume)
 	}
 	if err := validateWorkspaceMemory(s.Workspace); err != nil {
+		return err
+	}
+	if err := validateDVRBudget(s.DVR); err != nil {
 		return err
 	}
 	return nil
@@ -269,11 +362,43 @@ func (a *appState) settingsForm(c *ui.Context) {
 		a.settingsSlider(c, "Master volume", &a.settingsDraft.MasterVolume, 0, 1)
 		a.settingsHint(c, "the master multiplies every source's scene level at its player; per-source levels stay in the inspector")
 	case "DVR":
-		ui.Text(c, "the replay buffer keeps segments and knows its gaps, but seeking it inside this window is not implemented").Wrap()
-		held := a.settingsDraft.DockOpen
-		ui.Checkbox(c, &held, "Keep the replay buffer open by default").Disabled(true).
-			Tooltip("recording controls arrive with the DVR phase; this switch does nothing yet")
-		a.settingsHint(c, "disabled until the DVR phase lands")
+		ui.Text(c, "what a new replay buffer may use; the marker shows what a buffer opened now would get").Wrap()
+		// The three numbers a buffer runs with. They are steppers rather than
+		// sliders because a budget is a number a person reads back and a slider
+		// cannot be read from a screenshot.
+		a.settingsRow(c, "Keep this much history", func() {
+			if ui.Button(c.Key("dvr-ret-less"), "-1 min").Width(80).Clicked() {
+				a.settingsDraft.DVR.RetentionSeconds = max(minRetentionSeconds, a.settingsDraft.DVR.RetentionSeconds-60)
+			}
+			ui.Text(c, fmt.Sprintf("%d s", a.settingsDraft.DVR.RetentionSeconds)).Width(90)
+			if ui.Button(c.Key("dvr-ret-more"), "+1 min").Width(80).Clicked() {
+				a.settingsDraft.DVR.RetentionSeconds = min(maxRetentionSeconds, a.settingsDraft.DVR.RetentionSeconds+60)
+			}
+		})
+		a.settingsRow(c, "Segment cache limit", func() {
+			if ui.Button(c.Key("dvr-max-less"), "-64 MiB").Width(90).Clicked() {
+				a.settingsDraft.DVR.MaxBytes = max(0, a.settingsDraft.DVR.MaxBytes-64<<20)
+			}
+			ui.Text(c, bytesLine(a.settingsDraft.DVR.MaxBytes)).Width(120)
+			if ui.Button(c.Key("dvr-max-more"), "+64 MiB").Width(90).Clicked() {
+				a.settingsDraft.DVR.MaxBytes = min(maxBudgetBytes, a.settingsDraft.DVR.MaxBytes+64<<20)
+			}
+		})
+		a.settingsRow(c, "Recording limit", func() {
+			if ui.Button(c.Key("dvr-rec-less"), "-64 MiB").Width(90).Clicked() {
+				a.settingsDraft.DVR.RecordingBytes = max(0, a.settingsDraft.DVR.RecordingBytes-64<<20)
+			}
+			ui.Text(c, bytesLine(a.settingsDraft.DVR.RecordingBytes)).Width(120)
+			if ui.Button(c.Key("dvr-rec-more"), "+64 MiB").Width(90).Clicked() {
+				a.settingsDraft.DVR.RecordingBytes = min(maxBudgetBytes, a.settingsDraft.DVR.RecordingBytes+64<<20)
+			}
+		})
+		a.settingsHint(c, "in force for a buffer opened now: "+a.budget.line()+" from "+a.budgetFrom)
+		if a.settingsDraft.DVR.MaxBytes == 0 || a.settingsDraft.DVR.RecordingBytes == 0 {
+			ui.Text(c, "a zero byte limit is not a small budget: it removes that limit, so only the retention and the disk stop the buffer").
+				FontSize(textMicro).TextColor(colorWarn).Wrap()
+		}
+		a.settingsHint(c, "command line flags given explicitly win over these numbers; the line above says which rule is in force")
 	case "Appearance":
 		ui.Checkbox(c, &a.settingsDraft.DockOpen, "Open the timeline dock by default")
 		ui.Checkbox(c, &a.settingsDraft.Compact, "Tighter spacing")
@@ -337,6 +462,17 @@ func (a *appState) shortcutLine(c *ui.Context, keys, what string) {
 	})
 }
 
+// resolveBudget works out the budget a buffer opened now would get and pushes it
+// into the flags the buffer is built from, so the page, the log and the buffer
+// read one value instead of three that can disagree.
+func (a *appState) resolveBudget() {
+	a.budget, a.budgetFrom = dvrBudgetInForce(a.settings, a.budgetFlags, a.flagBudget)
+	dvrRetention = time.Duration(a.budget.RetentionSeconds) * time.Second
+	dvrMaxBytes = a.budget.MaxBytes
+	dvrRecordingBytes = a.budget.RecordingBytes
+	log.Printf("dvr: budget %s from %s", a.budget.line(), a.budgetFrom)
+}
+
 // applySettingsCommand is the Apply button: validate, apply, write, report.
 func (a *appState) applySettingsCommand() {
 	next := a.settingsDraft
@@ -362,6 +498,9 @@ func (a *appState) applySettingsCommand() {
 	a.settingsSaved = true
 	a.settingsNote = fmt.Sprintf("applied %s", a.settingsPath)
 	log.Printf("settings: applied %+v", next)
+	// A new budget has to reach the buffer too: applying it changes what the
+	// next buffer opened would get, not the one already running.
+	a.resolveBudget()
 }
 
 // eventCount is how many events the session has, for the Diagnostics section.

@@ -262,6 +262,14 @@ type appState struct {
 	// beside lastProbe, not instead of it: an older proposal may still describe
 	// the session, but a failed attempt must be the first thing the report says.
 	lastProbeErr string
+	// lastProbeFail keeps the identity of the attempt that failed, so the failure
+	// is named after its own sources instead of borrowing the older proposal's.
+	lastProbeFail *probeFailure
+	// probeAttempt counts started comparisons and probeDone the newest one that
+	// finished, so a caller can tell "my attempt finished" from "an attempt once
+	// finished".
+	probeAttempt uint64
+	probeDone    uint64
 
 	// pending holds players that were removed while no other player was alive.
 	// See close for why they cannot be released at that moment. A player that

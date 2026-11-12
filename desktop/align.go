@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os/exec"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -356,33 +357,72 @@ func (a *appState) probeAndReport(reference, target int) alignSuggestion {
 	return suggestion
 }
 
+// probeFailure names the comparison that did not finish after its own sources:
+// the older proposal is history, not a label for a newer attempt.
+type probeFailure struct {
+	Reference alignWindow
+	Target    alignWindow
+	Reason    string
+}
+
 // probeAsync is the button's path: the comparison decodes two files, so it runs
 // off the UI thread and only the finished text is handed back to it. The running
 // flag lets a scenario (and the button) tell a comparison in flight from a
 // finished one without reading the wording of the status line.
 func (a *appState) probeAsync(reference, target int) {
+	a.startProbe(reference, target)
+}
+
+// startProbe starts one comparison and returns its attempt number. It must run
+// on the drawing thread: it reads the two windows before the work starts so the
+// result can be named after what was actually compared.
+func (a *appState) startProbe(reference, target int) uint64 {
 	if a.probeRunning {
 		a.syncNote = "a comparison is already running"
-		return
+		return a.probeAttempt
 	}
+	refWindow, refErr := a.alignWindowAt(reference)
+	tgtWindow, tgtErr := a.alignWindowAt(target)
+	a.probeAttempt++
+	attempt := a.probeAttempt
 	a.probeRunning = true
 	a.syncNote = fmt.Sprintf("comparing source %d with source %d…", reference+1, target+1)
 	go func() {
 		suggestion, err := a.suggestAlign(reference, target)
 		mygoRunOnMain(func() {
-			a.probeRunning = false
-			if err != nil {
-				a.lastProbeErr = err.Error()
-				a.syncNote = fmt.Sprintf("alignment probe failed: %v", err)
-				logf("align", "probe failed: %v", err)
-				return
-			}
-			a.lastProbeErr = ""
-			a.lastProbe = suggestion
-			a.syncNote = a.suggestionLine(suggestion)
-			logf("align", "%s", a.syncNote)
+			a.applyProbeResult(attempt, suggestion, err, refWindow, refErr, tgtWindow, tgtErr)
 		})
 	}()
+	return attempt
+}
+
+// applyProbeResult records a finished comparison. A result from an attempt that
+// has been superseded is dropped: the session's account belongs to the newest
+// attempt, not to whichever goroutine finished last.
+func (a *appState) applyProbeResult(attempt uint64, suggestion alignSuggestion, err error, ref alignWindow, refErr error, tgt alignWindow, tgtErr error) {
+	if attempt != a.probeAttempt {
+		logf("align", "an earlier comparison finished after a newer one started; it is not the session's account")
+		return
+	}
+	a.probeRunning = false
+	a.probeDone = attempt
+	if err != nil {
+		reason := trimFailure(err.Error(), tgt.URI)
+		a.lastProbeErr = reason
+		if refErr == nil && tgtErr == nil {
+			a.lastProbeFail = &probeFailure{Reference: ref, Target: tgt, Reason: reason}
+		} else {
+			a.lastProbeFail = nil
+		}
+		a.syncNote = fmt.Sprintf("alignment probe failed: %s", reason)
+		logf("align", "probe failed: %s", reason)
+		return
+	}
+	a.lastProbeErr = ""
+	a.lastProbeFail = nil
+	a.lastProbe = suggestion
+	a.syncNote = a.suggestionLine(suggestion)
+	logf("align", "%s", a.syncNote)
 }
 
 // logStale re-reads the current session and reports whether an older suggestion
@@ -393,4 +433,28 @@ func (a *appState) logStale(s alignSuggestion) {
 		return
 	}
 	logf("align", "the earlier suggestion still matches the session")
+}
+
+// trimFailure keeps a failed comparison readable: the first line of the tool's
+// message, without repeating the address the report already names, shortened to
+// something that fits a row.
+func trimFailure(reason, uri string) string {
+	if line, _, found := strings.Cut(reason, "\n"); found {
+		reason = line
+	}
+	reason = strings.TrimSpace(reason)
+	if uri != "" {
+		reason = strings.TrimSpace(strings.TrimPrefix(reason, uri+":"))
+		// ffmpeg names the file by its base name, not by the address the report
+		// already carries.
+		if base := path.Base(uri); base != uri {
+			reason = strings.TrimSpace(strings.TrimPrefix(reason, base+":"))
+		}
+	}
+	reason = strings.Join(strings.Fields(reason), " ")
+	const limit = 150
+	if len(reason) > limit {
+		reason = reason[:limit] + "…"
+	}
+	return reason
 }

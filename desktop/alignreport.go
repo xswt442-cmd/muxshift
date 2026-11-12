@@ -33,10 +33,6 @@ type alignReport struct {
 	Accepted   bool
 	Reason     string
 	Expired    string
-	// Failed says why the newest comparison did not finish at all. The older
-	// proposal, if any, is still described below it, but never as the newest
-	// word: a session that failed to measure has not measured anything now.
-	Failed string
 }
 
 // reportOf turns a finished suggestion into the report the inspector shows.
@@ -61,7 +57,6 @@ func (a *appState) reportOf(s alignSuggestion) alignReport {
 		Accepted:   s.Result.Accepted,
 		Reason:     s.Result.Reason,
 		Expired:    a.fresh(s),
-		Failed:     a.lastProbeErr,
 	}
 }
 
@@ -70,8 +65,6 @@ func (a *appState) reportOf(s alignSuggestion) alignReport {
 // describes the session.
 func (r alignReport) state() string {
 	switch {
-	case r.Failed != "":
-		return "failed"
 	case !r.Accepted:
 		return "refused"
 	case r.Expired != "":
@@ -95,13 +88,6 @@ func (r alignReport) lines() []string {
 	strength := fmt.Sprintf("peak %.3f · next %.3f at %+.3fs · confidence %.3f",
 		r.Peak, r.RunnerUp, r.RunnerAt.Seconds(), r.Confidence)
 	lines := []string{first, windows, strength}
-	if r.Failed != "" {
-		// The newest attempt did not finish. Say that first, and say plainly
-		// that anything below describes an earlier comparison.
-		lines = append([]string{"the last comparison did not finish: " + r.Failed,
-			"what it would have replaced (an earlier comparison):"}, lines...)
-	}
-
 	if !r.Accepted {
 		lines = append(lines, fmt.Sprintf("no suggestion: %s · took %s", r.Reason, r.Elapsed.Round(time.Millisecond)))
 	} else {
@@ -120,25 +106,41 @@ func (r alignReport) lines() []string {
 
 // alignLines is what the inspector draws: the newest probe, described in the
 // terms above. It reads state and changes none.
+//
+// A comparison that did not finish is named after its own sources and put first;
+// an older proposal may follow, but only labelled as an earlier comparison, so a
+// failure can never be read as having been measured on the older target.
 func (a *appState) alignLines() []string {
-	if a.lastProbe.Reference.Source == "" && a.lastProbe.Target.Source == "" {
-		if a.lastProbeErr != "" {
-			return []string{"the last comparison did not finish: " + a.lastProbeErr}
+	var out []string
+	if failure := a.lastProbeFail; failure != nil {
+		out = append(out, "the last comparison did not finish: "+
+			windowLabel(failure.Target)+" compared with "+windowLabel(failure.Reference)+": "+failure.Reason)
+		if hasProbe(a.lastProbe) {
+			out = append(out, "what it would have replaced (an earlier comparison):")
 		}
-		return nil
 	}
-	return a.reportOf(a.lastProbe).lines()
+	if hasProbe(a.lastProbe) {
+		out = append(out, a.reportOf(a.lastProbe).lines()...)
+	}
+	if len(out) == 0 && a.lastProbeErr != "" {
+		out = append(out, "the last comparison did not finish: "+a.lastProbeErr)
+	}
+	return out
 }
 
 // alignLine is the one-line status summary, kept short enough for the bar.
 func (a *appState) alignLine() string {
-	if a.lastProbe.Target.Source == "" {
+	if failure := a.lastProbeFail; failure != nil {
+		return fmt.Sprintf("alignment probe failed for %s: %s", shortURI(failure.Target.URI), failure.Reason)
+	}
+	if !hasProbe(a.lastProbe) {
+		if a.lastProbeErr != "" {
+			return "alignment probe failed: " + a.lastProbeErr
+		}
 		return ""
 	}
 	report := a.reportOf(a.lastProbe)
 	switch report.state() {
-	case "failed":
-		return fmt.Sprintf("alignment probe failed for %s: %s", shortURI(report.Target.URI), report.Failed)
 	case "refused":
 		return fmt.Sprintf("no suggestion for %s: %s (peak %.3f, next %.3f)",
 			shortURI(report.Target.URI), report.Reason, report.Peak, report.RunnerUp)
@@ -161,6 +163,17 @@ func alignTone(state string) ui.Color {
 	default:
 		return colorGood
 	}
+}
+
+// hasProbe reports whether a comparison ever produced a proposal.
+func hasProbe(s alignSuggestion) bool {
+	return s.Reference.Source != "" || s.Target.Source != ""
+}
+
+// windowLabel names one side of a comparison: its place in the session, the
+// track that was read, and the address a person recognises.
+func windowLabel(w alignWindow) string {
+	return fmt.Sprintf("source %d (%s) · %s", w.Index+1, trackName(w.Track), shortURI(w.URI))
 }
 
 // trackName keeps a track id out of the middle of a sentence when it is empty.

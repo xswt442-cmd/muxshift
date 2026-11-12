@@ -137,25 +137,34 @@ func TestTheReportNamesTheTrackItCompared(t *testing.T) {
 }
 
 // TestAFailedComparisonSaysSoFirst covers the newest attempt failing while an
-// older proposal still exists: the failure is the news, and the older proposal
-// may only be shown as what the failure would have replaced.
+// older proposal still exists: the failure is the news, it is named after the
+// sources it actually compared, and the older proposal may only be shown as what
+// the failure would have replaced.
 func TestAFailedComparisonSaysSoFirst(t *testing.T) {
 	app := alignApp()
 	app.lastProbe = suggestionFor("a.m3u8", "b.m3u8")
-	app.lastProbeErr = "ffmpeg is not on PATH: exec: \"ffmpeg\": executable file not found"
+	app.lastProbeErr = "c.m3u8 has no audio track to compare"
+	app.lastProbeFail = &probeFailure{
+		Reference: alignWindow{Index: 0, Source: "source-1", Track: "track-2", URI: "a.m3u8"},
+		Target:    alignWindow{Index: 2, Source: "source-3", Track: "", URI: "c.m3u8"},
+		Reason:    app.lastProbeErr,
+	}
 	lines := app.alignLines()
-	if !strings.Contains(lines[0], "the last comparison did not finish: ffmpeg is not on PATH") {
+	if !strings.Contains(lines[0], "the last comparison did not finish:") {
 		t.Fatalf("a failed comparison is not the first line: %q", strings.Join(lines, "\n"))
+	}
+	if !strings.Contains(lines[0], "c.m3u8") {
+		t.Fatalf("the failure is not named after the source it compared: %q", lines[0])
+	}
+	if strings.Contains(lines[0], "b.m3u8") {
+		t.Fatalf("the failure borrowed the older proposal's target: %q", lines[0])
 	}
 	joined := strings.Join(lines, "\n")
 	if !strings.Contains(joined, "an earlier comparison") {
 		t.Fatalf("the older proposal is not marked as an earlier one:\n%s", joined)
 	}
-	if state := app.reportOf(app.lastProbe).state(); state != "failed" {
-		t.Fatalf("a failed comparison reports state %q, want failed", state)
-	}
-	if line := app.alignLine(); !strings.Contains(line, "alignment probe failed") {
-		t.Fatalf("the status bar does not report the failure: %q", line)
+	if line := app.alignLine(); !strings.Contains(line, "c.m3u8") {
+		t.Fatalf("the status bar names another source for the failure: %q", line)
 	}
 }
 
@@ -166,5 +175,33 @@ func TestAFailedComparisonAloneStillShowsSomething(t *testing.T) {
 	lines := app.alignLines()
 	if len(lines) != 1 || !strings.Contains(lines[0], "did not finish") {
 		t.Fatalf("a single failed comparison shows %q", strings.Join(lines, "\n"))
+	}
+}
+
+// TestASupersededComparisonDoesNotBecomeTheAccount pins the attempt number: a
+// result that finished after a newer comparison started must be dropped, not
+// written over the newest attempt.
+func TestASupersededComparisonDoesNotBecomeTheAccount(t *testing.T) {
+	app := alignApp()
+	app.probeAttempt = 2
+	app.probeDone = 1
+	// Attempt 1 finishes late with a proposal; it must not be published.
+	app.applyProbeResult(1, suggestionFor("a.m3u8", "b.m3u8"), nil,
+		alignWindow{}, nil, alignWindow{}, nil)
+	if hasProbe(app.lastProbe) {
+		t.Fatal("an earlier attempt's proposal became the session's account")
+	}
+	if app.probeRunning {
+		t.Fatal("an earlier attempt cleared the in-flight flag")
+	}
+	// The attempt the session is waiting for publishes normally.
+	app.applyProbeResult(2, suggestionFor("a.m3u8", "b.m3u8"), nil,
+		alignWindow{Index: 0, Source: "source-1", Track: "track-2", URI: "a.m3u8"}, nil,
+		alignWindow{Index: 1, Source: "source-2", Track: "track-3", URI: "b.m3u8"}, nil)
+	if !hasProbe(app.lastProbe) {
+		t.Fatal("the newest attempt's proposal was dropped")
+	}
+	if app.probeDone != 2 {
+		t.Fatalf("probeDone = %d, want 2", app.probeDone)
 	}
 }

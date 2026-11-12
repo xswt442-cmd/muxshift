@@ -99,6 +99,40 @@ func alignReportBody(window *mygo.Window, a *appState, dir string) {
 	}
 	step(window, a, dir, scenario, "2-expired.png", "the same probe after the target moved", func(*appState) {})
 
+	// Make a comparison fail for real: point the target at something that cannot
+	// be decoded, so the comparison itself fails while its identity is still
+	// known. The failure must be named after that target, and the earlier
+	// proposal may only appear as an earlier one.
+	originalURI := runOnMainValue(func() string { return a.items[1].uri })
+	const missing = "testplace/media/missing-for-failure.mp4"
+	mygoRunOnMain(func() { a.items[1].uri = missing })
+	attempt := runOnMainValue(func() uint64 { return a.startProbe(0, 1) })
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if runOnMainValue(func() bool { return a.probeDone >= attempt }) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	mygoRunOnMain(func() { a.items[1].uri = originalURI })
+	failed := runOnMainValue(a.alignLines)
+	logf(scenario, "after a comparison that could not read its target:\n%s", strings.Join(failed, "\n"))
+	if len(failed) == 0 {
+		check(false, "a failed comparison shows nothing")
+	} else {
+		check(strings.Contains(failed[0], "did not finish"),
+			"the failure is not the first line: %q", failed[0])
+		check(strings.Contains(failed[0], "missing-for-failure"),
+			"the failure is not named after the target it compared: %q", failed[0])
+		check(strings.Contains(strings.Join(failed, "\n"), "an earlier comparison"),
+			"the older proposal is not marked as earlier:\n%s", strings.Join(failed, "\n"))
+	}
+	barred := runOnMainValue(a.alignLine)
+	logf(scenario, "the status bar reads: %s", barred)
+	check(strings.Contains(barred, "missing-for-failure"),
+		"the status bar names another source for the failure: %q", barred)
+	step(window, a, dir, scenario, "3-failed.png", "the comparison that could not finish", func(*appState) {})
+
 	logf(scenario, "alignreport: %d report line(s), checks failed: %d", len(stale), failures)
 	a.release()
 	mygo.App.Quit()
@@ -117,14 +151,26 @@ func (a *appState) targetOffset(index int) time.Duration {
 	return 0
 }
 
-// probeAndWait starts the button's own path and waits for it to finish, so the
-// scenario exercises the same code the button does.
+// probeAndWait starts the button's own path on the drawing thread and waits for
+// that attempt to finish, so the scenario exercises the same code the button does
+// and cannot mistake an older proposal for its own result.
 func (a *appState) probeAndWait(reference, target int, timeout time.Duration) error {
-	a.probeAsync(reference, target)
+	attempt := runOnMainValue(func() uint64 { return a.startProbe(reference, target) })
+	if attempt == 0 {
+		return fmt.Errorf("the comparison did not start")
+	}
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		done := runOnMainValue(func() bool { return !a.probeRunning && a.lastProbe.Target.Source != "" })
+		done := runOnMainValue(func() bool { return a.probeDone >= attempt })
 		if done {
+			if err := runOnMainValue(func() error {
+				if a.lastProbeErr != "" {
+					return fmt.Errorf("%s", a.lastProbeErr)
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
 			return nil
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -149,5 +195,5 @@ func (a *appState) waitPlayers(timeout time.Duration) error {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	return fmt.Errorf("no picture within %s", timeout)
+	return fmt.Errorf("the players did not report ready within %s", timeout)
 }

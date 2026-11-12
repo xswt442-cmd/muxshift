@@ -235,7 +235,12 @@ that offer as an account, not as a number:
 
 When the newest comparison does not finish at all, the failure is the first line
 and any earlier proposal is labelled as an earlier one; a session that failed to
-measure must not look as if it had just measured something.
+measure must not look as if it had just measured something. The failure line
+describes the pair it actually compared; the earlier proposal stays below it as
+an earlier one and is never presented as the target that failed. A comparison's
+result is accepted by the attempt number it was started with: only the current
+attempt updates the account, and an attempt a newer one replaced is logged and
+otherwise ignored, however late it finishes.
 
 The account is read-only. It derives from a finished suggestion plus the
 session as it is now, and rendering it writes no shift, so a window that redraws

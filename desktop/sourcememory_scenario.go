@@ -100,17 +100,19 @@ func sourceMemoryBody(window *mygo.Window, a *appState, dir string) {
 		check(identity != "", "the -extra address can be an identity (%s)", identityDigest(identityOf(extra)))
 	})
 
-	// The write happens off the drawing thread, so read the file rather than the
-	// in-memory copy, and give it a moment.
-	var saved settings
+	// The write happens off the drawing thread, so wait for a newer file and
+	// read it once. Watching it by reading in a loop would hold the file open
+	// while the writer tries to replace it, and Windows refuses that rename.
+	remembered := time.Now()
 	deadline = time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		saved, note = loadSettings(a.settingsPath)
-		if note == "" && len(saved.SourceMemory.Entries) > 0 {
+		if info, err := os.Stat(a.settingsPath); err == nil && !info.ModTime().Before(remembered) {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+	var saved settings
+	saved, note = loadSettings(a.settingsPath)
 	time.Sleep(800 * time.Millisecond)
 	step(window, a, dir, scenario, "1-remembered.png",
 		"the hand-added source is audible and muted, and the file keeps its sound",
@@ -127,7 +129,7 @@ func sourceMemoryBody(window *mygo.Window, a *appState, dir string) {
 		}
 		// Neither the page nor the log prints a remembered address.
 		check(!strings.Contains(sourceMemoryLine(saved.SourceMemory), "http") &&
-			!strings.Contains(sourceMemoryLine(saved.SourceMemory), ":\\"), "the summary prints an address")
+			!strings.Contains(sourceMemoryLine(saved.SourceMemory), ":\\"), "the summary prints no address")
 	})
 
 	// A write must not rewrite the draft somebody may be editing.

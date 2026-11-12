@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -236,7 +237,7 @@ type appState struct {
 	settings        settings
 	settingsDraft   settings
 	settingsPath    string
-	settingsSaved   bool
+	settingsSaved   atomic.Bool
 	settingsErr     string
 	settingsNote    string
 	settingsSection string
@@ -244,6 +245,9 @@ type appState struct {
 	// that fell back to the defaults must not write over the person's file with
 	// its defaults, so the workspace memory checks this before saving.
 	settingsTrusted bool
+	// settingsSave serializes the two writers: Apply on the drawing thread and
+	// a remembered preference saving from its goroutine.
+	settingsSave sync.Mutex
 
 	// budget is the DVR budget a buffer opened now would get, and budgetFrom
 	// names the rule that produced it: the command line, the settings file or
@@ -972,16 +976,18 @@ func muteWord(muted bool) string {
 	return ""
 }
 
-// noteSourcePreference remembers the sound of a source in the background: the
-// write must not block the drawing thread that just moved a slider.
+// noteSourcePreference remembers the sound of a source without blocking the
+// drawing thread that just moved a slider: the in-memory set is made here, on
+// the thread that owns it, and only the write is handed to a goroutine.
 func (a *appState) noteSourcePreference(it *item) {
-	go a.rememberSource(it)
+	a.rememberSource(it)
 }
 
-// rememberSource writes the level and mute now in force for the source's
-// address. It is the only write path, so the four refusals live here:
-// memory off, remembering off, a source started from the command line, and an
-// address that cannot be an identity.
+// rememberSource records the level and mute now in force for the source's
+// address. It is the only write path, so the four refusals live here: memory
+// off, remembering off, a source started from the command line, and an address
+// that cannot be an identity. It runs on the drawing thread: a.settings is
+// read by every frame, so a background goroutine must not change it.
 func (a *appState) rememberSource(it *item) {
 	memory := a.settings.SourceMemory
 	if !memory.On || !memory.Remember {
@@ -994,7 +1000,10 @@ func (a *appState) rememberSource(it *item) {
 	if identity == "" {
 		return
 	}
-	changed, refusal := a.settings.SourceMemory.set(identity, it.volume, it.muted)
+	// The applied settings own the copy that will be saved; the draft is left
+	// alone so a page someone is editing is not rewritten underneath them.
+	next := cloneSettings(a.settings)
+	changed, refusal := next.SourceMemory.set(identity, it.volume, it.muted)
 	if refusal != "" {
 		log.Printf("source memory: %s", refusal)
 		return
@@ -1002,15 +1011,21 @@ func (a *appState) rememberSource(it *item) {
 	if !changed {
 		return
 	}
-	// The applied settings own the copy that will be saved; the draft is left
-	// alone so a page someone is editing is not rewritten underneath them.
-	a.settings = cloneSettings(a.settings)
-	if err := saveSettings(a.settingsPath, a.settings); err != nil {
-		log.Printf("source memory: could not save %s: %v", identityDigest(identity), err)
-		return
-	}
-	a.settingsSaved = true
-	log.Printf("source memory: remembered %s at %.0f%%%s", identityDigest(identity), it.volume*100, muteWord(it.muted))
+	a.settings = next
+	// The write gets its own copy: by the time it runs, a newer set or an
+	// Apply may already have replaced a.settings.
+	saved := cloneSettings(next)
+	digest, volume, muted := identityDigest(identity), it.volume, it.muted
+	go func() {
+		if err := a.saveSettingsSerialized(saved); err != nil {
+			log.Printf("source memory: could not save %s: %v", digest, err)
+			return
+		}
+		// The flag the page reads is owned by the drawing thread like the rest
+		// of the state; setting it here would be a write from a goroutine.
+		a.settingsSaved.Store(true)
+		log.Printf("source memory: remembered %s at %.0f%%%s", digest, volume*100, muteWord(muted))
+	}()
 }
 
 // closePendingWhenReady releases the players kept because they were the last

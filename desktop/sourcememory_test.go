@@ -245,7 +245,7 @@ func TestRememberSourceWritesOnlyForAHandAddedSource(t *testing.T) {
 
 	added := &item{uri: "https://example.com/a.m3u8", volume: 0.5, origin: originAdded}
 	app.rememberSource(added)
-	got, note := loadSettings(app.settingsPath)
+	got, note := waitForSettingsFile(t, app.settingsPath)
 	if note != "" {
 		t.Fatalf("load reported %q", note)
 	}
@@ -311,4 +311,64 @@ func TestIdentityDigestIsStable(t *testing.T) {
 		t.Fatalf("two addresses share a digest")
 	}
 	_ = time.Now
+}
+
+// TestValidateSettingsChecksTheMemory guards the wiring: validateSourceMemory
+// existed on its own for a while, and a set that never called it accepted a
+// file whose entries could not be honoured.
+func TestValidateSettingsChecksTheMemory(t *testing.T) {
+	st := defaultSettings()
+	st.SourceMemory = sourceMemory{On: true, Entries: []sourceMemoryEntry{
+		{Address: "HTTPS://Example.com/a.m3u8", Volume: 0.5},
+	}}
+	err := validateSettings(st)
+	if err == nil || !strings.Contains(err.Error(), "normalised") {
+		t.Fatalf("a bad memory entry was accepted: %v", err)
+	}
+}
+
+// TestABadMemoryEntryFallsBackToTheDefaults is the same wiring seen from the
+// file: a settings file with one unhonourable entry must not be used at all,
+// and must stay on disk so it can be inspected.
+func TestABadMemoryEntryFallsBackToTheDefaults(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	body := `{"sourceMemory":{"on":true,"remember":true,"entries":[` +
+		`{"address":"HTTPS://Example.com/a.m3u8","volume":0.5,"muted":false}]}}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, note := loadSettings(path)
+	if note == "" || !strings.Contains(note, "sourceMemory") {
+		t.Fatalf("the bad memory was not reported: %q", note)
+	}
+	if loaded.SourceMemory.On || len(loaded.SourceMemory.Entries) != 0 {
+		t.Fatalf("the bad memory was used: %+v", loaded.SourceMemory)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != body {
+		t.Fatalf("the bad file was rewritten:\n%s", after)
+	}
+}
+
+// waitForSettingsFile waits for the background write a memory change starts:
+// rememberSource owns the in-memory set, but hands the file to a goroutine.
+func waitForSettingsFile(t *testing.T, path string) (settings, string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		st, note := loadSettings(path)
+		if _, err := os.Stat(path); err == nil {
+			// Let the goroutine finish its own bookkeeping before the test ends.
+			time.Sleep(20 * time.Millisecond)
+			return st, note
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the settings file never appeared at %s", path)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }

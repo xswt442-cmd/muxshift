@@ -45,7 +45,7 @@ func workspaceBody(window *mygo.Window, a *appState, dir string) {
 	mygoRunOnMain(func() {
 		b := window.Bounds()
 		logf(scenario, "leaving on page %v at %d,%d %dx%d, rail %s, saved %v",
-			a.workspace, b.X, b.Y, b.Width, b.Height, paneModeName(a.rail), a.settingsSaved)
+			a.workspace, b.X, b.Y, b.Width, b.Height, paneModeName(a.rail), a.settingsSaved.Load())
 		check(b.Width == 1000 && b.Height == 760,
 			"the window was set to 1000x760 (it is %dx%d)", b.Width, b.Height)
 		// What closing the window does, without closing it: a scripted run that

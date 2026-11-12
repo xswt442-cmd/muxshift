@@ -259,6 +259,9 @@ func validateSettings(s settings) error {
 	if err := validateDVRBudget(s.DVR); err != nil {
 		return err
 	}
+	if err := validateSourceMemory(s.SourceMemory); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -309,6 +312,16 @@ func loadSettings(path string) (settings, string) {
 	return loaded, ""
 }
 
+// saveSettingsSerialized writes the settings file under the app's save lock. A
+// remembered preference saves from a background goroutine while Apply saves
+// from the drawing thread; without the lock the two could rename in the other
+// order and leave the older file behind.
+func (a *appState) saveSettingsSerialized(st settings) error {
+	a.settingsSave.Lock()
+	defer a.settingsSave.Unlock()
+	return saveSettings(a.settingsPath, st)
+}
+
 // saveSettings writes the settings atomically with owner-only permissions: a
 // crash mid-write must not leave a half file that the next start reads.
 func saveSettings(path string, st settings) error {
@@ -343,7 +356,19 @@ func saveSettings(path string, st settings) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(name, path)
+	// The rename replaces the file in one step, which is what makes a crash
+	// harmless. On Windows it fails while a reader still holds the target open,
+	// so a check that reads the file to watch for a write can make the write
+	// itself fail; a few short retries cover that without weakening the atomic
+	// replace.
+	var last error
+	for attempt := 0; attempt < 5; attempt++ {
+		if last = os.Rename(name, path); last == nil {
+			return nil
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return last
 }
 
 // applySettingsState copies the draft into the live settings and pushes the
@@ -427,7 +452,7 @@ func (a *appState) settingsBoundary() string {
 	switch {
 	case a.settingsPath == "":
 		return "nothing is saved: this start has no configuration directory"
-	case a.settingsSaved:
+	case a.settingsSaved.Load():
 		return "applied settings are saved to " + a.settingsPath
 	default:
 		return "applied settings are saved to " + a.settingsPath + " (this start has not written it yet)"
@@ -651,11 +676,11 @@ func (a *appState) applySettingsCommand() {
 		a.settingsErr = err.Error()
 		return
 	}
-	if err := saveSettings(a.settingsPath, next); err != nil {
+	if err := a.saveSettingsSerialized(next); err != nil {
 		a.settingsErr = fmt.Sprintf("applied, but saving failed: %v", err)
 		return
 	}
-	a.settingsSaved = true
+	a.settingsSaved.Store(true)
 	a.settingsNote = fmt.Sprintf("applied %s", a.settingsPath)
 	log.Printf("settings: applied %s", settingsSummary(next))
 }

@@ -40,7 +40,7 @@ func runSettings(window *mygo.Window, a *appState, dir string) {
 		mygoRunOnMain(func() {
 			data, err := os.ReadFile(a.settingsPath)
 			logf("settings", "live nudge step %s, volume(0.5)=%.3f, saved=%v, file=%s, read back=%v (%v)",
-				a.settingsNudge(-1), a.volumeFor(0.5), a.settingsSaved, a.settingsPath, oneLine(data), err)
+				a.settingsNudge(-1), a.volumeFor(0.5), a.settingsSaved.Load(), a.settingsPath, oneLine(data), err)
 		})
 
 		step(window, a, dir, "settings", "4-cancelled.png",
@@ -118,7 +118,7 @@ func runSettingsRestart(window *mygo.Window, a *appState, dir string) {
 		mygoRunOnMain(func() {
 			logf("settings-restart", "loaded start page %q, workspace %v, nudge step %s, default volume %.2f, master %.2f, mute unaligned %v, dock open %v, saved %v",
 				a.settings.StartPage, a.workspace, a.settingsNudge(-1), a.settings.DefaultVolume,
-				a.settings.MasterVolume, a.settings.MuteUnaligned, a.settings.DockOpen, a.settingsSaved)
+				a.settings.MasterVolume, a.settings.MuteUnaligned, a.settings.DockOpen, a.settingsSaved.Load())
 			logf("settings-restart", "the dock is %s and the window frame is %.0fx%.0f",
 				boolString(a.dock.shown(a.settings.DockOpen && a.frameHeight >= dockAutoHeight)),
 				a.frameWidth, a.frameHeight)

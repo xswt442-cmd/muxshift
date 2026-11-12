@@ -167,6 +167,91 @@ func mixerBody(window *mygo.Window, a *appState, dir string) {
 			"the row does not show the level the scene holds: %q", a.mixerLine(a.items[0]))
 	})
 
+	// The window's own Hear is exclusive, but the scene can hold two sources at
+	// once (hearBoth). Solo only means something with more than one audible
+	// source, so the switch and the return are checked here rather than claimed
+	// from the single-routed state above. The second source is aligned by
+	// nothing, so it must be allowed explicitly first: the protection wins over
+	// routing, and a solo is not a way around it.
+	var allowErr, bothErr error
+	mygoRunOnMain(func() {
+		allowErr = a.allowAudio(1)
+		bothErr = a.hearBoth(0, 1, 0.8, 0.6)
+	})
+	check(allowErr == nil, "allowing the second source: %v", allowErr)
+	check(bothErr == nil, "routing both sources: %v", bothErr)
+
+	step(window, a, dir, "mixer", "7-both-heard.png", "two sources heard at their own levels", func(a *appState) {
+		for _, line := range mixerLines(a) {
+			logf("mixer", "both routed: %s", line)
+		}
+		for i, it := range a.items {
+			if it.player == nil {
+				continue
+			}
+			check(!rawPlayer(it.player).Muted(), "source %d is silent although it is routed", i+1)
+		}
+		check(a.heard(a.items[0]) && a.heard(a.items[1]),
+			"the rows do not both say heard: %q / %q", a.mixerLine(a.items[0]), a.mixerLine(a.items[1]))
+	})
+
+	mygoRunOnMain(func() {
+		a.report(a.runCommand(command{Kind: commandSolo, Source: sourceAt(a, 0)}))
+	})
+
+	step(window, a, dir, "mixer", "8-solo-switch.png", "solo moved from one routed source to the other", func(a *appState) {
+		for _, line := range mixerLines(a) {
+			logf("mixer", "solo first: %s", line)
+		}
+		check(a.solo == sourceAt(a, 0), "solo does not name the first source: %q", a.solo)
+		if a.items[0].player != nil {
+			check(!rawPlayer(a.items[0].player).Muted(), "the soloed source is muted")
+		}
+		if a.items[1].player != nil {
+			check(rawPlayer(a.items[1].player).Muted(), "the other routed source still plays under solo")
+		}
+		check(strings.Contains(a.mixerLine(a.items[1]), "another source is soloed"),
+			"the second row does not say why it is silent: %q", a.mixerLine(a.items[1]))
+	})
+
+	mygoRunOnMain(func() {
+		a.report(a.runCommand(command{Kind: commandSolo, Source: sourceAt(a, 1)}))
+	})
+
+	step(window, a, dir, "mixer", "9-solo-switched.png", "solo switched to the second source", func(a *appState) {
+		for _, line := range mixerLines(a) {
+			logf("mixer", "solo switched: %s", line)
+		}
+		check(a.solo == sourceAt(a, 1), "solo did not switch: %q", a.solo)
+		if a.items[1].player != nil {
+			check(!rawPlayer(a.items[1].player).Muted(), "the newly soloed source is muted")
+		}
+		if a.items[0].player != nil {
+			check(rawPlayer(a.items[0].player).Muted(), "the source solo left still plays")
+		}
+	})
+
+	mygoRunOnMain(func() {
+		a.report(a.runCommand(command{Kind: commandSolo, Source: sourceAt(a, 1)}))
+	})
+
+	step(window, a, dir, "mixer", "10-both-back.png", "leaving solo restores both sources and their levels", func(a *appState) {
+		for _, line := range mixerLines(a) {
+			logf("mixer", "solo off: %s", line)
+		}
+		check(a.solo == "", "solo is still on: %q", a.solo)
+		for i, want := range []float64{0.8, 0.6} {
+			if level, routed := a.sceneLevel(a.items[i]); !routed || level.Volume != want {
+				check(false, "source %d holds %.2f in the scene, want %.2f", i+1, level.Volume, want)
+			}
+			if a.items[i].player != nil {
+				check(!rawPlayer(a.items[i].player).Muted(), "source %d stayed muted after solo", i+1)
+			}
+			check(strings.Contains(a.mixerLine(a.items[i]), "heard"),
+				"source %d does not read as heard again: %q", i+1, a.mixerLine(a.items[i]))
+		}
+	})
+
 	logf("mixer", "mixer: %d source(s), checks failed: %d", len(a.items), checks)
 	finishScenario(a)
 }

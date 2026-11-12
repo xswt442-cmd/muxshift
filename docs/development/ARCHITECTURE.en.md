@@ -181,7 +181,12 @@ see the refusal, then the routed one, then mutes everything and lifts it again.
 Audibility is measured where it matters: a separate process samples the peak of
 the default render endpoint, and the check's phases are logged with timestamps
 so the readings can be compared window by window (`mutehold` does only heard →
-muted → heard for that comparison).
+muted → heard for that comparison). The window's own `Hear` is exclusive, so
+Solo moving from one source to another is checked separately with the scene
+carrying both: the second source has to be allowed explicitly first, because the
+unaligned protection outranks routing and a solo is not a way around it. While
+the solo sits on one row the other row's player is muted; leaving it puts both
+back at the 0.80 and 0.60 the scene still holds.
 ### The listening overlay (P17.4a)
 
 Mute, master mute and solo are a listening overlay, not a mixing bus. The

@@ -62,6 +62,7 @@ var scenarios = map[string]scenario{
 	"seektxn":          runSeekTxn,
 	"interleave":       runInterleave,
 	"replayui":         runReplayUI,
+	"timeline":         runTimeline,
 	"clock":            runClock,
 	"playthrough":      runPlayThrough,
 }

@@ -383,24 +383,15 @@ func (a *appState) dockPane(c *ui.Context) {
 				a.dock = paneClosed
 			}
 		})
-		for i, it := range a.items {
-			offset := time.Duration(0)
-			if shift, ok := a.sync.timeline.Shift(it.video); ok {
-				offset = shift.Offset
-			} else if it.audio != "" {
-				if shift, ok := a.sync.timeline.Shift(it.audio); ok {
-					offset = shift.Offset
-				}
-			}
-			ui.Text(c, fmt.Sprintf("%d %s · offset %+.1fs · %s", i+1, shortURI(it.uri),
-				offset.Seconds(), dockWindow(it))).FontSize(textMicro).
-				TextColor(colorTextDim).FontFeatures("tnum")
+		for _, line := range a.timelineLines() {
+			ui.Text(c, line).FontSize(textMicro).TextColor(colorTextDim).
+				FontFeatures("tnum").SingleLine()
 		}
 		if len(a.items) == 0 {
 			ui.Text(c, "no sources").FontSize(textMicro).TextColor(colorDim)
 		}
 
-		ui.Text(c, "read-only: seeking and buffer editing arrive with the DVR work; nudges live in the inspector").
+		ui.Text(c, "read-only view: the real mapped offset, the media time the timeline asks for, and the clock the player itself reports; nudges live in the inspector").
 			FontSize(textMicro).TextColor(colorDim)
 	})
 }

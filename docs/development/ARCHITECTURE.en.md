@@ -152,6 +152,31 @@ A single-source switch (`playRecording`) and a multi-source transaction can over
 Closing the session aborts an open transaction first, so leases and players go back through the same path a failure takes. The two-second budget there is a reporting threshold, not permission to close underneath the work: a preparation may still be inside a cut, an ffprobe or a player open and still reading the buffer, so the close logs that it has waited past the budget and then waits for the preparation to return before it closes any buffer. The preparing work also checks ownership after it opens a player, and closes that player itself if the session or a newer transaction has taken over; each transaction signals when its work has returned, and closing the session waits for that signal (bounded by `seekShutdownWait`) before it closes the buffers the files were cut from. The scenario `interleave` runs both orders and the closing case in one session and reports on leases and generations (`testplace/evidence/P16/interleave.md`).
 
 The same wait cannot be allowed to hold the thread the preparation needs: a window that closes while a transaction is preparing waits for it from a close listener on the drawing thread, so every step the preparation posts to that thread is bounded (seekDispatchWait) and gives up instead of waiting forever. The post itself runs on a goroutine of the transaction, because `mygoRunOnMain` blocks until the drawing thread runs the callback, so a budget applied after it returns would never start. A step that arrives after the transaction was stopped does nothing, and every step runs under the same lock a stop takes: a stop either waits for the call the step is making inside its player, or gets there first and leaves nothing to call. That includes reading whether a player is ready: the picture check is a step like any other. A dispatch hands its result back on a private channel rather than through the caller's variables, so a step that timed out cannot write into state its caller has already returned from. Stopping a transaction also cancels the probe it started, so the close does not wait for an ffprobe whose answer no longer matters.
+### Reading the timeline without moving it (P17.1)
+
+The dock is a read-only view of what the session actually knows, one line per
+source: the track and whether it is the sync group's reference, where the
+offset came from, the offset itself, the media time the timeline maps the
+shared event time to, and the clock the player itself reports.
+
+Three things stay apart, because they answer different questions:
+
+- **The event time** is the shared time the playhead holds.
+- **The mapped media time** is what `core.Timeline.MediaTime` returns for that
+  event. It is a request, not a measurement, and it is unknown for a track
+  without a shift.
+- **The player's position** is what the player reports. A player showing a
+  recording reports a position inside that file, so the line says `file` there
+  and `stream` otherwise; the file position is not the buffer's content time
+  (see the P16 clock contract).
+
+A track with no shift reads `not aligned`, never `+0.0s`: an unknown alignment
+and an alignment that happens to be zero are different facts, and the dock used
+to print the same number for both. The reference comes from the sync group that
+exists, not from whichever source is first in the window.
+
+Drawing the view is a pure read: it sets no shift, moves no playhead and touches
+no player, so a frame that redraws the dock cannot change what a person aligned.
 ### What a replay may say about itself (P16.4c)
 
 `desktop/replay_report.go` keeps one account per transaction, and keeps two things apart that are easy to confuse:

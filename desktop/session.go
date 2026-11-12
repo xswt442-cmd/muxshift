@@ -76,6 +76,10 @@ type item struct {
 	// volume is the level this source's audio track gets when the scene plays
 	// it, kept here so the window's buttons can raise and lower it.
 	volume float64
+
+	// muted is this source's own mute. The scene keeps its routing and level;
+	// the mixer overlay decides whether the sound is heard. See mixer.go.
+	muted bool
 }
 
 // trackedRunner is one replay buffer this run opened, kept so shutdown can stop
@@ -92,6 +96,12 @@ type appState struct {
 	output  core.OutputID
 	items   []*item
 	lastErr error
+
+	// solo names the one source the mixer keeps audible, empty when nobody is
+	// soloed. masterMute silences everything while it is on. Both are listening
+	// overlays: neither edits the scene's routing or any source's own state.
+	solo       core.SourceID
+	masterMute bool
 
 	// zoom is the content zoom the frame asks for (0 = the display's own scale)
 	// and lastWidth/lastHeight are the DIPs it last laid out at. The P15.5
@@ -520,6 +530,7 @@ func (a *appState) apply() {
 	for _, level := range scene.Audio {
 		levels[level.Track] = level
 	}
+	a.dropSoloIfGone()
 	for _, it := range a.items {
 		if it.player == nil {
 			continue
@@ -532,13 +543,14 @@ func (a *appState) apply() {
 		}
 		// A source whose place on the shared timeline is unknown makes no claim
 		// about which moment of the match it is playing, so its sound stays off
-		// until someone who can see both pictures says it is safe.
-		if !level.Muted && a.settings.MuteUnaligned && !a.audible[it.audio] && !a.aligned(it) {
-			it.player.SetMuted(true)
-			continue
+		// until someone who can see both pictures says it is safe; the mixer
+		// overlay adds mute, master mute and solo on top of that.
+		muted := level.Muted || it.muted || a.masterMute || (a.solo != "" && it.source.ID != a.solo)
+		if !muted && a.protectedSilence(it) {
+			muted = true
 		}
-		it.player.SetMuted(level.Muted)
-		if !level.Muted {
+		it.player.SetMuted(muted)
+		if !muted {
 			it.player.SetVolume(a.volumeFor(level.Volume))
 		}
 	}
@@ -640,7 +652,19 @@ func (a *appState) setVolume(index int, volume float64) error {
 	if it.audio == "" {
 		return fmt.Errorf("source %d has no audio track", index+1)
 	}
-	if _, err := a.session.SetSceneAudio(a.scene, it.audio, volume, false); err != nil {
+	// The level that reaches the scene keeps whatever mute the scene already
+	// carries: changing a volume must not turn a muted track back on, which is
+	// what passing a fresh `false` here would do.
+	muted := false
+	if scene, err := a.session.Scene(a.scene); err == nil {
+		for _, level := range scene.Audio {
+			if level.Track == it.audio {
+				muted = level.Muted
+				break
+			}
+		}
+	}
+	if _, err := a.session.SetSceneAudio(a.scene, it.audio, volume, muted); err != nil {
 		return err
 	}
 	a.apply()

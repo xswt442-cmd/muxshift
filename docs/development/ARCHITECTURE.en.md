@@ -152,6 +152,35 @@ A single-source switch (`playRecording`) and a multi-source transaction can over
 Closing the session aborts an open transaction first, so leases and players go back through the same path a failure takes. The two-second budget there is a reporting threshold, not permission to close underneath the work: a preparation may still be inside a cut, an ffprobe or a player open and still reading the buffer, so the close logs that it has waited past the budget and then waits for the preparation to return before it closes any buffer. The preparing work also checks ownership after it opens a player, and closes that player itself if the session or a newer transaction has taken over; each transaction signals when its work has returned, and closing the session waits for that signal (bounded by `seekShutdownWait`) before it closes the buffers the files were cut from. The scenario `interleave` runs both orders and the closing case in one session and reports on leases and generations (`testplace/evidence/P16/interleave.md`).
 
 The same wait cannot be allowed to hold the thread the preparation needs: a window that closes while a transaction is preparing waits for it from a close listener on the drawing thread, so every step the preparation posts to that thread is bounded (seekDispatchWait) and gives up instead of waiting forever. The post itself runs on a goroutine of the transaction, because `mygoRunOnMain` blocks until the drawing thread runs the callback, so a budget applied after it returns would never start. A step that arrives after the transaction was stopped does nothing, and every step runs under the same lock a stop takes: a stop either waits for the call the step is making inside its player, or gets there first and leaves nothing to call. That includes reading whether a player is ready: the picture check is a step like any other. A dispatch hands its result back on a private channel rather than through the caller's variables, so a step that timed out cannot write into state its caller has already returned from. Stopping a transaction also cancels the probe it started, so the close does not wait for an ffprobe whose answer no longer matters.
+### The listening overlay (P17.4a)
+
+Mute, master mute and solo are a listening overlay, not a mixing bus. The
+scene keeps saying who is routed and at what level; the overlay decides what is
+heard right now:
+
+- **A source's own mute** silences that source and nothing else. It does not
+  change the level stored for it or its place in the routing.
+- **Master mute** silences everything for as long as it is on, and turning it
+  off brings back what each source said for itself.
+- **Solo** keeps one source audible and silences the others. Clicking the same
+  source again leaves solo; clicking another moves it. The other sources' volume,
+  mute and routing are untouched, so leaving solo returns the mix to what each
+  source says now — including changes made while solo was on.
+
+The unaligned protection still wins: soloing a source whose shift is unknown
+does not quietly take that protection off, and the command says so. A solo over
+a source the scene does not route is refused rather than silencing everything
+for nothing, and a solo whose source leaves the session is cleared with a log
+line.
+
+`apply()` composes the effective mute from the scene's level, the source's own
+mute, master mute, solo and the unaligned protection, and only then tells the
+player. Changing a volume keeps whatever mute the scene already carries, so
+moving a slider cannot turn a muted track back on.
+
+This build has no shared PCM bus: there is no ducking, panning, EQ or output
+device switching, and the UI must not offer them. See
+`testplace/evidence/P17/mixer-inventory.md`.
 ### Showing what a comparison found, and whether it still holds (P17.2)
 
 A probe compares two windows of audio and offers an offset. The inspector shows

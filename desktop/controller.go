@@ -45,6 +45,12 @@ const (
 	// command, not a disabled placeholder: the context it cancels is the one
 	// the probe is waiting on.
 	commandCancelImport commandKind = "cancel-import"
+	// commandMute is a source's own mute, commandSolo the listening overlay that
+	// keeps one source audible, and commandMasterMute the overlay that silences
+	// everything. None of them edits the scene's routing.
+	commandMute       commandKind = "mute"
+	commandSolo       commandKind = "solo"
+	commandMasterMute commandKind = "master-mute"
 )
 
 // UnknownSourceError names a source that is not in the session any more, which
@@ -139,7 +145,7 @@ func (a *appState) runCommand(cmd command) commandResult {
 		a.reopenPlayer(it)
 		return finish(nil, "asked for a new player; the old one stays until the new one has a picture")
 
-	case commandShow, commandHear, commandAllow, commandVolume, commandNudge:
+	case commandShow, commandHear, commandAllow, commandVolume, commandNudge, commandMute, commandSolo:
 		it, index, err := a.itemBySource(cmd.Source)
 		if err != nil {
 			return finish(err, "")
@@ -158,8 +164,16 @@ func (a *appState) runCommand(cmd command) commandResult {
 			var note string
 			note, err = a.nudge(index, cmd.Delta)
 			result.Message = note
+		case commandMute:
+			result.Message, err = a.toggleMute(index)
+		case commandSolo:
+			result.Message, err = a.toggleSolo(index)
 		}
 		return finish(err, result.Message)
+
+	case commandMasterMute:
+		result.Message = a.toggleMasterMute()
+		return finish(nil, result.Message)
 
 	case commandAdd:
 		uri := strings.TrimSpace(cmd.URI)

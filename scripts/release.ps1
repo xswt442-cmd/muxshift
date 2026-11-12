@@ -59,6 +59,12 @@ Set-Content -Path (Join-Path $out "VERSION.txt") -Encoding utf8 -Value @(
 Copy-Item (Join-Path $root "LICENSE") (Join-Path $out "LICENSE") -Force
 Copy-Item (Join-Path $root "README.md") (Join-Path $out "README.md") -Force
 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "scripts\thirdparty.ps1") -Out (Join-Path $OutRoot "$name\THIRD-PARTY.md") | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    # A release without an accurate notice is not a release: the generator
+    # names the modules the binary links, and a failure there leaves the file
+    # half-written.
+    throw "thirdparty.ps1 failed with exit code $LASTEXITCODE, so the release has no trustworthy THIRD-PARTY.md"
+}
 
 $readme = @'
 MuxShift desktop build

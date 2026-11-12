@@ -34,11 +34,11 @@ function Get-Modules([string]$workdir) {
 
 function Get-Licence([string]$dir) {
     if ([string]::IsNullOrWhiteSpace($dir) -or -not (Test-Path $dir)) {
-        return @{ Name = "module copy not on this machine"; File = $null }
+        return @{ Name = "module copy not on this machine"; File = $null; Text = $null }
     }
     $file = Get-ChildItem -Path $dir -File | Where-Object { $_.Name -match '^(LICEN[CS]E|COPYING)' } | Select-Object -First 1
     if ($null -eq $file) {
-        return @{ Name = "no licence file in the module copy"; File = $null }
+        return @{ Name = "no licence file in the module copy"; File = $null; Text = $null }
     }
     $text = [IO.File]::ReadAllText($file.FullName)
     $name = "other (see the file)"
@@ -47,7 +47,7 @@ function Get-Licence([string]$dir) {
     elseif ($text -match 'Redistribution and use in source and binary forms') { $name = "BSD" }
     elseif ($text -match 'ISC License|Permission to use, copy, modify, and/or distribute') { $name = "ISC" }
     elseif ($text -match 'Mozilla Public License') { $name = "MPL-2.0" }
-    return @{ Name = $name; File = $file.Name }
+    return @{ Name = $name; File = $file.Name; Text = $text }
 }
 
 $modules = @()
@@ -85,6 +85,36 @@ $lines.Add("| ffmpeg and ffprobe | decoding for alignment and measuring a record
 $lines.Add("| Microsoft Edge WebView2 runtime | only when the optional web control panel is started | Microsoft's terms for the runtime |")
 $lines.Add("| vocal separation weights (``tools/separate``) | not part of the desktop binary and not shipped | unconfirmed upstream; the tool asks for an explicit ``--model`` |")
 $lines.Add("")
+$lines.Add("## Licence texts")
+$lines.Add("")
+$lines.Add("Each module's own licence file is reproduced below, so a release can be")
+$lines.Add("handed on without the module cache it was built from.")
+$lines.Add("")
+foreach ($module in $modules) {
+    $text = Get-Licence $module.Dir
+    $lines.Add("### $($module.Path) $($module.Version) - $($text.Name)")
+    $lines.Add("")
+    if ($null -eq $text.Text) {
+        $lines.Add("(no licence file in the module copy; the upstream module is the authority)")
+    }
+    else {
+        $lines.Add('``````')
+        foreach ($row in ($text.Text -split "`r?`n")) { $lines.Add($row) }
+        $lines.Add('``````')
+    }
+    $lines.Add("")
+}
+$lines.Add("### hls.js light - Apache-2.0")
+$lines.Add("")
+$hlsLicence = Join-Path $root "web\vendor\hls.LICENSE"
+if (Test-Path $hlsLicence) {
+    $lines.Add('``````')
+    foreach ($row in (([IO.File]::ReadAllText($hlsLicence)) -split "`r?`n")) { $lines.Add($row) }
+    $lines.Add('``````')
+}
+else {
+    $lines.Add("(web/vendor/hls.LICENSE is missing from this checkout)")
+}
 $lines.Add("The licence texts themselves are the ones in each module's own copy; this")
 $lines.Add("notice names them so a release can be checked without reading every module.")
 

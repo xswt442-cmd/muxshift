@@ -60,9 +60,11 @@ scripts\release.ps1 -Version 0.1.0-dev
 
 The output is `dist\muxshift-<version>-windows-amd64\` holding `muxshift.exe`,
 `VERSION.txt` (version, commit, build time, sha256, and what `-version` prints),
-`THIRD-PARTY.md`, `LICENSE`, `README.md` and `RUNNING.txt`. The script refuses a
+`THIRD-PARTY.md` (the modules the binary links, with their licence texts, plus
+hls.js), `LICENSE`, `README.md` and `RUNNING.txt`. The script refuses a
 working tree with changes unless `-AllowDirty` is passed, and then names the
-build `+dirty` instead of pretending it is the commit.
+build `+dirty` instead of pretending it is the commit. If the notice generator
+fails, the release stops instead of shipping a half-written `THIRD-PARTY.md`.
 
 `scripts\verify-release.ps1` proves the build does not depend on the checkout it
 was made in: it clones the repository into a temporary directory, builds there

@@ -21,19 +21,30 @@ type dvrUsage struct {
 	recordings     int
 	recordingBytes int64
 	pending        int
+	// readErr is the playlist read that failed last, if the source is out of
+	// reach right now. It is cleared by the next read that works, so the page
+	// claims an outage only while there is one.
+	readErr string
 }
 
 // usage reads the buffer's own accounting rather than walking the directory: the
 // buffer already knows which segments and recordings it owns, and a second
 // opinion on file ownership is the thing this stage is not supposed to add.
 func (r *dvrRunner) usage() dvrUsage {
-	return dvrUsage{
+	r.mu.Lock()
+	readErr := r.lastErr
+	r.mu.Unlock()
+	usage := dvrUsage{
 		bufferBytes:    r.buffer.Bytes(),
 		segments:       len(r.buffer.Segments()),
 		recordings:     len(r.buffer.Recordings()),
 		recordingBytes: r.buffer.RecordingBytes(),
 		pending:        len(r.buffer.PendingCleanup()),
 	}
+	if readErr != nil {
+		usage.readErr = readErr.Error()
+	}
+	return usage
 }
 
 // usageLine states one buffer's live numbers in a row the diagnostics page can
@@ -41,9 +52,13 @@ func (r *dvrRunner) usage() dvrUsage {
 // next without filling the row with a timestamp.
 func (r *dvrRunner) usageLine(uri string) string {
 	usage := r.usage()
-	return fmt.Sprintf("%s · cache %s in %d segment(s) · recordings %d (%s) · pending cleanup %d · buffer %s",
+	line := fmt.Sprintf("%s · cache %s in %d segment(s) · recordings %d (%s) · pending cleanup %d · buffer %s",
 		shortURI(uri), byteLine(usage.bufferBytes), usage.segments,
 		usage.recordings, byteLine(usage.recordingBytes), usage.pending, instanceName(r.buffer.Instance()))
+	if usage.readErr != "" {
+		line += " · the source cannot be read: " + usage.readErr
+	}
+	return line
 }
 
 // instanceName shortens a buffer instance to something a row can carry. The head

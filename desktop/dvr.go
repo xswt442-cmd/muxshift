@@ -30,11 +30,12 @@ type dvrRunner struct {
 	// only be put on the stage of that source.
 	source core.SourceID
 
-	mu      sync.Mutex
-	next    int
-	started bool
-	lastErr error
-	polls   int
+	mu       sync.Mutex
+	next     int
+	started  bool
+	lastErr  error
+	failures int
+	polls    int
 	// budget is the byte limit the recordings may take, kept for reporting.
 	budget int64
 	// rec is the last recording this runner cut. It carries the media-time
@@ -108,14 +109,28 @@ func (r *dvrRunner) pollOnce() {
 	if err != nil {
 		r.mu.Lock()
 		r.lastErr = err
+		r.failures++
+		failures := r.failures
 		r.mu.Unlock()
-		log.Printf("dvr: read playlist of %s: %v", shortURI(r.uri), err)
+		// A source that is simply away fails every second. Say it once, then
+		// every tenth attempt, so the log holds the outage and not the noise.
+		if failures == 1 || failures%10 == 0 {
+			log.Printf("dvr: read playlist of %s (attempt %d): %v", shortURI(r.uri), failures, err)
+		}
 		return
 	}
 	r.mu.Lock()
 	r.polls++
+	failures := r.failures
+	if r.lastErr != nil {
+		r.lastErr = nil
+		r.failures = 0
+	}
 	next := r.next
 	r.mu.Unlock()
+	if failures > 0 {
+		log.Printf("dvr: reading %s works again after %d failed attempt(s)", shortURI(r.uri), failures)
+	}
 	added := 0
 	for _, segment := range info.Segments {
 		r.mu.Lock()

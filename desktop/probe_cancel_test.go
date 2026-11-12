@@ -121,6 +121,47 @@ func TestStoppingAProbeDropsItsResult(t *testing.T) {
 	}
 }
 
+// TestTheDecoderRecordIsClearedWhenItEnds checks the bookkeeping the reviewer
+// reproduced: once ffmpeg has exited, probePID must say 0, or every reader has
+// to guess whether a pid that once ran is still running.
+func TestTheDecoderRecordIsClearedWhenItEnds(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go is not on PATH, so the helper cannot be built")
+	}
+	bin := stallProgram(t)
+	old := decodeProgram
+	decodeProgram = bin
+	t.Cleanup(func() { decodeProgram = old })
+
+	app := &appState{sync: newSyncState()}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	started := time.Now()
+	go func() {
+		_, err := decodeEnvelope(ctx, "stall://nowhere", 0, time.Second, app.noteProbeChild)
+		done <- err
+	}()
+
+	deadline := time.Now().Add(20 * time.Second)
+	for app.probePID() == 0 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	pid := app.probePID()
+	if pid == 0 {
+		t.Fatal("the decoder never reported its pid")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatalf("the decoder with pid %d outlived its cancellation", pid)
+	}
+	if left := app.probePID(); left != 0 {
+		t.Fatalf("probePID still says %d after the decoder ended (%s)", left, time.Since(started))
+	}
+}
+
 // TestShutdownCancelsTheComparisonInFlight checks that closing the session is
 // what cancels the decoder, not a separate button the user has to find.
 func TestShutdownCancelsTheComparisonInFlight(t *testing.T) {

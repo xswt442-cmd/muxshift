@@ -300,6 +300,12 @@ func decodeEnvelope(ctx context.Context, uri string, start, length time.Duration
 	}
 	raw, readErr := io.ReadAll(stdout)
 	waitErr := command.Wait()
+	if onStart != nil {
+		// The child is gone once Wait returns, whether it exited on its own or was
+		// killed. Say so, or the session keeps naming a process that no longer
+		// exists and every later reader has to guess whether it is still running.
+		onStart(0)
+	}
 	if waitErr != nil {
 		// A cancelled comparison stopped because the session closed; say that,
 		// not the signal the kill happened to leave behind.
@@ -433,10 +439,15 @@ func (a *appState) startProbe(reference, target int) uint64 {
 	return attempt
 }
 
-// noteProbeChild records the decoder's pid. A close can then show the process
-// ended instead of assuming that cancelling a context was enough.
+// noteProbeChild records the decoder's pid, and clears it when the decoder has
+// ended (pid 0): a close can then show the process ended instead of assuming
+// that cancelling a context was enough, and no reader mistakes a pid that once
+// ran for one that still does.
 func (a *appState) noteProbeChild(pid int) {
 	a.probeChild.Store(int64(pid))
+	if pid == 0 {
+		return
+	}
 	logf("align", "the decoder runs as pid %d", pid)
 }
 

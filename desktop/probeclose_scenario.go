@@ -123,6 +123,16 @@ func probeCloseBody(window *mygo.Window, a *appState, dir string) {
 	check(after > attempt, "the close moved the attempt counter on (%d -> %d), so a late result is stale", attempt, after)
 	check(closed, "the close returned without waiting for the decoder")
 
+	// The pid is the session's record of the process, and the record has to follow
+	// the process: once the decoder has ended, a reader must not be told about a
+	// pid that no longer runs.
+	left := pid
+	for deadline := time.Now().Add(15 * time.Second); left != 0 && time.Now().Before(deadline); {
+		time.Sleep(100 * time.Millisecond)
+		left = a.probePID()
+	}
+	check(left == 0, "the decoder record is empty once it ended (pid %d)", left)
+
 	logf("probeclose", "done: %d check(s) failed", failed)
 	mygoRunOnMain(func() { mygo.App.Quit() })
 }

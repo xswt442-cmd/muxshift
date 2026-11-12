@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/egoist/mygo/ui"
 	"github.com/xswt442-cmd/muxshift/core"
 )
 
@@ -142,4 +143,55 @@ func (a *appState) lastReport() (replayReport, bool) {
 	report := a.notice
 	report.Sources = append([]replayReportSource(nil), a.notice.Sources...)
 	return report, true
+}
+
+// noticeLines turns the newest account into the few lines the workbench can
+// show. It reads only lastReport(), so a half-finished transaction is never
+// described as if it had committed.
+func (a *appState) noticeLines() []string {
+	report, ok := a.lastReport()
+	if !ok {
+		return nil
+	}
+	head := fmt.Sprintf("replay %d · event %s · %s", report.ID, formatEvent(report.Event), report.Phase)
+	if report.Reason != "" {
+		head += " · " + report.Reason
+	}
+	lines := []string{head}
+	for _, source := range report.Sources {
+		if !source.Settled {
+			lines = append(lines, fmt.Sprintf("%s: asked %s, no position reported", source.Source, source.Requested))
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("%s: asked %s, reported %s (residual %s)",
+			source.Source, source.Requested, source.Reported, source.Residual))
+	}
+	if report.Phase == replayCommitted {
+		lines = append(lines, "position settled, the frame is not confirmed")
+	}
+	return lines
+}
+
+// noticeColor keeps a committed account readable and everything else visibly
+// provisional.
+func noticeColor(phase replayPhase) ui.Color {
+	switch phase {
+	case replayCommitted:
+		return colorGood
+	case replayRefused:
+		return colorWarn
+	case replayRolledBack:
+		return colorBad
+	default:
+		return colorTextDim
+	}
+}
+
+// lastPhase reports the phase of the newest account, for colouring it.
+func (a *appState) lastPhase() replayPhase {
+	report, ok := a.lastReport()
+	if !ok {
+		return replayPreparing
+	}
+	return report.Phase
 }

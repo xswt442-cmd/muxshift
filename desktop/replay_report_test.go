@@ -171,3 +171,37 @@ func TestLastReportDoesNotRegressToAnOlderAttempt(t *testing.T) {
 		t.Fatalf("the account went back to attempt %d (%s), want 2 (refused)", report.ID, report.Phase)
 	}
 }
+
+func TestTheDockSaysOnlyWhatTheAccountKnows(t *testing.T) {
+	app := &appState{}
+	app.publishReport(replayReport{ID: 1, Event: time.Second, Phase: replayRefused, Reason: "no origin"})
+	lines := strings.Join(app.noticeLines(), "\n")
+	if !strings.Contains(lines, "refused") || !strings.Contains(lines, "no origin") {
+		t.Fatalf("a refused account does not say why: %q", lines)
+	}
+	if strings.Contains(lines, "position settled") {
+		t.Fatalf("a refused account claims a settled position: %q", lines)
+	}
+
+	app.publishReport(replayReport{ID: 2, Event: time.Second, Phase: replayCommitted, Sources: []replayReportSource{
+		{Source: "source-1", Requested: 10 * time.Millisecond, Reported: 0, Residual: -10 * time.Millisecond, Settled: true},
+	}})
+	lines = strings.Join(app.noticeLines(), "\n")
+	if !strings.Contains(lines, "reported 0s (residual -10ms)") {
+		t.Fatalf("the dock does not keep a real zero position: %q", lines)
+	}
+	if !strings.Contains(lines, "the frame is not confirmed") {
+		t.Fatalf("a committed account does not say the frame is unconfirmed: %q", lines)
+	}
+
+	app.publishReport(replayReport{ID: 3, Event: time.Second, Phase: replayRolledBack, Reason: "the player moved", Sources: []replayReportSource{
+		{Source: "source-1", Requested: time.Second, Reported: time.Second, Settled: true},
+	}})
+	lines = strings.Join(app.noticeLines(), "\n")
+	if strings.Contains(lines, "position settled") || !strings.Contains(lines, "rolled back") {
+		t.Fatalf("a rolled-back account reads as a success: %q", lines)
+	}
+	if !strings.Contains(lines, "source-1: asked 1s, reported 1s") {
+		t.Fatalf("a rolled-back account lost its measurements: %q", lines)
+	}
+}

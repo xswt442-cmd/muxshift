@@ -246,6 +246,7 @@ func (a *appState) inspectorPane(c *ui.Context, width, height float32) {
 				} else {
 					a.inspectorSession(c)
 				}
+				a.inspectorAccount(c)
 			})
 		})
 	})
@@ -398,6 +399,7 @@ func (a *appState) dockPane(c *ui.Context) {
 		if len(a.items) == 0 {
 			ui.Text(c, "no sources").FontSize(textMicro).TextColor(colorDim)
 		}
+
 		ui.Text(c, "read-only: seeking and buffer editing arrive with the DVR work; nudges live in the inspector").
 			FontSize(textMicro).TextColor(colorDim)
 	})
@@ -455,4 +457,23 @@ func (a *appState) layoutLine(width, height float32) string {
 		a.rail.shown(width >= railAutoWidth),
 		a.inspector.shown(width >= inspectorAutoWidth),
 		a.dock.shown(a.settings.DockOpen && height >= dockAutoHeight))
+}
+
+// inspectorAccount shows the newest replay account, read-only. It reads
+// lastReport() alone: a transaction still preparing, or one that was refused,
+// is never shown as a replay that happened.
+func (a *appState) inspectorAccount(c *ui.Context) {
+	lines := a.noticeLines()
+	if len(lines) == 0 {
+		return
+	}
+	tone := noticeColor(a.lastPhase())
+	ui.Box(c).Height(1).WidthPercent(100).Background(colorLine)
+	ui.Text(c, "replay").FontSize(textMicro).TextColor(colorDim)
+	for index, line := range lines {
+		text := ui.Text(c, line).FontSize(textSmall).TextColor(tone).Wrap()
+		if index == 0 {
+			text.FontFeatures("tnum")
+		}
+	}
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -97,6 +98,31 @@ func TestTheMixerOverlaysKeepEverySourceOwnState(t *testing.T) {
 	}
 	if got := a.volumeFor(first.volume); got == 0 {
 		t.Fatalf("muting a source changed its volume: %v", got)
+	}
+}
+
+func TestASourceWhosePlayerDidNotOpenIsNotCalledHeard(t *testing.T) {
+	a := mixerFixture(t)
+	first := a.items[0]
+	first.openErr = errors.New("the player never opened")
+
+	a.apply()
+	if a.heard(first) {
+		t.Fatalf("a source whose player never opened still reads as heard: %q", a.mixerLine(first))
+	}
+	if line := a.mixerLine(first); !strings.Contains(line, "its player did not open") {
+		t.Fatalf("the row does not say why nothing is audible: %q", line)
+	}
+	if got := heardList(a); !got[1] {
+		t.Fatalf("the other source was silenced too: %v", got)
+	}
+
+	// Once the source is retried successfully the reason goes away, and the row
+	// is allowed to say it is heard again.
+	first.openErr = nil
+	a.apply()
+	if !a.heard(first) {
+		t.Fatalf("a source that opened fine is still called silent: %q", a.mixerLine(first))
 	}
 }
 

@@ -137,6 +137,12 @@ func (a *appState) silences(it *item) []string {
 	if !a.routed(it) {
 		reasons = append(reasons, "not in the scene")
 	}
+	if it.openErr != nil {
+		// A source whose player never opened is silent whatever the overlay says;
+		// a row that called it heard would be lying about the one thing a mixer is
+		// supposed to report.
+		reasons = append(reasons, "its player did not open")
+	}
 	if it.muted {
 		reasons = append(reasons, "muted")
 	}

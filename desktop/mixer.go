@@ -146,6 +146,12 @@ func (a *appState) silences(it *item) []string {
 	if it.muted {
 		reasons = append(reasons, "muted")
 	}
+	if level, routed := a.sceneLevel(it); routed && level.Muted {
+		// The scene can hold a mute of its own (another surface, a restored
+		// layout). The player is muted from it, so a row that ignored it would
+		// claim a silent source is heard.
+		reasons = append(reasons, "the scene's own mute")
+	}
 	if a.masterMute {
 		reasons = append(reasons, "master mute")
 	}

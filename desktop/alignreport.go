@@ -128,6 +128,16 @@ func (a *appState) alignLines() []string {
 	return out
 }
 
+// alignState is what the inspector colours by. A fresh failure outranks an
+// older proposal's own state: the failure is the news, and it must not borrow
+// the colour of the proposal it would have replaced.
+func (a *appState) alignState() string {
+	if a.lastProbeFail != nil || a.lastProbeErr != "" {
+		return "failed"
+	}
+	return a.reportOf(a.lastProbe).state()
+}
+
 // alignLine is the one-line status summary, kept short enough for the bar.
 func (a *appState) alignLine() string {
 	if failure := a.lastProbeFail; failure != nil {

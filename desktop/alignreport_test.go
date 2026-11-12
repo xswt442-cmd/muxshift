@@ -74,6 +74,40 @@ func TestARefusedReportSaysWhyAndProposesNothing(t *testing.T) {
 	}
 }
 
+// TestARecentFailureSetsTheInspectorTone pins the colour contract: a failed
+// comparison is the news and is coloured as a failure, even while an older
+// proposal is still valid enough to be shown below it.
+func TestARecentFailureSetsTheInspectorTone(t *testing.T) {
+	app := alignApp()
+	app.lastProbe = suggestionFor("a.m3u8", "b.m3u8")
+	if got := app.alignState(); got != "proposed" {
+		t.Fatalf("a fresh proposal reads as %q, want proposed", got)
+	}
+
+	app.lastProbeErr = "c.m3u8 has no audio track to compare"
+	app.lastProbeFail = &probeFailure{
+		Reference: alignWindow{Index: 0, Source: "source-1", Track: "track-2", URI: "a.m3u8"},
+		Target:    alignWindow{Index: 2, Source: "source-3", URI: "c.m3u8"},
+		Reason:    app.lastProbeErr,
+	}
+	if got := app.alignState(); got != "failed" {
+		t.Fatalf("a failed comparison reads as %q, want failed", got)
+	}
+	if got := alignTone(app.alignState()); got != colorWarn {
+		t.Fatalf("the failure is coloured %v, want the warning colour", got)
+	}
+	if got := app.reportOf(app.lastProbe).state(); got == "failed" {
+		t.Fatalf("the older proposal's own state was rewritten as a failure")
+	}
+
+	// Clearing the failure lets the older proposal speak for itself again.
+	app.lastProbeErr = ""
+	app.lastProbeFail = nil
+	if got := app.alignState(); got != "proposed" {
+		t.Fatalf("after the failure cleared the block reads as %q, want proposed", got)
+	}
+}
+
 // A probe that finishes after somebody nudged the target no longer describes
 // the session; the report has to say so rather than show the old proposal as
 // if it were current.

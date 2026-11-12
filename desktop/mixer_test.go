@@ -229,6 +229,45 @@ func TestSoloIsDroppedWhenItsSourceLeaves(t *testing.T) {
 
 // TestVolumeDoesNotChangeMute pins the rule the mixer UI depends on: moving a
 // slider adjusts a level and nothing else.
+// TestSceneMuteCannotBeReportedAsHeard pins the row against the scene itself:
+// when the scene's own audio level is muted, the player is muted from it, so the
+// mixer must not describe that source as heard.
+func TestSceneMuteCannotBeReportedAsHeard(t *testing.T) {
+	a := mixerFixture(t)
+	players := make([]*mutePlayer, len(a.items))
+	for i, it := range a.items {
+		players[i] = &mutePlayer{fakeSeekPlayer: &fakeSeekPlayer{}}
+		it.player = players[i]
+	}
+	// Another surface can mute the scene's level without touching the item.
+	if _, err := a.session.SetSceneAudio(a.scene, a.items[0].audio, 1, true); err != nil {
+		t.Fatalf("mute the scene level: %v", err)
+	}
+	a.apply()
+
+	if players[0].muted != true {
+		t.Fatal("the scene's mute did not reach the player")
+	}
+	if a.heard(a.items[0]) {
+		t.Fatal("the mixer calls a source heard while the scene keeps it muted")
+	}
+	line := a.mixerLine(a.items[0])
+	if !strings.Contains(line, "the scene's own mute") {
+		t.Fatalf("the row does not say why the source is silent: %q", line)
+	}
+	if !strings.Contains(line, "silent") {
+		t.Fatalf("the row does not read as silent: %q", line)
+	}
+	// The mute is the scene's; reading it must not clear it.
+	level, routed := a.sceneLevel(a.items[0])
+	if !routed || !level.Muted {
+		t.Fatal("reading the mixer changed the scene's own mute")
+	}
+	if !a.heard(a.items[1]) || players[1].muted {
+		t.Fatal("the other source was affected by the scene's mute")
+	}
+}
+
 func TestVolumeDoesNotChangeMute(t *testing.T) {
 	a := mixerFixture(t)
 	it := a.items[0]

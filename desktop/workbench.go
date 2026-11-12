@@ -478,7 +478,7 @@ func (a *appState) inspectorAlign(c *ui.Context) {
 	if len(lines) == 0 {
 		return
 	}
-	tone := alignTone(a.reportOf(a.lastProbe).state())
+	tone := alignTone(a.alignState())
 	ui.Box(c).Height(1).WidthPercent(100).Background(colorLine)
 	ui.Text(c, "align").FontSize(textMicro).TextColor(colorDim)
 	for index, line := range lines {

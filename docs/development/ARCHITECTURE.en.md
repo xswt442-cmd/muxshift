@@ -159,7 +159,9 @@ output device (`system default (device switching unavailable)`), the overlay's
 own summary, a master-mute button, and one row per source with its own mute, a
 solo toggle, the exclusive `Hear`, and a volume slider. Each row ends with the
 same account the rest of the window uses: heard, or silent together with every
-reason.
+reason. The scene can hold a mute of its own, put there by another surface or a
+restored layout; the player is muted from it, so the row reports that mute as one
+more reason and never calls such a source heard, without changing the mute.
 
 Nothing on the page pretends to a capability this build does not have. A shared
 PCM bus, ducking, panning, per-source EQ, output-device switching and a level

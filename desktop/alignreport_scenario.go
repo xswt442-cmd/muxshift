@@ -121,16 +121,16 @@ func alignReportBody(window *mygo.Window, a *appState, dir string) {
 		check(false, "a failed comparison shows nothing")
 	} else {
 		check(strings.Contains(failed[0], "did not finish"),
-			"the failure is not the first line: %q", failed[0])
+			"the first line is the failure and names its own target: %q", failed[0])
 		check(strings.Contains(failed[0], "missing-for-failure"),
-			"the failure is not named after the target it compared: %q", failed[0])
+			"the failure names the target it compared: %q", failed[0])
 		check(strings.Contains(strings.Join(failed, "\n"), "an earlier comparison"),
-			"the older proposal is not marked as earlier:\n%s", strings.Join(failed, "\n"))
+			"the older proposal is marked as an earlier one:\n%s", strings.Join(failed, "\n"))
 	}
 	barred := runOnMainValue(a.alignLine)
 	logf(scenario, "the status bar reads: %s", barred)
 	check(strings.Contains(barred, "missing-for-failure"),
-		"the status bar names another source for the failure: %q", barred)
+		"the status bar names the same target as the failure: %q", barred)
 	step(window, a, dir, scenario, "3-failed.png", "the comparison that could not finish", func(*appState) {})
 
 	logf(scenario, "alignreport: %d report line(s), checks failed: %d", len(stale), failures)

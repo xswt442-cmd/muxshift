@@ -27,6 +27,9 @@ const (
 	// workspaceSettings edits the global settings; the page keeps its own draft
 	// until Apply, so Cancel is free.
 	workspaceSettings
+	// workspaceMixer edits the listening overlay: each source's mute, its level
+	// and one solo, plus a master mute. It shapes listening, not sound.
+	workspaceMixer
 	// workspaceCount is the number of pages, so a scenario can walk all of them.
 	workspaceCount
 )
@@ -40,6 +43,8 @@ func (w workspace) title() string {
 		return "Diagnostics"
 	case workspaceSettings:
 		return "Settings"
+	case workspaceMixer:
+		return "Mixer"
 	default:
 		return "Stage"
 	}

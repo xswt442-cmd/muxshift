@@ -64,6 +64,8 @@ var scenarios = map[string]scenario{
 	"replayui":         runReplayUI,
 	"timeline":         runTimeline,
 	"alignreport":      runAlignReport,
+	"mixer":            runMixer,
+	"mutehold":         runMuteHold,
 	"clock":            runClock,
 	"playthrough":      runPlayThrough,
 }

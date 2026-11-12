@@ -152,6 +152,28 @@ A single-source switch (`playRecording`) and a multi-source transaction can over
 Closing the session aborts an open transaction first, so leases and players go back through the same path a failure takes. The two-second budget there is a reporting threshold, not permission to close underneath the work: a preparation may still be inside a cut, an ffprobe or a player open and still reading the buffer, so the close logs that it has waited past the budget and then waits for the preparation to return before it closes any buffer. The preparing work also checks ownership after it opens a player, and closes that player itself if the session or a newer transaction has taken over; each transaction signals when its work has returned, and closing the session waits for that signal (bounded by `seekShutdownWait`) before it closes the buffers the files were cut from. The scenario `interleave` runs both orders and the closing case in one session and reports on leases and generations (`testplace/evidence/P16/interleave.md`).
 
 The same wait cannot be allowed to hold the thread the preparation needs: a window that closes while a transaction is preparing waits for it from a close listener on the drawing thread, so every step the preparation posts to that thread is bounded (seekDispatchWait) and gives up instead of waiting forever. The post itself runs on a goroutine of the transaction, because `mygoRunOnMain` blocks until the drawing thread runs the callback, so a budget applied after it returns would never start. A step that arrives after the transaction was stopped does nothing, and every step runs under the same lock a stop takes: a stop either waits for the call the step is making inside its player, or gets there first and leaves nothing to call. That includes reading whether a player is ready: the picture check is a step like any other. A dispatch hands its result back on a private channel rather than through the caller's variables, so a step that timed out cannot write into state its caller has already returned from. Stopping a transaction also cancels the probe it started, so the close does not wait for an ffprobe whose answer no longer matters.
+### The Mixer page (P17.4a, second step)
+
+The rail's Mixer page is the overlay's face. It shows one read-only line for the
+output device (`system default (device switching unavailable)`), the overlay's
+own summary, a master-mute button, and one row per source with its own mute, a
+solo toggle, the exclusive `Hear`, and a volume slider. Each row ends with the
+same account the rest of the window uses: heard, or silent together with every
+reason.
+
+Nothing on the page pretends to a capability this build does not have. A shared
+PCM bus, ducking, panning, per-source EQ, output-device switching and a level
+meter are named at the bottom as unavailable; the page offers no control for
+them.
+
+The windowed check (`mixer`) uses the shape this build actually has: one source
+routed at a time, held by the unaligned protection until somebody anchors it,
+and a second source outside the scene. It soloes the unrouted source first to
+see the refusal, then the routed one, then mutes everything and lifts it again.
+Audibility is measured where it matters: a separate process samples the peak of
+the default render endpoint, and the check's phases are logged with timestamps
+so the readings can be compared window by window (`mutehold` does only heard →
+muted → heard for that comparison).
 ### The listening overlay (P17.4a)
 
 Mute, master mute and solo are a listening overlay, not a mixing bus. The

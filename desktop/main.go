@@ -397,6 +397,8 @@ func (a *appState) view(c *ui.Context) {
 					a.diagnosticsPage(c)
 				case workspaceSettings:
 					a.settingsPage(c)
+				case workspaceMixer:
+					a.mixerPage(c)
 				}
 			})
 			a.inspectorPane(c, width, height)

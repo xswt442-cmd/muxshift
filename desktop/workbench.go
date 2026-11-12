@@ -190,9 +190,7 @@ func (a *appState) railPane(c *ui.Context, width, height float32) {
 				a.workspace = page
 			}
 		}
-		ui.Button(c.Key("rail-mixer"), "Mixer").Width(railWidth - 2*spaceSm).Height(34).
-			Disabled(true).
-			Tooltip("a mixer needs per-track routing the player does not expose; this build does not fake one").TextColor(colorDim)
+
 		ui.Button(c.Key("rail-dvr"), "DVR").Width(railWidth - 2*spaceSm).Height(34).
 			Disabled(true).
 			Tooltip("the replay buffer is read-only until history playback is verified").TextColor(colorDim)

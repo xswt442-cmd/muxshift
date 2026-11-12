@@ -16,9 +16,12 @@ import (
 // fakeSeekPlayer stands in for an engine player in the transaction tests: the
 // transaction only reads readiness, closes it, and hands it to an item.
 type fakeSeekPlayer struct {
-	name   string
-	ready  bool
-	closed bool
+	pauses, plays, seeks int
+	seekStarted          chan struct{}
+	seekRelease          chan struct{}
+	name                 string
+	ready                bool
+	closed               bool
 
 	// honourSeek decides whether the player reports the position it was asked
 	// for. A player that does not move is what a failed seek looks like from
@@ -40,9 +43,14 @@ func (p *fakeSeekPlayer) Duration() time.Duration { return 0 }
 func (p *fakeSeekPlayer) Volume() float64         { return 0 }
 func (p *fakeSeekPlayer) Muted() bool             { return true }
 func (p *fakeSeekPlayer) Err() error              { return nil }
-func (p *fakeSeekPlayer) Play()                   {}
-func (p *fakeSeekPlayer) Pause()                  {}
+func (p *fakeSeekPlayer) Play()                   { p.plays++ }
+func (p *fakeSeekPlayer) Pause()                  { p.pauses++ }
 func (p *fakeSeekPlayer) Seek(target time.Duration) {
+	p.seeks++
+	if p.seekStarted != nil {
+		close(p.seekStarted)
+		<-p.seekRelease
+	}
 	if p.ignoreSeeks > 0 {
 		p.ignoreSeeks--
 		return
@@ -761,5 +769,84 @@ func TestAClosedSessionDoesNotWaitForADrawingThreadItIsBlocking(t *testing.T) {
 	}
 	if report, ok := session.app.lastReport(); !ok || report.Phase != replayRolledBack {
 		t.Fatalf("the stopped transaction ended as %q, want rolled back", report.Phase)
+	}
+}
+
+// TestAStoppedTransactionDoesNotTouchAQueuedStep is the first edge: a step is
+// posted, the session stops the transaction and closes its players, and only
+// then does the posted callback run. It must not pause, seek or play a player
+// that has been given back.
+func TestAStoppedTransactionDoesNotTouchAQueuedStep(t *testing.T) {
+	session, _ := seekTxnFixture(t)
+	player := &fakeSeekPlayer{ready: true, honourSeek: true}
+	txn := settleTxnFor(session, player, time.Second)
+	session.app.seek = txn
+
+	var queued []func()
+	session.app.seekMain = func(fn func()) { queued = append(queued, fn) }
+	previousWait := handoverWait
+	handoverWait = 200 * time.Millisecond
+	defer func() { handoverWait = previousWait }()
+	err := session.app.settleSeekTxn(txn)
+	if err == nil || !strings.Contains(err.Error(), "did not run the seek step") {
+		t.Fatalf("a step the session never ran produced %v", err)
+	}
+
+	session.app.abortSeekTxn(txn, "the session is closing")
+	for _, fn := range queued {
+		fn()
+	}
+	if player.pauses != 0 || player.seeks != 0 || player.plays != 0 {
+		t.Fatalf("a queued step touched a stopped transaction's player: paused %d, seeks %d, plays %d",
+			player.pauses, player.seeks, player.plays)
+	}
+	if !player.closed {
+		t.Fatal("the stopped transaction's player was left open")
+	}
+}
+
+// TestAStopWaitsForAStepThatIsUsingItsPlayer is the second edge: the step is
+// already inside the player when the session decides to stop. The stop waits
+// for the call rather than closing the player under it.
+func TestAStopWaitsForAStepThatIsUsingItsPlayer(t *testing.T) {
+	session, _ := seekTxnFixture(t)
+	player := &fakeSeekPlayer{
+		ready:       true,
+		honourSeek:  true,
+		seekStarted: make(chan struct{}),
+		seekRelease: make(chan struct{}),
+	}
+	txn := settleTxnFor(session, player, time.Second)
+	session.app.seek = txn
+	previousWait := handoverWait
+	handoverWait = 5 * time.Second
+	defer func() { handoverWait = previousWait }()
+
+	done := make(chan struct{})
+	go func() {
+		session.app.settleSeekTxn(txn)
+		close(done)
+	}()
+	<-player.seekStarted
+
+	stopped := make(chan struct{})
+	go func() {
+		session.app.abortSeekTxn(txn, "the session is closing")
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+		t.Fatal("the stop returned while a step was still inside the player")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(player.seekRelease)
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stop did not return after the step finished")
+	}
+	if !player.closed {
+		t.Fatal("the stopped transaction's player was left open")
 	}
 }

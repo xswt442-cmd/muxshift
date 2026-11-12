@@ -429,14 +429,22 @@ func (a *appState) awaitSeekTxn(txn *seekTxn, timeout time.Duration) bool {
 	}
 }
 
-// seekStepAllowed reports whether a posted drawing-thread step may still act.
-// It is not the same question as ownership: the commit asks who owns the
-// session, while a seek step only cares whether the transaction it belongs to
-// has been stopped and its players given back.
-func (a *appState) seekStepAllowed(txn *seekTxn) bool {
-	a.seekMu.Lock()
-	defer a.seekMu.Unlock()
-	return !txn.stopped
+// seekStep runs one drawing-thread step for a transaction while holding the
+// lock that a stop takes, so a stop cannot give the player back in the middle
+// of the call: either the step runs and then the stop proceeds, or the stop
+// wins and the step does nothing. It reports whether the session ran the step
+// at all, and whether the step was allowed to act on the player.
+func (a *appState) seekStep(txn *seekTxn, step *seekTxnStep, fn func(desktopPlayer)) (dispatched, acted bool) {
+	dispatched = a.seekOnMain(func() {
+		a.seekMu.Lock()
+		defer a.seekMu.Unlock()
+		if txn.stopped || step.player == nil {
+			return
+		}
+		fn(step.player)
+		acted = true
+	})
+	return dispatched, acted
 }
 
 func (a *appState) abortSeekTxn(txn *seekTxn, why string) {
@@ -549,16 +557,16 @@ const seekSettleTolerance = 40 * time.Millisecond
 func (a *appState) settleSeekTxn(txn *seekTxn) error {
 	for _, step := range txn.steps {
 		target := step.offset
-		player := step.player
-		if !a.seekOnMain(func() {
-			if !a.seekStepAllowed(txn) {
-				return
-			}
+		dispatched, acted := a.seekStep(txn, step, func(player desktopPlayer) {
 			step.wasPlaying = player.Playing()
 			player.Pause()
 			player.Seek(target)
-		}) {
+		})
+		if !dispatched {
 			return fmt.Errorf("the session did not run the seek step within %s", seekDispatchWait)
+		}
+		if !acted {
+			return fmt.Errorf("%s was not asked to seek: the transaction had been stopped", a.name(step.item))
 		}
 	}
 	// A seek issued while a player is still settling can be dropped by the
@@ -580,7 +588,14 @@ func (a *appState) settleSeekTxn(txn *seekTxn) error {
 		short := ""
 		frames := make([]seekFrame, len(txn.steps))
 		for i, step := range txn.steps {
-			frames[i] = a.seekFrameOf(step.player)
+			dispatched, acted := a.seekStep(txn, step, func(player desktopPlayer) {
+				frames[i] = readSeekFrame(player)
+			})
+			if !dispatched {
+				frames[i].err = fmt.Errorf("the session did not report the player's state within %s", seekDispatchWait)
+			} else if !acted {
+				frames[i].err = fmt.Errorf("%s was not read: the transaction had been stopped", a.name(step.item))
+			}
 			frame := frames[i]
 			if frame.err != nil {
 				short = fmt.Sprintf("%s reports an engine error: %v", a.name(step.item), frame.err)
@@ -596,14 +611,16 @@ func (a *appState) settleSeekTxn(txn *seekTxn) error {
 					issued[i] = time.Now()
 					logf("seek", "%s did not take the first request; asking again (%d/%d)",
 						a.name(step.item), attempts[i], settleAttempts)
-					if !a.seekOnMain(func() {
-						if !a.seekStepAllowed(txn) {
-							return
-						}
-						step.player.Pause()
-						step.player.Seek(step.offset)
-					}) {
+					dispatched, acted := a.seekStep(txn, step, func(player desktopPlayer) {
+						player.Pause()
+						player.Seek(step.offset)
+					})
+					if !dispatched {
 						short = fmt.Sprintf("the session did not run the seek step within %s", seekDispatchWait)
+						break
+					}
+					if !acted {
+						short = fmt.Sprintf("%s was not asked to seek again: the transaction had been stopped", a.name(step.item))
 						break
 					}
 					stable = 0
@@ -623,15 +640,9 @@ func (a *appState) settleSeekTxn(txn *seekTxn) error {
 				if !step.wasPlaying {
 					continue
 				}
-				player := step.player
-				if !a.seekOnMain(func() {
-					if !a.seekStepAllowed(txn) {
-						return
-					}
-					player.Play()
-				}) {
-					logf("seek", "%s was not played again: the session did not run the step within %s",
-						a.name(step.item), seekDispatchWait)
+				dispatched, acted := a.seekStep(txn, step, func(player desktopPlayer) { player.Play() })
+				if !dispatched || !acted {
+					logf("seek", "%s was not played again: the step could not run", a.name(step.item))
 				}
 			}
 			landings := make([]seekLanding, 0, len(txn.steps))
@@ -695,23 +706,15 @@ type seekFrame struct {
 	err       error
 }
 
-// seekFrameOf reads one player's state on the drawing thread.
-func (a *appState) seekFrameOf(player desktopPlayer) seekFrame {
-	var frame seekFrame
-	if !a.seekOnMain(func() {
-		if player == nil {
-			return
-		}
-		frame = seekFrame{
-			position:  player.Position(),
-			ready:     player.Ready(),
-			buffering: player.Buffering(),
-			err:       player.Err(),
-		}
-	}) {
-		frame.err = fmt.Errorf("the session did not report the player's state within %s", seekDispatchWait)
+// readSeekFrame reads one player's state. It runs on the drawing thread, inside
+// the step lock, so the player cannot be given back while it is being read.
+func readSeekFrame(player desktopPlayer) seekFrame {
+	return seekFrame{
+		position:  player.Position(),
+		ready:     player.Ready(),
+		buffering: player.Buffering(),
+		err:       player.Err(),
 	}
-	return frame
 }
 
 // waitSeekPlayers gives every replacement the same handover budget a single

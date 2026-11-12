@@ -86,19 +86,24 @@ func realDPIBody(window *mygo.Window, a *appState, dir string) {
 
 	// The smallest content the workbench draws is a fixed number of DIPs; the
 	// frame around it is the title bar and border, which do not grow with the
-	// scale, so they are measured at the current window and added unmultiplied.
-	frameWidth, frameHeight := 15, 38
+	// scale, so they are added unmultiplied. They can only be measured from the
+	// start-up size the window was actually opened at, which a run may have
+	// overridden with -frame; when it does not match, the 15x38 measured at 100%
+	// in the P18.1 windows run is used and the log says so rather than calling
+	// the estimate a measurement.
+	frameWidth, frameHeight, measured := 15, 38, false
 	if bounds.Width > 0 && bounds.Height > 0 {
-		frameWidth = bounds.Width - int(1180*zoom)
-		frameHeight = bounds.Height - int(float64(700+70*len(a.items))*zoom)
-		if frameWidth < 0 || frameWidth > 60 {
-			frameWidth = 15
-		}
-		if frameHeight < 0 || frameHeight > 120 {
-			frameHeight = 38
+		fw := bounds.Width - int(1180*zoom)
+		fh := bounds.Height - int(float64(700+70*len(a.items))*zoom)
+		if fw >= 0 && fw <= 60 && fh >= 0 && fh <= 120 {
+			frameWidth, frameHeight, measured = fw, fh, true
 		}
 	}
-	logf(scenario, "the window frame measures %dx%d pixels at scale %.2f", frameWidth, frameHeight, zoom)
+	if measured {
+		logf(scenario, "the window frame measures %dx%d pixels at scale %.2f", frameWidth, frameHeight, zoom)
+	} else {
+		logf(scenario, "the window did not start at the size its frame would be measured from; using the 15x38 estimate measured at 100%% (scale %.2f)", zoom)
+	}
 
 	minWidth := int(minContentWidth*zoom) + frameWidth
 	minHeight := int(minContentHeight*zoom) + frameHeight

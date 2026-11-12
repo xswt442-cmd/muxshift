@@ -91,11 +91,18 @@ func workspaceRestoreBody(window *mygo.Window, a *appState, dir string) {
 			b.X, b.Y, b.Width, b.Height, a.workspace, paneModeName(a.rail))
 		// The claim is that the window comes back the way the file says, so the
 		// check reads what came back against what the file asked for; a frame
-		// hard-coded here would only pass for one run.
+		// hard-coded here would only pass for one run. What the file asks for is
+		// not always what a window may take: a frame saved on a larger screen or
+		// at another scale can be clamped to stay reachable, which is a correct
+		// restore rather than a failure. So the expectation is the file's frame
+		// after the same clamp the restore itself applies.
+		wantFrame := clampWorkspace(mygo.Rectangle{X: want.X, Y: want.Y, Width: want.Width, Height: want.Height},
+			mygo.Screen.Displays())
 		check(want.On, "the file asked for the window to come back")
-		check(b.X == want.X && b.Y == want.Y && b.Width == want.Width && b.Height == want.Height,
-			"the frame came back as %d,%d %dx%d (the file asked for %d,%d %dx%d)",
-			b.X, b.Y, b.Width, b.Height, want.X, want.Y, want.Width, want.Height)
+		check(b.X == wantFrame.X && b.Y == wantFrame.Y && b.Width == wantFrame.Width && b.Height == wantFrame.Height,
+			"the frame came back as %d,%d %dx%d (the file asked for %d,%d %dx%d, or %d,%d %dx%d once clamped)",
+			b.X, b.Y, b.Width, b.Height, want.X, want.Y, want.Width, want.Height,
+			wantFrame.X, wantFrame.Y, wantFrame.Width, wantFrame.Height)
 		wantPage, pageOK := parseWorkspaceID(want.Page)
 		check(pageOK && a.workspace == wantPage,
 			"the page came back as %v (the file asked for %q)", a.workspace, want.Page)

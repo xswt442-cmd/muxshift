@@ -50,7 +50,7 @@ func TestCancellingADecodeEndsTheChild(t *testing.T) {
 	go func() {
 		_, err := decodeEnvelope(ctx, "stall://nowhere", 0, time.Second, func(pid int) {
 			pids <- pid
-		})
+		}, nil)
 		done <- err
 	}()
 
@@ -139,7 +139,7 @@ func TestTheDecoderRecordIsClearedWhenItEnds(t *testing.T) {
 	done := make(chan error, 1)
 	started := time.Now()
 	go func() {
-		_, err := decodeEnvelope(ctx, "stall://nowhere", 0, time.Second, app.noteProbeChild)
+		_, err := decodeEnvelope(ctx, "stall://nowhere", 0, time.Second, app.noteProbeChild, app.clearProbeChild)
 		done <- err
 	}()
 
@@ -159,6 +159,79 @@ func TestTheDecoderRecordIsClearedWhenItEnds(t *testing.T) {
 	}
 	if left := app.probePID(); left != 0 {
 		t.Fatalf("probePID still says %d after the decoder ended (%s)", left, time.Since(started))
+	}
+}
+
+// TestAnEndedDecoderLeavesARunningOneRecorded proves the record belongs to the
+// decoder that is still running: when an older one ends after a newer one
+// started, it must not clear the newer one's pid.
+//
+// Comparisons do not overlap through the button today — a second one is refused —
+// so this is a guard on the bookkeeping, not a path a user can walk today.
+func TestAnEndedDecoderLeavesARunningOneRecorded(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go is not on PATH, so the helper cannot be built")
+	}
+	bin := stallProgram(t)
+	old := decodeProgram
+	decodeProgram = bin
+	t.Cleanup(func() { decodeProgram = old })
+
+	app := &appState{sync: newSyncState()}
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	defer cancelFirst()
+	firstDone := make(chan error, 1)
+	firstPid := make(chan int, 1)
+	go func() {
+		_, err := decodeEnvelope(firstCtx, "stall://nowhere", 0, time.Second, func(pid int) {
+			firstPid <- pid
+			app.noteProbeChild(pid)
+		}, app.clearProbeChild)
+		firstDone <- err
+	}()
+	var older int
+	select {
+	case older = <-firstPid:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the first decoder never reported its pid")
+	}
+
+	secondCtx, cancelSecond := context.WithCancel(context.Background())
+	defer cancelSecond()
+	secondDone := make(chan error, 1)
+	secondPid := make(chan int, 1)
+	go func() {
+		_, err := decodeEnvelope(secondCtx, "stall://nowhere", 0, time.Second, func(pid int) {
+			secondPid <- pid
+			app.noteProbeChild(pid)
+		}, app.clearProbeChild)
+		secondDone <- err
+	}()
+	var newer int
+	select {
+	case newer = <-secondPid:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the second decoder never reported its pid")
+	}
+
+	cancelFirst()
+	select {
+	case <-firstDone:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the first decoder outlived its cancellation")
+	}
+	if now := app.probePID(); now != newer {
+		t.Fatalf("the ended decoder %d cleared the record of the running one: probePID = %d, want %d", older, now, newer)
+	}
+
+	cancelSecond()
+	select {
+	case <-secondDone:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the second decoder outlived its cancellation")
+	}
+	if left := app.probePID(); left != 0 {
+		t.Fatalf("probePID still says %d after the last decoder ended", left)
 	}
 }
 

@@ -102,11 +102,11 @@ func (a *appState) suggestAlign(ctx context.Context, reference, target int) (ali
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 
-	first, err := decodeEnvelope(ctx, ref.URI, ref.Start, ref.Length, a.noteProbeChild)
+	first, err := decodeEnvelope(ctx, ref.URI, ref.Start, ref.Length, a.noteProbeChild, a.clearProbeChild)
 	if err != nil {
 		return alignSuggestion{}, fmt.Errorf("%s: %w", shortURI(ref.URI), err)
 	}
-	second, err := decodeEnvelope(ctx, tgt.URI, tgt.Start, tgt.Length, a.noteProbeChild)
+	second, err := decodeEnvelope(ctx, tgt.URI, tgt.Start, tgt.Length, a.noteProbeChild, a.clearProbeChild)
 	if err != nil {
 		return alignSuggestion{}, fmt.Errorf("%s: %w", shortURI(tgt.URI), err)
 	}
@@ -282,7 +282,7 @@ var decodeProgram = "ffmpeg"
 // It is started by hand rather than through Output so the caller learns the
 // child's pid while it runs: a session that closes during a comparison has to
 // show the process is gone, and only the pid can show that.
-func decodeEnvelope(ctx context.Context, uri string, start, length time.Duration, onStart func(int)) (align.Envelope, error) {
+func decodeEnvelope(ctx context.Context, uri string, start, length time.Duration, onStart, onExit func(int)) (align.Envelope, error) {
 	command := exec.CommandContext(ctx, decodeProgram, "-v", "error",
 		"-ss", seconds(start), "-t", seconds(length),
 		"-i", uri, "-map", "0:a:0", "-ac", "1", "-ar", "16000", "-f", "s16le", "-")
@@ -300,11 +300,11 @@ func decodeEnvelope(ctx context.Context, uri string, start, length time.Duration
 	}
 	raw, readErr := io.ReadAll(stdout)
 	waitErr := command.Wait()
-	if onStart != nil {
+	if onExit != nil {
 		// The child is gone once Wait returns, whether it exited on its own or was
-		// killed. Say so, or the session keeps naming a process that no longer
-		// exists and every later reader has to guess whether it is still running.
-		onStart(0)
+		// killed. Report this decoder's own pid, not "none": a comparison that
+		// overlapped another one must not forget the decoder that is still running.
+		onExit(command.Process.Pid)
 	}
 	if waitErr != nil {
 		// A cancelled comparison stopped because the session closed; say that,
@@ -439,16 +439,27 @@ func (a *appState) startProbe(reference, target int) uint64 {
 	return attempt
 }
 
-// noteProbeChild records the decoder's pid, and clears it when the decoder has
-// ended (pid 0): a close can then show the process ended instead of assuming
-// that cancelling a context was enough, and no reader mistakes a pid that once
-// ran for one that still does.
+// noteProbeChild records the decoder's pid: a close can then show the process
+// ended instead of assuming that cancelling a context was enough.
 func (a *appState) noteProbeChild(pid int) {
 	a.probeChild.Store(int64(pid))
-	if pid == 0 {
-		return
-	}
 	logf("align", "the decoder runs as pid %d", pid)
+}
+
+// clearProbeChild forgets a decoder that has ended, but only if the record still
+// names that decoder. Comparisons do not overlap today — the button refuses a
+// second one — yet a decoder that ends late must not erase the pid of one that is
+// still running: the record belongs to whoever is decoding now.
+func (a *appState) clearProbeChild(pid int) {
+	for {
+		current := a.probeChild.Load()
+		if current != int64(pid) {
+			return
+		}
+		if a.probeChild.CompareAndSwap(current, 0) {
+			return
+		}
+	}
 }
 
 // probePID is the pid of the decoder in flight, or 0 when none was started.

@@ -129,6 +129,15 @@ What it does not ship
 '@
 [IO.File]::WriteAllText((Join-Path $out "RUNNING.txt"), $readme, (New-Object Text.UTF8Encoding($false)))
 
+# The release asset is the archive, not the loose directory: the directory is
+# what was built, the zip is what a user downloads.
+$zip = "$out.zip"
+if (Test-Path $zip) { Remove-Item $zip -Force }
+Compress-Archive -Path $out -DestinationPath $zip -CompressionLevel Optimal
+$zipSha = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower()
+
 Write-Output "built $out"
 Write-Output "  $reported"
 Write-Output "  sha256 $sha"
+Write-Output "zip $zip"
+Write-Output "  sha256 $zipSha"

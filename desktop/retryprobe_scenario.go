@@ -149,6 +149,72 @@ func retryProbeBody(window *mygo.Window, a *appState, dir, scenario string) {
 	case "after":
 		phase("boundary", retryProbeBoundary, pause)
 		phase("retry-1s", retryProbeRetry, pause)
+	case "resume":
+		var pauseNote string
+		step(window, a, dir, scenario, "0-paused.png", "pause the stage before asking", func(a *appState) {
+			if len(a.items) > 0 && a.items[0].player != nil {
+				a.items[0].player.Pause()
+				pauseNote = fmt.Sprintf("stage paused at %s", a.items[0].player.Position())
+			}
+		})
+		logf(scenario, "%s", pauseNote)
+		var note string
+		mygoRunOnMain(func() {
+			a.seekText = retryProbeRetry
+			note = a.requestReplaySeek()
+		})
+		logf(scenario, "resume: request said: %s", note)
+		time.Sleep(4 * time.Second)
+		step(window, a, dir, scenario, "1-resumed.png", "resume the stage while the replacement is waiting", func(a *appState) {
+			if len(a.items) > 0 && a.items[0].player != nil {
+				a.items[0].player.Play()
+				pauseNote = fmt.Sprintf("stage resumed at %s", a.items[0].player.Position())
+			}
+		})
+		logf(scenario, "resume: %s", pauseNote)
+		if !waitSeekDone(a, 120*time.Second) {
+			logf(scenario, "resume: the transaction did not finish")
+			return
+		}
+		time.Sleep(time.Second)
+		account, _ := a.lastReport()
+		logf(scenario, "resume: the account says: %s", account.Line())
+		logf(scenario, "resume: generation %d, stage playing=%v position=%s", a.items[0].generation,
+			a.items[0].player != nil && a.items[0].player.Playing(), positionOf(a, 0))
+	case "paused":
+		phase("paused-direct", retryProbeRetry, true)
+	case "switch":
+		if len(a.items) < 2 {
+			logf(scenario, "the switch probe needs two sources")
+			return
+		}
+		logf(scenario, "sleeping 15s so the stage reaches the end of the recording")
+		time.Sleep(15 * time.Second)
+		logf(scenario, "before switching: source 1 playing=%v position=%s; source 2 playing=%v position=%s",
+			a.items[0].player != nil && a.items[0].player.Playing(), positionOf(a, 0),
+			a.items[1].player != nil && a.items[1].player.Playing(), positionOf(a, 1))
+		step(window, a, dir, scenario, "1-ended.png", "the ended recording before any switch", func(a *appState) {
+			a.showVideo(0)
+		})
+		step(window, a, dir, scenario, "2-other-source.png", "show the second source after the first recording ended", func(a *appState) {
+			if err := a.showVideo(1); err != nil {
+				logf(scenario, "show the second source: %v", err)
+			}
+		})
+		time.Sleep(2 * time.Second)
+		logf(scenario, "with the second source shown: source 1 ready=%v playing=%v position=%s; source 2 ready=%v playing=%v position=%s",
+			a.items[0].player != nil && a.items[0].player.Ready(), a.items[0].player != nil && a.items[0].player.Playing(), positionOf(a, 0),
+			a.items[1].player != nil && a.items[1].player.Ready(), a.items[1].player != nil && a.items[1].player.Playing(), positionOf(a, 1))
+		step(window, a, dir, scenario, "3-back.png", "go back to the ended recording", func(a *appState) {
+			if err := a.showVideo(0); err != nil {
+				logf(scenario, "show the recording again: %v", err)
+			}
+		})
+		time.Sleep(2 * time.Second)
+		logf(scenario, "back on the recording: source 1 ready=%v playing=%v position=%s; source 2 ready=%v playing=%v position=%s",
+			a.items[0].player != nil && a.items[0].player.Ready(), a.items[0].player != nil && a.items[0].player.Playing(), positionOf(a, 0),
+			a.items[1].player != nil && a.items[1].player.Ready(), a.items[1].player != nil && a.items[1].player.Playing(), positionOf(a, 1))
+		phase("after-switch", retryProbeRetry, pause)
 	case "replay-eof":
 		logf(scenario, "sleeping 15s so the stage reaches the end, then replaying the recording")
 		time.Sleep(15 * time.Second)

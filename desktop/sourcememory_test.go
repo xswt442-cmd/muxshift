@@ -127,13 +127,20 @@ func TestRememberedEntriesKeepTheNewestFirst(t *testing.T) {
 func TestSourceMemoryRoundTripsThroughTheFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")
+	// The entry must be absolute on the platform running the test: a Windows
+	// path is not absolute on Linux, and the save would be refused there. The
+	// stored form is the normalised one, which lowercases a path on Windows.
+	local, err := normalizeLocalIdentity(filepath.Join(dir, "local.mp4"))
+	if err != nil {
+		t.Fatalf("normalise the local path: %v", err)
+	}
 	want := defaultSettings()
 	want.SourceMemory = sourceMemory{
 		On:       true,
 		Remember: true,
 		Entries: []sourceMemoryEntry{
 			{Address: "https://example.com/a.m3u8", Volume: 0.25, Muted: true},
-			{Address: "c:\\media\\local.mp4", Volume: 1, Muted: false},
+			{Address: local, Volume: 1, Muted: false},
 		},
 	}
 	if err := saveSettings(path, want); err != nil {

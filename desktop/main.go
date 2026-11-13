@@ -131,6 +131,12 @@ var handoverWait = 10 * time.Second
 // a recording the buffer would have to drop to make room is refused, never the
 // one a player is reading.
 var (
+	retryProbeMode     string
+	retryProbePause    bool
+	retryProbeBoundary string
+	retryProbeRetry    string
+)
+var (
 	dvrDir            = filepath.Join(os.TempDir(), "muxshift-dvr")
 	dvrRetention      = 60 * time.Second
 	dvrMaxBytes       int64
@@ -703,6 +709,10 @@ func main() {
 	shotDelay := flag.Duration("shot-delay", 6*time.Second, "how long to let the first picture arrive before -shot")
 	trace := flag.Bool("trace", false, "log every player's state twice a second")
 	flag.StringVar(&replayProbeURL, "replay-url", "", "recorded playlist the replayprobe scenario opens")
+	flag.StringVar(&retryProbeMode, "retry-probe", "both", "retryprobe phase order: direct, after or both")
+	flag.BoolVar(&retryProbePause, "retry-probe-pause", false, "retryprobe: pause the stage before each request")
+	flag.StringVar(&retryProbeBoundary, "retry-probe-boundary", "0", "retryprobe: offset the boundary request asks for")
+	flag.StringVar(&retryProbeRetry, "retry-probe-retry", "5", "retryprobe: offset the direct and retry requests ask for")
 	scenario := flag.String("scenario", "", "run a scripted check: "+scenarioNames())
 	dir := flag.String("dir", "", "directory the scenario writes its PNGs into")
 	flag.StringVar(&wakeMode, "wake", wakeMode, "nudge a network player once for its first frame, or none to record what happens without it")

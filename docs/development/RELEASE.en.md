@@ -18,14 +18,15 @@ published.
    and — when the version changes — regenerates and commits
    `desktop\rsrc_windows_amd64.syso` via `scripts\winres.ps1`. The commit is
    eligible for release only after it reaches `main` through review.
-2. **Tag a green `main` head.** Run `release.yml` (manual dispatch, exact
-   version). It checks that `VERSION` matches the input, that `CHANGELOG.md`
-   has that version in both languages with no placeholders, that the tag does
-   not exist, that the commit is the current `main` head, and that the `main`
-   push CI for that commit passed. Any mismatch fails closed: no automatic
-   version bump, no forced tag, no skipped check.
-3. **Build and verify the tagged commit.** The workflow checks out the tag and
-   runs `scripts\verify-release.ps1`: two clones in different directories must
+2. **Tag a green `main` head, as its own step.** Run `tag.yml` (manual
+   dispatch, exact version). It only checks and tags, and builds nothing: the
+   input matches `VERSION`, the tag does not exist, the commit is the current
+   `main` head, and the push CI for that commit turns green. Any mismatch fails
+   closed: no automatic version bump, no forced tag, no skipped check.
+3. **Publish as a separate step, once the tag exists.** Run `release.yml`
+   (manual dispatch, same version). It confirms the tag exists and matches
+   `VERSION`, checks out that tag, and runs `scripts\verify-release.ps1`: two
+   clones in different directories must
    build identical bytes (`-trimpath`, cgo off); the binary must name the tag's
    commit, carry no path from the build machine, and carry the icon and version
    block that match `VERSION`.

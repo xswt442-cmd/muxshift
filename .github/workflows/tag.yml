@@ -1,0 +1,85 @@
+name: tag
+
+# Cuts the tag only. Publishing is a different action (release.yml, which runs
+# when the tag arrives), so tagging a commit and shipping its files stay two
+# separate, separately auditable steps.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to tag, exactly as in VERSION (for example 0.0.1)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: tag
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: check the commit and cut the tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Check version, branch head, CI and tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$VERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo "::error::the version must be x.y.z"
+            exit 1
+          fi
+          file_version="$(tr -d ' \r\n' < VERSION)"
+          if [ "$file_version" != "$VERSION" ]; then
+            echo "::error::VERSION says $file_version, not $VERSION"
+            exit 1
+          fi
+          git fetch --tags origin main
+          head_commit="$(git rev-parse HEAD)"
+          if [ "$head_commit" != "$(git rev-parse origin/main)" ]; then
+            echo "::error::releases are cut from the head of main, not from $head_commit"
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+            echo "::error::tag v$VERSION already exists"
+            exit 1
+          fi
+          # The push that put this commit on main starts its own CI run, which
+          # may not have appeared yet. Wait for a green run of this commit
+          # instead of reading a stale one, but give up rather than hang.
+          green=""
+          for attempt in $(seq 1 60); do
+            states="$(gh run list --commit "$head_commit" --branch main --limit 20 --json status,conclusion --jq '[.[] | .status + "/" + (.conclusion // "-")] | join(",")')"
+            if printf '%s' "$states" | grep -qE 'completed/(failure|cancelled|timed_out|startup_failure)'; then
+              echo "::error::the push CI for $head_commit did not pass: $states"
+              exit 1
+            fi
+            if [ -n "$states" ] && ! printf '%s' "$states" | grep -qE 'in_progress|queued|requested|waiting|pending'; then
+              green="$states"
+              break
+            fi
+            sleep 20
+          done
+          if [ -z "$green" ]; then
+            echo "::error::no green CI run for $head_commit after 20 minutes: ${states:-none}"
+            exit 1
+          fi
+          echo "ci is green for $head_commit: $green"
+      - name: Tag the commit
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$VERSION" -m "MuxShift v$VERSION"
+          git push origin "v$VERSION"

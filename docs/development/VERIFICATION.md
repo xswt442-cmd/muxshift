@@ -1,4 +1,4 @@
-﻿# Verification index
+# Verification index
 
 What exists to check this repository, what each check covers, and what it cannot cover. Statuses below are "what the last run on the maintainer's Windows machine showed"; they are not a promise about your machine.
 
@@ -23,7 +23,7 @@ go vet ./...             # in each module
 | Web session service | `go test ./web` | loopback binding, same-origin and JSON checks, path root confinement, scene rollback | passing |
 | Replay clock and replay file | `cd desktop && go test ./...` | container↔player conversion, `playerWindow`, `replayFile` refusals, ffprobe measurement against a test segment | passing |
 | Settings | `cd desktop && go test ./...` | defaults, validation ranges, save/load round trip, damaged files, live application of a draft | passing |
-| Replay seek (P16.4a–d) | `cd desktop && go test ./...`, then the `seektxn`, `interleave`, `replayui`, `seekentry` and `seekclose` scenarios | authorisation refusals, a transaction committing and rolling back, two replays interleaved, the read-only account of requested/reported/residual, the inspector entry's valid/out-of-window/concurrent requests, and a real window close during preparation | passing; audio across a switch is Pending (REPLAY-AUDIO-CONTINUITY) |
+| Replay seek (P16.4a–d) | `cd desktop && go test ./...`, then the `seektxn`, `interleave`, `replayui`, `seekentry`, `seekclose` and `seekedge` scenarios | authorisation refusals, a transaction committing and rolling back, two replays interleaved, the read-only account of requested/reported/residual, the inspector entry's valid/out-of-window/concurrent requests, a real window close during preparation, and what a fresh player does with a request at the start of a cut (`seekedge` records the measurements for P16.4e; it is evidence, not a passing target) | passing; audio across a switch is Pending (REPLAY-AUDIO-CONTINUITY); the first seek on a freshly opened player is ignored for targets below its reported floor, which P16.4e is investigating |
 
 ## 2. Scenarios (real window, real media)
 

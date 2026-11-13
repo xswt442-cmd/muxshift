@@ -54,11 +54,12 @@ jobs:
             exit 1
           fi
           # The push that put this commit on main starts its own CI run, which
-          # may not have appeared yet. Wait for a green run of this commit
-          # instead of reading a stale one, but give up rather than hang.
+          # may not have appeared yet. Wait for that CI workflow to finish green
+          # on this commit. Only the ci workflow counts: this run is also a run
+          # on the same commit, so asking for "every run" would wait on itself.
           green=""
           for attempt in $(seq 1 60); do
-            states="$(gh run list --commit "$head_commit" --branch main --limit 20 --json status,conclusion --jq '[.[] | .status + "/" + (.conclusion // "-")] | join(",")')"
+            states="$(gh run list --workflow ci.yml --commit "$head_commit" --branch main --limit 5 --json status,conclusion --jq '[.[] | .status + "/" + (.conclusion // "-")] | join(",")')"
             if printf '%s' "$states" | grep -qE 'completed/(failure|cancelled|timed_out|startup_failure)'; then
               echo "::error::the push CI for $head_commit did not pass: $states"
               exit 1

@@ -60,3 +60,25 @@ func TestTheEntryNamesTheSourceThatCannotTakePart(t *testing.T) {
 		t.Fatalf("the entry should name what is missing: %q", got)
 	}
 }
+
+// TestTheWindowIsOfferedAsACandidate guards the wording of the entry: the
+// window it shows is the intersection the buffers can offer, not a range the
+// plan has authorised, and the note says a target inside it can still be
+// refused for a source whose anchor does not explain it.
+func TestTheWindowIsOfferedAsACandidate(t *testing.T) {
+	caption := seekWindowCaption(0, 30*time.Second)
+	if caption != "Candidate common replay window: 0.0s..30.0s" {
+		t.Errorf("the window reads %q, want %q", caption, "Candidate common replay window: 0.0s..30.0s")
+	}
+	if !strings.Contains(seekAuthorizationNote, "per-source anchor authorization") {
+		t.Errorf("the note does not say a target needs per-source authorisation: %q", seekAuthorizationNote)
+	}
+	if !strings.Contains(seekAuthorizationNote, "may be refused") {
+		t.Errorf("the note does not say a target can be refused: %q", seekAuthorizationNote)
+	}
+	for _, claim := range []string{"the window is authorised", "authorised window", "authorised range"} {
+		if strings.Contains(strings.ToLower(seekAuthorizationNote), claim) {
+			t.Errorf("the note claims the window as a whole is authorised: %q", seekAuthorizationNote)
+		}
+	}
+}

@@ -461,6 +461,18 @@ func (a *appState) layoutLine(width, height float32) string {
 		a.dock.shown(a.settings.DockOpen && height >= dockAutoHeight))
 }
 
+// seekWindowCaption labels the window the entry offers before a target is
+// chosen. It is the candidate intersection of the sources' buffers, not a range
+// PlanSeek has authorised: every target is still authorised per source.
+func seekWindowCaption(start, end time.Duration) string {
+	return "Candidate common replay window: " + formatEvent(start) + ".." + formatEvent(end)
+}
+
+// seekAuthorizationNote says what the candidate window does not promise. A
+// target inside it can still be refused for a source whose own anchor does not
+// explain it, so the panel never presents the whole window as authorised.
+const seekAuthorizationNote = "A target inside this window still requires per-source anchor authorization. Some targets may be refused."
+
 // inspectorSeek is the one place the window asks for a replay seek. It offers
 // only the intersection every buffering source can show, takes a number of
 // seconds into that window, and hands the request to startSeekTxn: the UI never
@@ -479,7 +491,7 @@ func (a *appState) inspectorSeek(c *ui.Context) {
 	a.seekMu.Unlock()
 	ui.Box(c).Height(1).WidthPercent(100).Background(colorLine)
 	ui.Text(c, "replay seek").FontSize(textMicro).TextColor(colorDim)
-	a.detailRow(c, "window", fmt.Sprintf("%s..%s", formatEvent(start), formatEvent(end)))
+	ui.Text(c, seekWindowCaption(start, end)).FontSize(textSmall).TextColor(colorDim).Wrap().SingleLine()
 	ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).WidthPercent(100).Children(func() {
 		c.Key("seek-seconds")
 		ui.TextInput(c, &a.seekText).Grow(1).Height(26).
@@ -499,6 +511,8 @@ func (a *appState) inspectorSeek(c *ui.Context) {
 	if a.seekNote != "" {
 		ui.Text(c, a.seekNote).FontSize(textMicro).TextColor(colorDim).Wrap()
 	}
+	ui.Text(c, seekAuthorizationNote).
+		FontSize(textMicro).TextColor(colorDim).Wrap().Padding(spaceSm, 0)
 	ui.Text(c, "a commit means the players report the position asked for; it does not confirm the frame.").
 		FontSize(textMicro).TextColor(colorDim).Wrap().Padding(spaceSm, 0)
 }

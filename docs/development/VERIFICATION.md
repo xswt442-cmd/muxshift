@@ -56,21 +56,30 @@ the commit it names come from git and the third-party notice comes from what the
 binary links:
 
 ```powershell
-scripts\release.ps1 -Version 0.1.0-dev
+scripts\release.ps1
 ```
 
-The output is `dist\muxshift-<version>-windows-amd64\` holding `muxshift.exe`,
-`VERSION.txt` (version, commit, build time, sha256, and what `-version` prints),
-`THIRD-PARTY.md` (the modules the binary links, with their licence texts, plus
-hls.js), `LICENSE`, `README.md` and `RUNNING.txt`. The script refuses a
-working tree with changes unless `-AllowDirty` is passed, and then names the
-build `+dirty` instead of pretending it is the commit. If the notice generator
-fails, the release stops instead of shipping a half-written `THIRD-PARTY.md`.
+The version comes from `VERSION` at the repository root; the script refuses
+anything that is not `x.y.z`, and refuses a directory whose Windows version
+block disagrees with it. The output is `dist\muxshift-<version>-windows-amd64\`
+holding `muxshift.exe`, `VERSION.txt` (version, commit, build time, sha256, and
+what `-version` prints), `THIRD-PARTY.md` (the modules the binary links, with
+their licence texts, plus hls.js), `LICENSE`, `README.md`, `README.en.md` and
+`RUNNING.txt`. The script refuses a working tree with changes unless
+`-AllowDirty` is passed, and then names the build `+dirty` instead of pretending
+it is the commit. If the notice generator fails, the release stops instead of
+shipping a half-written `THIRD-PARTY.md`.
 
 `scripts\verify-release.ps1` proves the build does not depend on the checkout it
 was made in: it clones the repository into a temporary directory, builds there
 with the same script, runs `-version`, and checks the binary names the clone's
 commit, carries no path from the building machine (`-trimpath`), carries the icon and the version block from `desktop\rsrc_windows_amd64.syso` (read from the PE resource directory, not scanned for), and that two builds of the same commit give the same bytes.
+
+`desktop\rsrc_windows_amd64.syso` is generated, not written by hand:
+`scripts\winres.ps1` rebuilds it from `desktop\icon.ico` and `VERSION`, and the
+result is committed so a build needs neither the tool nor a network. The steps
+from a green commit to a published tag are in
+[RELEASING.md](RELEASING.md); this section only says what the build produces.
 
 What a release does **not** carry: no sample media, no vocal-separation weights,
 no ffmpeg. `RUNNING.txt` says what the machine has to provide.

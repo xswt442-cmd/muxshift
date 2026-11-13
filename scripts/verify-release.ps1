@@ -6,12 +6,18 @@
 # it, which -trimpath is what makes true.
 param(
     [string]$Ref = "HEAD",
-    [string]$Version = "0.1.0-dev",
+    # Empty means "read VERSION at the repository root".
+    [string]$Version = "",
     [string]$WorkDir = ""
 )
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    $versionFile = Join-Path $root "VERSION"
+    if (-not (Test-Path $versionFile)) { throw "no VERSION file at $versionFile" }
+    $Version = (Get-Content $versionFile -Raw).Trim()
+}
 if ([string]::IsNullOrWhiteSpace($WorkDir)) {
     $WorkDir = Join-Path ([IO.Path]::GetTempPath()) ("muxshift-verify-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
 }

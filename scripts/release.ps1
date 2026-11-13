@@ -8,13 +8,25 @@
 # nothing reads a path from this working copy: -trimpath keeps the checkout out
 # of the binary.
 param(
-    [string]$Version = "0.1.0-dev",
+    # Empty means "read VERSION at the repository root"; pass -Version only to
+    # build a one-off, never for a release.
+    [string]$Version = "",
     [string]$OutRoot = "dist",
     [switch]$AllowDirty
 )
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    $versionFile = Join-Path $root "VERSION"
+    if (-not (Test-Path $versionFile)) {
+        throw "no VERSION file at $versionFile; a release needs one"
+    }
+    $Version = (Get-Content $versionFile -Raw).Trim()
+}
+if ($Version -notmatch '^\d+\.\d+\.\d+$') {
+    throw "the version '$Version' is not x.y.z; put the release version in VERSION, without a suffix"
+}
 $commit = (& git -C $root rev-parse --short HEAD).Trim()
 $dirty = (& git -C $root status --porcelain)
 if ($dirty -and -not $AllowDirty) {
@@ -66,6 +78,7 @@ Set-Content -Path (Join-Path $out "VERSION.txt") -Encoding utf8 -Value @(
 
 Copy-Item (Join-Path $root "LICENSE") (Join-Path $out "LICENSE") -Force
 Copy-Item (Join-Path $root "README.md") (Join-Path $out "README.md") -Force
+Copy-Item (Join-Path $root "README.en.md") (Join-Path $out "README.en.md") -Force
 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "scripts\thirdparty.ps1") -Out (Join-Path $OutRoot "$name\THIRD-PARTY.md") | Out-Null
 if ($LASTEXITCODE -ne 0) {
     # A release without an accurate notice is not a release: the generator
@@ -101,6 +114,8 @@ What it does not ship
 * No media, no sample streams, and no vocal-separation weights.
 * The third-party notice beside this file lists the Go modules the binary links
   and the licences of the copies it was built from.
+* README.md is the Chinese README; README.en.md is the English one. Both are the
+  repository's, not a version written for the release.
 '@
 [IO.File]::WriteAllText((Join-Path $out "RUNNING.txt"), $readme, (New-Object Text.UTF8Encoding($false)))
 

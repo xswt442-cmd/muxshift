@@ -14,7 +14,7 @@ MuxShift 只有一个发行产品：Windows amd64 桌面版 ZIP。版本、更�
 1. **版本准备随功能或修复的 PR 一起完成，不单独开版本 PR。** 同一提交里更新 `VERSION`、`CHANGELOG.md` 的双语条目，如果版本号变化还要运行 `scripts\winres.ps1` 重新生成并提交 `desktop\rsrc_windows_amd64.syso`。合入 `dev`、再经审查合入 `main` 后，该提交才具备发布资格。
 2. **打标签是独立的一步：运行 `tag.yml`（手动触发，输入精确版本）。** 它只核对并打标签，不构建任何产物：`VERSION` 与输入一致、目标标签不存在、提交等于当前 `main` 头部，并等该提交的 `main` push CI 变为绿色。任一项不满足就失败关闭，不做自动版本提交、不强制打标签、不跳过检查。
 3. **发布是另一独立步骤：标签存在后运行 `release.yml`（手动触发，同一版本）。** 它先确认标签已存在、`VERSION` 与标签一致，再检出该标签构建，跑 `scripts\verify-release.ps1`：从两个不同目录各克隆一次并构建，要求字节一致（`-trimpath`、关闭 cgo）、二进制自述提交与标签提交相同、不含构建机器路径、PE 资源里有图标与版本块、版本块与 `VERSION` 一致。`release.yml` 从不创建或移动标签。
-4. **生成 Release 正文。** 正文由 `scripts\release-notes.ps1 -Tag vX.Y.Z` 从 `CHANGELOG.md` 提取，标题只写 `MuxShift vX.Y.Z`；正文分 `### 简体中文` 与 `### English` 两个区块，安装、运行要求与校验信息放进对应语言区块，不在末尾追加中英混排内容。
+4. **生成 Release 正文。** 正文由 `scripts\release-notes.ps1 -Tag vX.Y.Z -Asset <zip>` 生成：版本章节从 `CHANGELOG.md` 提取，标题只写 `MuxShift vX.Y.Z`；随后按实际产出的 ZIP 追加「下载」与「校验下载」两节（文件名、大小、SHA-256、下载链接），中文在前、English 在后，不在末尾追加中英混排内容。
 5. **创建 Release 草稿并核对后再公开。** 草稿里应只有本次真实产出的 ZIP 与 `VERSION.txt`，SHA-256 与文件一致。公开后不移动标签、不替换二进制；说明有误只改正文。
 
 ## 更新记录规则

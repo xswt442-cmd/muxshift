@@ -75,7 +75,10 @@ jobs:
         shell: pwsh
         env:
           VERSION: ${{ inputs.version }}
-        run: ./scripts/release-notes.ps1 -Tag "v$env:VERSION" -Out release-notes.md
+        run: |
+          $dir = "dist/muxshift-$env:VERSION-windows-amd64"
+          if (-not (Test-Path "$dir.zip")) { throw "$dir.zip was not built" }
+          ./scripts/release-notes.ps1 -Tag "v$env:VERSION" -Asset "$dir.zip" -Out release-notes.md
       - name: Draft the release
         shell: pwsh
         env:

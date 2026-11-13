@@ -30,9 +30,12 @@ published.
    build identical bytes (`-trimpath`, cgo off); the binary must name the tag's
    commit, carry no path from the build machine, and carry the icon and version
    block that match `VERSION`.
-4. **Generate the release body** with `scripts\release-notes.ps1 -Tag vX.Y.Z`.
-   The title is only `MuxShift vX.Y.Z`; the body has `### 简体中文` then
-   `### English`, each with the install, runtime and checksum facts inside it.
+4. **Generate the release body** with
+   `scripts\release-notes.ps1 -Tag vX.Y.Z -Asset <zip>`. The version section
+   comes from `CHANGELOG.md` and the title is only `MuxShift vX.Y.Z`; a
+   downloads section and a checksums section are then added from the archive
+   that was actually built (file name, size, SHA-256, link), Chinese block
+   first and English second.
 5. **Create the release as a draft, check it, then publish.** The draft holds
    only the assets this version produced, and the SHA-256 must match the file.
    Published tags are not moved and published binaries are not replaced; a

@@ -942,3 +942,66 @@ func TestAStopWaitsForAPictureCheckThatIsReading(t *testing.T) {
 	// gave the player back.
 	<-checked
 }
+
+// TestWaitingForAPictureAsksForFrames covers the repair for a paused stage.
+// The replacement only produces its first frame when the window draws, and a
+// paused stage stops the window from drawing on its own; the wait therefore
+// asks for a frame on every poll and stops asking the moment the picture
+// arrives.
+func TestWaitingForAPictureAsksForFrames(t *testing.T) {
+	session, _ := seekTxnFixture(t)
+	var frames atomic.Int64
+	session.app.requestFrame = func() { frames.Add(1) }
+	player := &fakeSeekPlayer{ready: true, readyStarted: make(chan struct{}), readyRelease: make(chan struct{})}
+	txn := settleTxnFor(session, player, time.Second)
+	session.app.seek = txn
+	session.app.seekStarted = nil
+
+	done := make(chan error, 1)
+	go func() { done <- session.app.waitSeekPlayers(txn) }()
+	select {
+	case <-player.readyStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the picture check never asked the player whether it was ready")
+	}
+	if frames.Load() == 0 {
+		t.Fatal("the picture check asked for no frame while it waited")
+	}
+	close(player.readyRelease)
+	if err := <-done; err != nil {
+		t.Fatalf("the picture arrived, yet the check failed: %v", err)
+	}
+	settled := frames.Load()
+	time.Sleep(500 * time.Millisecond)
+	if frames.Load() != settled {
+		t.Fatalf("the check asked for %d more frames after it returned", frames.Load()-settled)
+	}
+}
+
+// TestAFailedPictureWaitStopsAskingForFrames is the other end of the same
+// lifecycle: when the budget runs out the wait stops, it does not keep the
+// window awake for the rest of the session.
+func TestAFailedPictureWaitStopsAskingForFrames(t *testing.T) {
+	session, _ := seekTxnFixture(t)
+	var frames atomic.Int64
+	session.app.requestFrame = func() { frames.Add(1) }
+	player := &fakeSeekPlayer{ready: false}
+	txn := settleTxnFor(session, player, time.Second)
+	session.app.seek = txn
+	session.app.seekStarted = nil
+	previousWait := handoverWait
+	handoverWait = 400 * time.Millisecond
+	defer func() { handoverWait = previousWait }()
+
+	if err := session.app.waitSeekPlayers(txn); err == nil {
+		t.Fatal("the picture never arrived, yet the check passed")
+	}
+	waited := frames.Load()
+	if waited == 0 {
+		t.Fatal("the failing wait asked for no frame at all")
+	}
+	time.Sleep(500 * time.Millisecond)
+	if frames.Load() != waited {
+		t.Fatalf("the failed wait asked for %d more frames after it returned", frames.Load()-waited)
+	}
+}

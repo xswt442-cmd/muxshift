@@ -619,6 +619,9 @@ func (a *appState) settleSeekTxn(txn *seekTxn) error {
 		frames := make([]seekFrame, len(txn.steps))
 		for i, step := range txn.steps {
 			out, dispatched := a.seekStep(txn, step, func(player desktopPlayer) stepOutcome {
+				// The same reasoning as the picture wait: settling a paused
+				// stage keeps the window awake while the transaction runs.
+				a.invalidate()
 				return stepOutcome{frame: readSeekFrame(player)}
 			})
 			switch {
@@ -769,6 +772,11 @@ func (a *appState) waitSeekPlayers(txn *seekTxn) error {
 		pending := ""
 		for _, step := range txn.steps {
 			out, dispatched := a.seekStep(txn, step, func(player desktopPlayer) stepOutcome {
+				// A paused stage stops the window from repainting, and a
+				// replacement player only produces its first frame when it is
+				// drawn. Ask for a frame on every poll: bounded by this loop,
+				// gone the moment the picture arrives or the budget runs out.
+				a.invalidate()
 				return stepOutcome{started: a.seekPlayerStarted(player)}
 			})
 			if !dispatched {

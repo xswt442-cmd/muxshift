@@ -77,6 +77,7 @@ var scenarios = map[string]scenario{
 	"seekboundary":         runSeekBoundary,
 	"seekentry":            runSeekEntry,
 	"seekrefuse":           runSeekRefuse,
+	"seekpaused":           runSeekPaused,
 	"retryprobe":           runRetryProbe,
 	"seekclose":            runSeekClose,
 	"seekedge":             runSeekEdge,

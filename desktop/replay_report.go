@@ -58,6 +58,12 @@ type replayReport struct {
 	Phase   replayPhase
 	Reason  string
 	Sources []replayReportSource
+
+	// Kind says which request this account belongs to: a seek inside a stage
+	// that is already replaying, or an entry from the live stage. They share
+	// the numbering and the transaction, but a user must not read a failed
+	// entry as a failed seek.
+	Kind replayKind
 }
 
 // Published is the only question a surface may ask to decide whether the
@@ -82,6 +88,9 @@ func (r replayReport) Line() string {
 		parts = append(parts, fmt.Sprintf("%s requested %s, no position", source.Source, source.Requested))
 	}
 	line := fmt.Sprintf("replay %d for event %s: %s", r.ID, r.Event, r.Phase)
+	if r.Kind == replayKindEnter {
+		line = fmt.Sprintf("enter replay %d at %s: %s", r.ID, r.Event, r.Phase)
+	}
 	if r.Reason != "" {
 		line += ": " + r.Reason
 	}
@@ -101,7 +110,11 @@ var replaySeq atomic.Uint64
 // returned value owns its slice: later changes to the transaction do not
 // rewrite a report a caller already holds.
 func (txn *seekTxn) reportFor(phase replayPhase, reason string) replayReport {
-	report := replayReport{ID: txn.id, Event: txn.event, Phase: phase, Reason: reason}
+	kind := txn.kind
+	if kind == "" {
+		kind = replayKindSeek
+	}
+	report := replayReport{ID: txn.id, Event: txn.event, Phase: phase, Reason: reason, Kind: kind}
 	for _, step := range txn.steps {
 		source := replayReportSource{Source: step.item.source.ID, Requested: step.offset}
 		if step.measured {

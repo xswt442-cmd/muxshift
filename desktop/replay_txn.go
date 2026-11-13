@@ -66,6 +66,13 @@ type seekTxn struct {
 	event time.Duration
 	plan  dvr.SeekPlan
 
+	// kind names the request this transaction executes. A seek starts from a
+	// stage that is already replaying; an entry starts from the live stage.
+	// The preparation, settlement, commit and rollback are shared, but the
+	// account and the identity snapshot are not: an entry's stage was live,
+	// so it cannot be confirmed with the rules that confirm a replay seat.
+	kind replayKind
+
 	// prepared is the plan rebuilt from the recordings that were really cut.
 	// The transaction commits only while that plan still matches the session.
 	prepared dvr.SeekPlan

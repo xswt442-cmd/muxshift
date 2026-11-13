@@ -1,26 +1,32 @@
 <div align="center">
   <img src="web/icon.svg" alt="MuxShift" width="88" height="88">
   <h1>MuxShift</h1>
-  <p>Combine several media sources and control them on one timeline</p>
+  <p>Several media sources in one session: a scene picks what is seen and heard, and one event timeline aligns them</p>
   <p>
     <a href="README.md">中文</a> ·
-    <a href="docs/development/ARCHITECTURE.en.md">Architecture</a> ·
-    <a href="docs/development/VERIFICATION.md">Verification index</a>
+    <a href="https://github.com/xswt442-cmd/muxshift/releases">Download</a> ·
+    <a href="CHANGELOG.md">Changelog</a> ·
+    <a href="docs/development/RELEASE.en.md">Release process</a>
   </p>
   <p>
     <a href="https://github.com/xswt442-cmd/muxshift/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/xswt442-cmd/muxshift/actions/workflows/ci.yml/badge.svg?branch=dev"></a>
+    <a href="https://github.com/xswt442-cmd/muxshift/releases"><img alt="release" src="https://img.shields.io/badge/release-v0.0.1-5d77f5"></a>
     <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-5d77f5"></a>
     <a href="go.mod"><img alt="Go 1.27" src="https://img.shields.io/badge/go-1.27-5d77f5"></a>
-    <a href="VERSION"><img alt="release" src="https://img.shields.io/badge/release-v0.0.1-5d77f5"></a>
   </p>
 </div>
 
-Put several media sources into one session, let a scene decide which one is
-seen and which ones are heard, and align them on one event timeline.
+An early prototype: it attaches sources, switches between them, aligns them by
+hand, and lands on a position inside a replay. Capture, mixing and automatic
+cross-source sync are not built.
 
-An early prototype, not a finished product: it can attach sources, switch
-between them, align them by hand, and cut a recording and land on a position
-inside a replay. Capture, mixing and automatic cross-source sync are not built.
+## Download
+
+[Releases](https://github.com/xswt442-cmd/muxshift/releases) ship a Windows amd64
+ZIP (`muxshift-0.0.1-windows-amd64.zip`); unzip it and run `muxshift.exe`. It
+needs Windows 10/11 and the Media Foundation that ships with it. The archive
+carries `VERSION.txt`, `THIRD-PARTY.md` and the checksum; building from source is
+under [quick start](#quick-start).
 
 ## What works
 
@@ -54,9 +60,6 @@ go test ./...
 cd desktop && go test ./...
 ```
 
-What each check covers, and what can only run in a real window, is in the
-[verification index](docs/development/VERIFICATION.md).
-
 Desktop app (Windows, opens a real window):
 
 ```sh
@@ -76,18 +79,17 @@ It prints a `http://127.0.0.1:<port>/?token=<token>` URL; the token appears
 once, the page trades it for an HttpOnly cookie and removes it from the address
 bar.
 
-## Releases
+## Documentation
 
-The current version is **v0.0.1**: a Windows amd64 ZIP built from a clean
-commit, with `VERSION.txt`, `THIRD-PARTY.md` and a reproducible sha256. Building,
-verifying, tagging and publishing are described in
-[RELEASING.md](docs/development/RELEASING.md). Release notes list only what has
-been verified; they do not promise a roadmap.
+| Document | Contents |
+| --- | --- |
+| [Architecture](docs/development/ARCHITECTURE.en.md) | Module boundaries, data flow, the replay clock contract and known limits |
+| [Verification index](docs/development/VERIFICATION.md) | What each check covers, and what only a real window can show |
+| [Changelog](CHANGELOG.md) | What each version added, improved and fixed |
+| [Release process](docs/development/RELEASE.en.md) | Maintainers: version, tag, build verification and publishing |
 
 ## Limits
 
-- Sources can be imported while running: the card appears and the player shows
-  its picture soon after; a bad address reports an error and leaves no card.
 - **Entering a replay from live is not offered**: there is no toolbar button and
   no shortcut. The internal planning and transaction code exists, but a test
   keeps it out of the shipped paths.
@@ -102,23 +104,18 @@ been verified; they do not promise a roadmap.
 - A first seek at the very edge of a recording can fail intermittently and roll
   back safely; the rate has not been measured. The web client does not do
   alignment or replay, and its seeks stay inside what the browser buffered.
+- A source imported while running joins playback once its player shows a
+  picture; a bad address only reports an error and leaves no empty card.
 
 ## Layout
 
 | Path | Contents |
 | --- | --- |
-| `core/` | session model and event timeline |
-| `core/hls/` | playlist intake and track probing |
-| `core/dvr/` | DVR buffer, gaps and recording cuts |
+| `core/` | session model, event timeline, HLS intake and DVR buffer |
 | `desktop/` | MyGo desktop app and scripted checks |
-| `web/` | loopback session server and page |
-| `extension/` | extension and native host |
+| `web/`, `extension/` | loopback web session, browser extension and native host |
 | `tools/` | separation, alignment and design tokens |
 | `docs/development/` | architecture, verification index, release process |
-
-Module states and dependency directions are in the
-[architecture note](docs/development/ARCHITECTURE.en.md), including the web
-client's token, origin and path limits.
 
 ## License
 

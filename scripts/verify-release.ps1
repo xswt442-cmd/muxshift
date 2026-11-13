@@ -112,12 +112,20 @@ Write-Output "ok: the version block says $($info.ProductName) $($info.FileVersio
 $sha = (Get-FileHash -Algorithm SHA256 $exe).Hash.ToLower()
 Write-Output "sha256 $sha"
 
-# The same commit built twice has to give the same bytes, or a checksum in a
-# VERSION.txt file says nothing about what a person downloaded.
-& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $clone "scripts\release.ps1") -Version $Version -OutRoot "dist2" | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "the second build failed" }
-$again = (Get-FileHash -Algorithm SHA256 (Join-Path $clone "dist2\muxshift-$Version-windows-amd64\muxshift.exe")).Hash.ToLower()
+# The same commit built in two different directories has to give the same
+# bytes, or a checksum in VERSION.txt says nothing about what a person
+# downloaded. A second clone at another path is the actual claim: rebuilding in
+# the same directory would not catch a path baked into the binary.
+$clone2 = Join-Path $WorkDir "clone-elsewhere"
+Write-Output "cloning again into $clone2"
+& git clone -q --no-hardlinks $root $clone2
+if ($LASTEXITCODE -ne 0) { throw "the second clone failed" }
+& git -C $clone2 checkout -q $Ref
+if ($LASTEXITCODE -ne 0) { throw "checkout $Ref in the second clone failed" }
+& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $clone2 "scripts\release.ps1") -Version $Version -OutRoot "dist" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "the build in the second clone failed" }
+$again = (Get-FileHash -Algorithm SHA256 (Join-Path $clone2 "dist\muxshift-$Version-windows-amd64\muxshift.exe")).Hash.ToLower()
 if ($again -ne $sha) {
-    throw "two builds of the same commit differ: $sha then $again"
+    throw "the same commit built in two directories differs: $sha then $again"
 }
-Write-Output "ok: the same commit built twice gives the same bytes"
+Write-Output "ok: the same commit built in two directories gives the same bytes"

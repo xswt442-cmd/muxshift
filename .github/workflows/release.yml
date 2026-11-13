@@ -1,0 +1,117 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release, exactly as in VERSION (for example 0.0.1)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    name: check the version and tag it
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check version, branch head, CI and tag
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$VERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo "::error::the version must be x.y.z"
+            exit 1
+          fi
+          file_version="$(tr -d ' \r\n' < VERSION)"
+          if [ "$file_version" != "$VERSION" ]; then
+            echo "::error::VERSION says $file_version, not $VERSION"
+            exit 1
+          fi
+          git fetch --tags origin main
+          head_commit="$(git rev-parse HEAD)"
+          if [ "$head_commit" != "$(git rev-parse origin/main)" ]; then
+            echo "::error::releases are cut from the head of main, not from $head_commit"
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+            echo "::error::tag v$VERSION already exists"
+            exit 1
+          fi
+          conclusions="$(gh run list --commit "$head_commit" --branch main --limit 20 --json conclusion --jq '[.[].conclusion] | join(",")')"
+          if [ -z "$conclusions" ] || printf '%s' "$conclusions" | grep -qv '^\(success,\)*success$'; then
+            echo "::error::the push CI for $head_commit is not green: $conclusions"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Tag the commit
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$VERSION" -m "MuxShift v$VERSION"
+          git push origin "v$VERSION"
+
+  build:
+    name: build and draft the release
+    needs: guard
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/v${{ needs.guard.outputs.version }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            desktop/go.sum
+      - name: Build the release archive
+        shell: pwsh
+        run: ./scripts/release.ps1
+      - name: Verify the archive and the binary
+        shell: pwsh
+        run: |
+          $tree = (git status --porcelain).Length
+          if ($tree -ne 0) { throw "the tree is dirty after building the release" }
+          ./scripts/verify-release.ps1 -Ref "v${{ needs.guard.outputs.version }}"
+      - name: Extract the release notes
+        shell: pwsh
+        run: ./scripts/release-notes.ps1 -Tag "v${{ needs.guard.outputs.version }}" -Out release-notes.md
+      - name: Draft the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: |
+          $dir = "dist/muxshift-$env:VERSION-windows-amd64"
+          if (-not (Test-Path $dir)) { throw "$dir was not built" }
+          gh release create "v$env:VERSION" `
+            --draft `
+            --title "MuxShift v$env:VERSION" `
+            --notes-file release-notes.md `
+            "$dir.zip" "$dir/VERSION.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: muxshift-${{ needs.guard.outputs.version }}-windows-amd64
+          path: |
+            dist/*.zip
+            dist/muxshift-*/VERSION.txt
+          if-no-files-found: error

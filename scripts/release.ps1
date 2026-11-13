@@ -43,8 +43,18 @@ New-Item -ItemType Directory -Force -Path $out | Out-Null
 
 Push-Location (Join-Path $root "desktop")
 try {
-    & go build -trimpath -ldflags "-X main.buildVersion=$stamp -X main.buildCommit=$commit" -o (Join-Path $out "muxshift.exe") .
-    if ($LASTEXITCODE -ne 0) { throw "go build failed" }
+    # cgo off on purpose: with it on, the C objects carry the build directory
+    # and two clones of the same commit produce different bytes. The desktop
+    # client uses purego for Windows APIs, so it builds and runs without cgo.
+    $previousCgo = $env:CGO_ENABLED
+    $env:CGO_ENABLED = "0"
+    try {
+        & go build -trimpath -ldflags "-X main.buildVersion=$stamp -X main.buildCommit=$commit" -o (Join-Path $out "muxshift.exe") .
+        if ($LASTEXITCODE -ne 0) { throw "go build failed" }
+    }
+    finally {
+        $env:CGO_ENABLED = $previousCgo
+    }
 }
 finally {
     Pop-Location

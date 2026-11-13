@@ -35,7 +35,7 @@ jobs:
             echo "::error::the version must be x.y.z"
             exit 1
           fi
-          if ! git ls-remote --tags --exit-code origin "refs/tags/v$VERSION" >/dev/null; then
+          if ! gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v$VERSION" >/dev/null 2>&1; then
             echo "::error::tag v$VERSION does not exist; cut it with the tag action first"
             exit 1
           fi

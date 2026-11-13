@@ -35,6 +35,10 @@ type fakeSeekPlayer struct {
 	// ignoreSeeks is the number of requests the player drops on the floor, as
 	// the engine does when a seek arrives before the player is settled.
 	ignoreSeeks int
+
+	// missBy makes an honoured seek land short of the target: the player moved,
+	// it just did not arrive where it was asked to go.
+	missBy time.Duration
 }
 
 func (p *fakeSeekPlayer) Ready() bool {
@@ -65,7 +69,7 @@ func (p *fakeSeekPlayer) Seek(target time.Duration) {
 		return
 	}
 	if p.honourSeek {
-		p.position = target
+		p.position = target - p.missBy
 	}
 }
 func (p *fakeSeekPlayer) SetVolume(float64) *ui.VideoPlayer { return nil }
@@ -636,11 +640,34 @@ func TestSettleSeekGivesUpAfterTheBudget(t *testing.T) {
 
 	player := &fakeSeekPlayer{ready: true, honourSeek: true, ignoreSeeks: 100}
 	err := session.app.settleSeekTxn(settleTxnFor(session, player, time.Second))
-	if err == nil || !strings.Contains(err.Error(), "did not settle") {
-		t.Fatalf("a player that never arrived returned %v, want a settle failure", err)
+	if err == nil || !strings.Contains(err.Error(), "could not settle at") {
+		t.Fatalf("a player that never moved returned %v, want an unreportable position", err)
+	}
+	if !strings.Contains(err.Error(), "nothing was switched") || !strings.Contains(err.Error(), "The target is authorised") {
+		t.Fatalf("the refusal does not say the target was authorised and nothing was switched: %v", err)
 	}
 	if player.position != 0 {
 		t.Fatalf("the player moved to %s although every request was dropped", player.position)
+	}
+}
+
+// TestSettleSeekTellsAMissedTargetFromAnUnreportableOne keeps the two failures
+// apart: a player that moved and missed is a settle timeout, while a player that
+// never moved at all is a position the engine would not report, which the entry
+// shows as an execution refusal rather than a wrong window.
+func TestSettleSeekTellsAMissedTargetFromAnUnreportableOne(t *testing.T) {
+	session, _ := seekTxnFixture(t)
+	previous := handoverWait
+	handoverWait = 300 * time.Millisecond
+	t.Cleanup(func() { handoverWait = previous })
+
+	player := &fakeSeekPlayer{ready: true, honourSeek: true, missBy: 500 * time.Millisecond}
+	err := session.app.settleSeekTxn(settleTxnFor(session, player, time.Second))
+	if err == nil || !strings.Contains(err.Error(), "did not settle on the target") {
+		t.Fatalf("a player that moved but missed returned %v, want a settle timeout", err)
+	}
+	if strings.Contains(err.Error(), "could not settle at") {
+		t.Fatalf("a player that moved was called unreportable: %v", err)
 	}
 }
 

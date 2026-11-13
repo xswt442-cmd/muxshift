@@ -442,6 +442,7 @@ type stepOutcome struct {
 	acted   bool
 	started bool
 	playing bool
+	at      time.Duration
 	frame   seekFrame
 }
 
@@ -577,13 +578,15 @@ const seekSettleTolerance = 40 * time.Millisecond
 // position each player actually reported, together with what was requested and
 // what is left between them, and never claims a confirmed frame.
 func (a *appState) settleSeekTxn(txn *seekTxn) error {
+	opened := make([]time.Duration, 0, len(txn.steps))
 	for _, step := range txn.steps {
 		target := step.offset
 		out, dispatched := a.seekStep(txn, step, func(player desktopPlayer) stepOutcome {
+			at := player.Position()
 			playing := player.Playing()
 			player.Pause()
 			player.Seek(target)
-			return stepOutcome{playing: playing}
+			return stepOutcome{playing: playing, at: at}
 		})
 		if !dispatched {
 			return fmt.Errorf("the session did not run the seek step within %s", seekDispatchWait)
@@ -592,6 +595,7 @@ func (a *appState) settleSeekTxn(txn *seekTxn) error {
 			return fmt.Errorf("%s was not asked to seek: the transaction had been stopped", a.name(step.item))
 		}
 		step.wasPlaying = out.playing
+		opened = append(opened, out.at)
 	}
 	// A seek issued while a player is still settling can be dropped by the
 	// engine; the player then keeps the position it had. Re-issuing the request
@@ -608,8 +612,10 @@ func (a *appState) settleSeekTxn(txn *seekTxn) error {
 		attempts[i] = 1
 	}
 	stable := 0
+	failed := -1
 	for {
 		short := ""
+		failed = -1
 		frames := make([]seekFrame, len(txn.steps))
 		for i, step := range txn.steps {
 			out, dispatched := a.seekStep(txn, step, func(player desktopPlayer) stepOutcome {
@@ -625,10 +631,12 @@ func (a *appState) settleSeekTxn(txn *seekTxn) error {
 			}
 			frame := frames[i]
 			if frame.err != nil {
+				failed = i
 				short = fmt.Sprintf("%s reports an engine error: %v", a.name(step.item), frame.err)
 				break
 			}
 			if !frame.ready || frame.buffering {
+				failed = i
 				short = fmt.Sprintf("%s is not ready yet", a.name(step.item))
 				break
 			}
@@ -653,6 +661,7 @@ func (a *appState) settleSeekTxn(txn *seekTxn) error {
 					}
 					stable = 0
 				}
+				failed = i
 				short = fmt.Sprintf("%s reports %s, %s away from the %s it was asked for",
 					a.name(step.item), frame.position, absDuration(frame.position-step.offset), step.offset)
 				break
@@ -702,6 +711,10 @@ func (a *appState) settleSeekTxn(txn *seekTxn) error {
 		if !time.Now().Before(deadline) {
 			if short == "" {
 				short = "the players did not hold a position"
+			}
+			if failed >= 0 && failed < len(opened) && absDuration(frames[failed].position-opened[failed]) <= seekSettleTolerance {
+				return fmt.Errorf("%s could not settle at %s: it still reports %s, the position it opened at. The target is authorised, but this player could not report it; nothing was switched",
+					a.name(txn.steps[failed].item), txn.steps[failed].offset, frames[failed].position)
 			}
 			return fmt.Errorf("did not settle on the target within %s: %s", handoverWait, short)
 		}

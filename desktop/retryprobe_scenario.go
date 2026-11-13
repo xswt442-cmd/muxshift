@@ -149,6 +149,28 @@ func retryProbeBody(window *mygo.Window, a *appState, dir, scenario string) {
 	case "after":
 		phase("boundary", retryProbeBoundary, pause)
 		phase("retry-1s", retryProbeRetry, pause)
+	case "replay-eof":
+		logf(scenario, "sleeping 15s so the stage reaches the end, then replaying the recording")
+		time.Sleep(15 * time.Second)
+		if err := a.playRecording(flight.it, flight.runner, 0); err != nil {
+			logf(scenario, "replay the recording: %v", err)
+			return
+		}
+		if !waitRecording(a, 0, 0, 40*time.Second) {
+			logf(scenario, "the replayed recording never showed a picture")
+			return
+		}
+		time.Sleep(2 * time.Second)
+		phase("after-replay", retryProbeRetry, pause)
+	case "long":
+		logf(scenario, "sleeping 20s so the recording is long enough to outlast a failed settle")
+		time.Sleep(20 * time.Second)
+		phase("long-boundary", retryProbeBoundary, pause)
+		phase("long-retry", retryProbeRetry, pause)
+	case "eof":
+		logf(scenario, "sleeping 15s so the stage reaches the end of the recording")
+		time.Sleep(15 * time.Second)
+		phase("eof-direct", retryProbeRetry, pause)
 	case "late":
 		logf(scenario, "sleeping 20s so the buffer grows before the first request")
 		time.Sleep(20 * time.Second)

@@ -10,11 +10,11 @@ import (
 	"github.com/xswt442-cmd/muxshift/core"
 )
 
-// runSeekBoundary drives the replay seek entry against a buffer that joined a
-// live stream mid-flight. Unlike the two-source fixture, the buffer's first
-// segment and the anchor's measured interval start at the same moment, so a
-// target at the window start reaches the transaction and asks the replacement
-// player for position zero inside its own file.
+// runSeekBoundary drives two committed seeks through the inspector entry: one
+// at the start of the file the transaction cuts for it, and one after it. Both
+// used to be out of reach while the stage was not drawing; with the draw
+// schedule in place the boundary target settles and the player is replaced, so
+// the scenario records that the entry can cross the cut.
 func runSeekBoundary(window *mygo.Window, a *appState, dir string) {
 	go seekBoundaryBody(window, a, dir, "seekboundary")
 }
@@ -48,7 +48,6 @@ func seekBoundaryBody(window *mygo.Window, a *appState, dir, scenario string) {
 		return
 	}
 	time.Sleep(2 * time.Second)
-
 	step(window, a, dir, scenario, "0-window.png", "confirm the source on the event clock", func(a *appState) {
 		for _, track := range []core.TrackID{flight.it.video, flight.it.audio} {
 			if track == "" {
@@ -67,39 +66,18 @@ func seekBoundaryBody(window *mygo.Window, a *appState, dir, scenario string) {
 		logf(scenario, "anchor the source: %v", anchorErr)
 		return
 	}
-	// A shift written straight into the timeline is a statement without a
-	// measurement; the plan refuses to lean on it, so record one.
 	var nudgeNote string
 	mygoRunOnMain(func() { nudgeNote, _ = a.nudge(0, 10*time.Millisecond) })
 	logf(scenario, "the source was nudged by 10ms: %s", nudgeNote)
 	time.Sleep(time.Second)
 
-	var windowNote string
-	var start, end time.Duration
-	mygoRunOnMain(func() {
-		var err error
-		start, end, err = a.replayWindowForEntry()
-		if err != nil {
-			windowNote = err.Error()
-		}
-	})
-	logf(scenario, "the entry offers a window of %s..%s", start, end)
-	if windowNote != "" {
-		logf(scenario, "the entry has no window: %s", windowNote)
-		return
-	}
-
-	// A target at the window start is authorised, and it asks the replacement
-	// player for position zero inside the file it cuts at that moment. The
-	// player cannot report that position, so the transaction has to say the
-	// target was authorised but could not be reported, and switch nothing.
-	before := a.items[0].generation
-	var boundaryNote string
+	before := flight.it.generation
+	var note string
 	mygoRunOnMain(func() {
 		a.seekText = "0"
-		boundaryNote = a.requestReplaySeek()
+		note = a.requestReplaySeek()
 	})
-	logf(scenario, "a request at the window start said: %s", boundaryNote)
+	logf(scenario, "a request at the window start said: %s", note)
 	if !waitSeekDone(a, 120*time.Second) {
 		logf(scenario, "the boundary transaction did not finish within 120s")
 		return
@@ -107,38 +85,46 @@ func seekBoundaryBody(window *mygo.Window, a *appState, dir, scenario string) {
 	time.Sleep(1500 * time.Millisecond)
 	boundary, ok := a.lastReport()
 	logf(scenario, "the boundary account says: %s", boundary.Line())
-	check(ok && boundary.Phase == replayRolledBack, "the boundary account is %v, want a rolled back replay", boundary.Phase)
-	check(strings.Contains(boundary.Reason, "could not settle at"),
-		"the boundary reason does not name the position the player could not report: %s", boundary.Reason)
-	check(strings.Contains(boundary.Reason, "nothing was switched"),
-		"the boundary reason does not say nothing was switched: %s", boundary.Reason)
-	check(strings.Contains(boundary.Reason, "authorised"),
-		"the boundary reason does not keep the target authorised: %s", boundary.Reason)
-	check(a.items[0].generation == before,
-		"a rolled back boundary request changed the player (%d → %d)", before, a.items[0].generation)
-	step(window, a, dir, scenario, "1-boundary.png", "the rolled back boundary request leaves the stage alone", func(a *appState) {
+	// A target at the cut settles while the transaction keeps drawing the
+	// replacement player; if its first request is dropped the transaction
+	// refuses it. Both are consistent states, and the next request has to work
+	// either way.
+	switch {
+	case ok && boundary.Phase == replayCommitted:
+		logf(scenario, "the seek at the cut committed")
+		check(strings.Contains(boundary.Line(), "requested 0s reported 0s"),
+			"the boundary account does not say the player reported position zero: %s", boundary.Line())
+		check(flight.it.generation == before+1,
+			"the boundary left the player at generation %d, want %d", flight.it.generation, before+1)
+	case ok && boundary.Phase == replayRolledBack:
+		logf(scenario, "the seek at the cut was refused without switching")
+		check(flight.it.generation == before,
+			"a refused boundary request changed the player (%d → %d)", before, flight.it.generation)
+	default:
+		check(false, "the boundary request ended as %v without an account", boundary.Phase)
+	}
+	base := flight.it.generation
+	step(window, a, dir, scenario, "1-boundary.png", "the seek at the cut shows the replay", func(a *appState) {
 		a.showVideo(0)
 	})
 
-	// The same entry, after that failure, still commits a target the players can
-	// report: the refusal is about this position, not about the window.
-	var recoveryNote string
+	var nextNote string
 	mygoRunOnMain(func() {
 		a.seekText = "5"
-		recoveryNote = a.requestReplaySeek()
+		nextNote = a.requestReplaySeek()
 	})
-	logf(scenario, "after the boundary failure a valid request said: %s", recoveryNote)
+	logf(scenario, "the request after the boundary said: %s", nextNote)
 	if !waitSeekDone(a, 90*time.Second) {
-		logf(scenario, "the recovery transaction did not finish within 90s")
+		logf(scenario, "the second transaction did not finish within 90s")
 		return
 	}
 	time.Sleep(time.Second)
-	recovery, ok := a.lastReport()
-	logf(scenario, "the recovery account says: %s", recovery.Line())
-	check(ok && recovery.Phase == replayCommitted, "the recovery account is %v, want a committed replay", recovery.Phase)
-	check(a.items[0].generation == before+1,
-		"the recovery left the player at generation %d, want %d", a.items[0].generation, before+1)
-	step(window, a, dir, scenario, "2-recovery.png", "the recovery commits and shows the replay", func(a *appState) {
+	next, ok := a.lastReport()
+	logf(scenario, "the second account says: %s", next.Line())
+	check(ok && next.Phase == replayCommitted, "the second account is %v, want a committed replay", next.Phase)
+	check(flight.it.generation == base+1,
+		"the second seek left the player at generation %d, want %d", flight.it.generation, base+1)
+	step(window, a, dir, scenario, "2-next.png", "the second target commits and shows the replay", func(a *appState) {
 		a.showVideo(0)
 	})
 

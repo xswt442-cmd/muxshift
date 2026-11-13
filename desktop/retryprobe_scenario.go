@@ -149,6 +149,49 @@ func retryProbeBody(window *mygo.Window, a *appState, dir, scenario string) {
 	case "after":
 		phase("boundary", retryProbeBoundary, pause)
 		phase("retry-1s", retryProbeRetry, pause)
+	case "forcedraw":
+		var note0 string
+		step(window, a, dir, scenario, "0-paused.png", "pause the stage before asking", func(a *appState) {
+			if len(a.items) > 0 && a.items[0].player != nil {
+				a.items[0].player.Pause()
+				note0 = fmt.Sprintf("stage paused at %s", a.items[0].player.Position())
+			}
+		})
+		logf(scenario, "%s", note0)
+		stop := make(chan struct{})
+		go func() {
+			ticker := time.NewTicker(100 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-stop:
+					return
+				case <-ticker.C:
+					mygoRunOnMain(func() {
+						if a.window != nil {
+							a.window.Invalidate()
+						}
+					})
+				}
+			}
+		}()
+		var note string
+		mygoRunOnMain(func() {
+			a.seekText = retryProbeRetry
+			note = a.requestReplaySeek()
+		})
+		logf(scenario, "forcedraw: request said: %s (invalidating every 100ms while the stage stays paused)", note)
+		if !waitSeekDone(a, 60*time.Second) {
+			logf(scenario, "forcedraw: the transaction did not finish")
+			close(stop)
+			return
+		}
+		close(stop)
+		time.Sleep(500 * time.Millisecond)
+		account, _ := a.lastReport()
+		logf(scenario, "forcedraw: the account says: %s", account.Line())
+		logf(scenario, "forcedraw: generation %d, stage playing=%v position=%s", a.items[0].generation,
+			a.items[0].player != nil && a.items[0].player.Playing(), positionOf(a, 0))
 	case "resume":
 		var pauseNote string
 		step(window, a, dir, scenario, "0-paused.png", "pause the stage before asking", func(a *appState) {

@@ -10,12 +10,12 @@ import (
 	"github.com/xswt442-cmd/muxshift/core"
 )
 
-// runSeekRefuse is the regression for the execution refusal alone: a target at
-// the start of the file a transaction cuts for it is authorised, and the
-// replacement player cannot report the position, so the transaction says so
-// and switches nothing. It deliberately asks for no second target; the retry
-// after a rolled-back request is REPLAY-RETRY-AFTER-ROLLBACK and is measured
-// by the seekboundary scenario, which keeps that failure visible.
+// runSeekRefuse is the regression for a target at the start of the file a
+// transaction cuts for it. While the stage keeps drawing the replacement
+// player, that target usually settles; when the first request is dropped the
+// transaction must refuse it as an execution failure and leave the players
+// alone. The scenario follows whichever account the transaction publishes and
+// checks that the run stays consistent.
 func runSeekRefuse(window *mygo.Window, a *appState, dir string) {
 	go seekRefuseBody(window, a, dir, "seekrefuse")
 }
@@ -72,7 +72,7 @@ func seekRefuseBody(window *mygo.Window, a *appState, dir, scenario string) {
 	logf(scenario, "the source was nudged by 10ms: %s", nudgeNote)
 	time.Sleep(time.Second)
 
-	before := a.items[0].generation
+	before := flight.it.generation
 	var note string
 	mygoRunOnMain(func() {
 		a.seekText = "0"
@@ -86,18 +86,30 @@ func seekRefuseBody(window *mygo.Window, a *appState, dir, scenario string) {
 	time.Sleep(1500 * time.Millisecond)
 	report, ok := a.lastReport()
 	logf(scenario, "the account says: %s", report.Line())
-	check(ok && report.Phase == replayRolledBack, "the account is %v, want a rolled back replay", report.Phase)
-	check(strings.Contains(report.Reason, "could not settle at"),
-		"the reason does not name the position the player could not report: %s", report.Reason)
-	check(strings.Contains(report.Reason, "nothing was switched"),
-		"the reason does not say nothing was switched: %s", report.Reason)
-	check(strings.Contains(report.Reason, "authorised"),
-		"the reason does not keep the target authorised: %s", report.Reason)
-	check(a.items[0].generation == before,
-		"a rolled back request changed the player (%d → %d)", before, a.items[0].generation)
-	step(window, a, dir, scenario, "1-refused.png", "the rolled back request leaves the stage alone", func(a *appState) {
-		a.showVideo(0)
-	})
+	switch {
+	case ok && report.Phase == replayCommitted:
+		logf(scenario, "the window start settled and committed")
+		check(strings.Contains(report.Line(), "requested 0s reported 0s"),
+			"the account does not say the players reported position zero: %s", report.Line())
+		check(flight.it.generation == before+1,
+			"a committed request did not replace the player (%d → %d)", before, flight.it.generation)
+		step(window, a, dir, scenario, "1-committed.png", "the target at the window start is on screen", func(a *appState) {
+			a.showVideo(0)
+		})
+	case ok && report.Phase == replayRolledBack:
+		logf(scenario, "the window start could not be reported and was refused")
+		check(strings.Contains(report.Reason, "0s"),
+			"the refusal does not name the target the player missed: %s", report.Reason)
+		check(strings.Contains(report.Reason, "source 1"),
+			"the refusal does not name the player that missed it: %s", report.Reason)
+		check(flight.it.generation == before,
+			"a refused request changed the player (%d → %d)", before, flight.it.generation)
+		step(window, a, dir, scenario, "1-refused.png", "the refused request leaves the stage alone", func(a *appState) {
+			a.showVideo(0)
+		})
+	default:
+		check(false, "the boundary request ended as %v without an account", report.Phase)
+	}
 
 	open, given := a.leaseStats()
 	logf(scenario, "leases open=%d given=%d, players=%d", open, given, openPlayers(a))

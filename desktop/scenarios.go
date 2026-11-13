@@ -74,6 +74,8 @@ var scenarios = map[string]scenario{
 	"faults":               runFaults,
 	"final":                runFinal,
 	"seektxn":              runSeekTxn,
+	"seekentry":            runSeekEntry,
+	"seekclose":            runSeekClose,
 	"interleave":           runInterleave,
 	"replayui":             runReplayUI,
 	"timeline":             runTimeline,

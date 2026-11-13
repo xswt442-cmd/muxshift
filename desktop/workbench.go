@@ -255,6 +255,7 @@ func (a *appState) inspectorPane(c *ui.Context, width, height float32) {
 				} else {
 					a.inspectorSession(c)
 				}
+				a.inspectorSeek(c)
 				a.inspectorAccount(c)
 				a.inspectorAlign(c)
 			})
@@ -458,6 +459,48 @@ func (a *appState) layoutLine(width, height float32) string {
 		a.rail.shown(width >= railAutoWidth),
 		a.inspector.shown(width >= inspectorAutoWidth),
 		a.dock.shown(a.settings.DockOpen && height >= dockAutoHeight))
+}
+
+// inspectorSeek is the one place the window asks for a replay seek. It offers
+// only the intersection every buffering source can show, takes a number of
+// seconds into that window, and hands the request to startSeekTxn: the UI never
+// turns a window into a player position itself, and a transaction already
+// preparing disables the button instead of being silently replaced.
+func (a *appState) inspectorSeek(c *ui.Context) {
+	start, end, err := a.replayWindowForEntry()
+	if err != nil {
+		ui.Box(c).Height(1).WidthPercent(100).Background(colorLine)
+		ui.Text(c, "replay seek").FontSize(textMicro).TextColor(colorDim)
+		ui.Text(c, err.Error()).FontSize(textSmall).TextColor(colorDim).Wrap()
+		return
+	}
+	a.seekMu.Lock()
+	busy := a.seek != nil
+	a.seekMu.Unlock()
+	ui.Box(c).Height(1).WidthPercent(100).Background(colorLine)
+	ui.Text(c, "replay seek").FontSize(textMicro).TextColor(colorDim)
+	a.detailRow(c, "window", fmt.Sprintf("%s..%s", formatEvent(start), formatEvent(end)))
+	ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).WidthPercent(100).Children(func() {
+		c.Key("seek-seconds")
+		ui.TextInput(c, &a.seekText).Grow(1).Height(26).
+			Placeholder("seconds into this window")
+		label := "Seek"
+		if busy {
+			label = "Preparing…"
+		}
+		button := ui.Button(c.Key("seek-start"), label).Width(96).Height(26)
+		if busy {
+			button.Disabled(true).Tooltip("a replay seek is already being prepared")
+		}
+		if button.Clicked() {
+			a.seekNote = a.requestReplaySeek()
+		}
+	})
+	if a.seekNote != "" {
+		ui.Text(c, a.seekNote).FontSize(textMicro).TextColor(colorDim).Wrap()
+	}
+	ui.Text(c, "a commit means the players report the position asked for; it does not confirm the frame.").
+		FontSize(textMicro).TextColor(colorDim).Wrap().Padding(spaceSm, 0)
 }
 
 // inspectorAccount shows the newest replay account, read-only. It reads

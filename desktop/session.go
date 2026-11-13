@@ -224,6 +224,12 @@ type appState struct {
 	// first thing checked so a second Add cannot start a second read.
 	importing string
 
+	// seekText and seekNote belong to the inspector's replay seek entry: the
+	// first is what the small field holds, the second the sentence the last
+	// attempt produced. Neither is a decision; PlanSeek still decides.
+	seekText string
+	seekNote string
+
 	// importToken tells a landing read from a cancelled one: Cancel bumps it,
 	// and a result carrying an older token is dropped without touching the
 	// session, so a slow origin cannot add a source after Cancel.

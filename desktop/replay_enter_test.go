@@ -15,9 +15,9 @@ import (
 )
 
 // entryFixture builds one source's contribution to an entry decision. The
-// anchor places buffer time at media time 100s, the offset moves it two seconds
-// the other way, so a window [start, end) is enterable over [98s+start,
-// 98s+end).
+// anchor places content time at container media time 100s, and the offset moves
+// the event clock two seconds behind content, so a window [start, end) is
+// enterable over [start-2s, end-2s) in event time.
 func entryFixture(name string, start, end time.Duration) entrySourceState {
 	anchor := dvr.Anchor{
 		Source:         core.SourceID(name),
@@ -51,8 +51,10 @@ func TestEntryPlansTheFirstWholeSecondBothSourcesCanReach(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a shared window was not planned: %v", err)
 	}
-	if plan.Event != 102*time.Second {
-		t.Fatalf("the default target is %s, want 1m42s (the later window's start)", plan.Event)
+	// The first window is enterable from -2s, the second from 2s, so the first
+	// shared whole second is 2s.
+	if plan.Event != 2*time.Second {
+		t.Fatalf("the default target is %s, want 2s (the later window's start)", plan.Event)
 	}
 	if len(plan.Steps) != 2 {
 		t.Fatalf("the plan has %d steps, want one per source", len(plan.Steps))
@@ -64,7 +66,7 @@ func TestEntryPlansTheFirstWholeSecondBothSourcesCanReach(t *testing.T) {
 		t.Fatalf("source-1 would start %s into its file, but a recording begins at the cut", plan.Steps[0].InFile)
 	}
 	if plan.Steps[0].Media != 104*time.Second {
-		t.Fatalf("source-1's media time is %s, want 1m44s", plan.Steps[0].Media)
+		t.Fatalf("source-1's container media is %s, want 1m44s", plan.Steps[0].Media)
 	}
 }
 
@@ -115,12 +117,12 @@ func TestEntryDoesNotCrossAGapBetweenRanges(t *testing.T) {
 	source := entryFixture("source-1", 0, 10*time.Second)
 	source.Anchor.Interval = dvr.Range{Start: 0, End: 2 * time.Second, Epoch: 2}
 
-	// Entering at 108s would be media 110s, i.e. buffer 10s: exactly at the end
-	// of the range, which belongs to whatever comes next.
-	if _, err := planEntry([]entrySourceState{source}, 108*time.Second, true); err == nil {
+	// Entering at 8s would be content 10s: exactly at the end of the range,
+	// which belongs to whatever comes next.
+	if _, err := planEntry([]entrySourceState{source}, 8*time.Second, true); err == nil {
 		t.Fatal("a target at the edge of a range was accepted")
 	}
-	if _, err := planEntry([]entrySourceState{source}, 105*time.Second, true); err != nil {
+	if _, err := planEntry([]entrySourceState{source}, 7*time.Second, true); err != nil {
 		t.Fatalf("a target inside the range was refused: %v", err)
 	}
 }
@@ -128,12 +130,12 @@ func TestEntryDoesNotCrossAGapBetweenRanges(t *testing.T) {
 func TestEntryKeepsAnExplicitTargetExactly(t *testing.T) {
 	source := entryFixture("source-1", 0, 30*time.Second)
 
-	plan, err := planEntry([]entrySourceState{source}, 102_300*time.Millisecond, true)
+	plan, err := planEntry([]entrySourceState{source}, 12_300*time.Millisecond, true)
 	if err != nil {
 		t.Fatalf("an explicit target inside the window was refused: %v", err)
 	}
-	if plan.Event != 102_300*time.Millisecond {
-		t.Fatalf("the explicit target became %s, want 1m42.3s unchanged", plan.Event)
+	if plan.Event != 12_300*time.Millisecond {
+		t.Fatalf("the explicit target became %s, want 12.3s unchanged", plan.Event)
 	}
 	if !plan.Explicit {
 		t.Fatal("the plan does not record that the target was explicit")
@@ -150,9 +152,9 @@ func TestEntryRefusesAnExplicitTargetOutsideTheWindow(t *testing.T) {
 }
 
 func TestEntryRefusesADefaultTargetAtTheEndBoundary(t *testing.T) {
-	// The latest window starts at 0.4s and ends at exactly 1s after it began,
-	// so rounding the start up to a whole second lands on the end.
-	source := entryFixture("source-1", 400*time.Millisecond, 1_000*time.Millisecond)
+	// The content window is [2.4s, 3s), so the event window is [0.4s, 1s):
+	// rounding the start up to a whole second lands on the end.
+	source := entryFixture("source-1", 2_400*time.Millisecond, 3_000*time.Millisecond)
 
 	_, err := planEntry([]entrySourceState{source}, 0, false)
 	if err == nil || !strings.Contains(err.Error(), "no shared instant") {

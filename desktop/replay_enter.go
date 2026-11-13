@@ -22,6 +22,7 @@ package main
 // measured against. Nothing here invents a second notion of time.
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -57,6 +58,10 @@ type entrySourceState struct {
 	// exists, or before its epoch moved, cannot authorise entering replay.
 	OriginInstance string
 	OriginEpoch    uint64
+	// OriginBasis is how the offset was established. The transaction hands it
+	// back to the replay contract, which accepts only the three named origins;
+	// an offset whose basis was never stated cannot be used to place a target.
+	OriginBasis dvr.Basis
 }
 
 // entryStep is one source's share of an entry plan: the identities that were
@@ -65,9 +70,11 @@ type entryStep struct {
 	entrySourceState
 
 	// Event is the shared event time the source would enter at, Media the
-	// source's own media time there, Cut the buffer time the recording would
-	// start at. A recording begins at its cut point, so the file's own zero is
-	// the target and InFile stays zero.
+	// container media time that content carries, Cut the content time the
+	// recording is asked to start at. A cut begins at the segment that holds
+	// that time, so the file's own zero can sit slightly before the cut; the
+	// transaction measures the real offset from the rebuilt plan rather than
+	// trusting InFile.
 	Event  time.Duration
 	Media  time.Duration
 	Cut    time.Duration
@@ -121,21 +128,16 @@ func (s entrySourceState) enterable() (time.Duration, time.Duration, error) {
 		return 0, 0, fmt.Errorf("%s: the anchor starts at %s, before the buffer's own range at %s",
 			s.Name, shortDuration(s.Anchor.Interval.Start), shortDuration(s.Window.Start))
 	}
-	media, err := s.mediaAt(s.Window.Start)
-	if err != nil {
-		return 0, 0, err
-	}
-	// The end of a continuous range is where the clock was rebuilt, not a
-	// sample that was measured. Within one range the clock advances at the same
-	// rate, which is the assumption the replay clock already documents; it is
-	// not an extrapolation across a gap because the range ends there.
-	mediaEnd := media + (s.Window.End - s.Window.Start)
-	return media - s.Offset, mediaEnd - s.Offset, nil
+	// The buffer's range is in content time, which is the timeline the event
+	// clock is offset from: an entry at event e lands at content e+offset. The
+	// anchor's media times are container timestamps and place no event.
+	return s.Window.Start - s.Offset, s.Window.End - s.Offset, nil
 }
 
-// mediaAt converts a buffer time inside this state's continuous window into the
-// source's own media time. The anchor explains the window; anything before it
-// is refused rather than extended backwards.
+// mediaAt converts a content time inside this state's continuous window into the
+// container media time the files carry. The anchor explains the window; anything
+// before it is refused rather than extended backwards. It is used as evidence
+// only: the cut is made at content time, not at container time.
 func (s entrySourceState) mediaAt(buffer time.Duration) (time.Duration, error) {
 	if buffer < s.Window.Start || buffer >= s.Window.End {
 		return 0, fmt.Errorf("%s: %s is outside the buffer range %s..%s",
@@ -150,29 +152,37 @@ func (s entrySourceState) mediaAt(buffer time.Duration) (time.Duration, error) {
 	return widened.MediaTime(buffer)
 }
 
-// cutAt is the buffer time a recording would start at to enter at event.
+// cutAt is the content time a recording would start at to enter at event, and
+// the container media time that content carries. The cut itself is content time:
+// content = event + offset, which is the same mapping the replay contract uses.
+// Deriving the cut from the anchor's container times instead would cut at a
+// timestamp the buffer never called a position.
 func (s entrySourceState) cutAt(event time.Duration) (time.Duration, time.Duration, error) {
-	media, err := offsetAfter(event, s.Offset)
+	content, err := offsetAfter(event, s.Offset)
 	if err != nil {
 		return 0, 0, fmt.Errorf("%s: %w", s.Name, err)
 	}
-	if media < s.Anchor.MediaStart {
-		return 0, 0, fmt.Errorf("%s: the event %s converts to media %s, before the anchor's own start %s",
-			s.Name, shortDuration(event), shortDuration(media), shortDuration(s.Anchor.MediaStart))
+	if content < s.Window.Start || content >= s.Window.End {
+		return 0, 0, fmt.Errorf("%s: the event %s converts to content %s, outside the buffer range %s..%s",
+			s.Name, shortDuration(event), shortDuration(content), shortDuration(s.Window.Start), shortDuration(s.Window.End))
 	}
-	buffer := s.Anchor.BufferStart + (media - s.Anchor.MediaStart)
-	if _, err := s.mediaAt(buffer); err != nil {
+	if content < s.Anchor.Interval.Start {
+		return 0, 0, fmt.Errorf("%s: the event %s converts to content %s, before the anchor's own range at %s",
+			s.Name, shortDuration(event), shortDuration(content), shortDuration(s.Anchor.Interval.Start))
+	}
+	media, err := s.mediaAt(content)
+	if err != nil {
 		return 0, 0, err
 	}
-	return media, buffer, nil
+	return media, content, nil
 }
 
 // planEntry decides whether event can be entered from these sources. With
 // explicit false the target is chosen: the first whole second at or after the
-// latest window start, as long as it still lies before every window's end. The
-// rounding is only what makes the default deterministic and explainable; it
-// does not keep the target away from a cut boundary and it promises nothing
-// about a player settling there.
+// latest window start in event time, as long as it still lies before every
+// window's end. The rounding is only what makes the default deterministic and
+// explainable; it does not keep the target away from a cut boundary and it
+// promises nothing about a player settling there.
 func planEntry(sources []entrySourceState, event time.Duration, explicit bool) (*entryPlan, error) {
 	if len(sources) == 0 {
 		return nil, fmt.Errorf("no source was offered for entering replay")
@@ -254,6 +264,9 @@ func recheckEntry(plan *entryPlan, fresh []entrySourceState) error {
 		if now.Offset != step.Offset || now.OriginInstance != step.OriginInstance || now.OriginEpoch != step.OriginEpoch {
 			return fmt.Errorf("%s: the offset or the buffer it was measured against changed after the entry was planned", step.Name)
 		}
+		if now.OriginBasis != step.OriginBasis {
+			return fmt.Errorf("%s: the origin of its offset changed after the entry was planned", step.Name)
+		}
 		if now.Window.Start != step.Window.Start || now.Window.End != step.Window.End {
 			return fmt.Errorf("%s: the buffer range changed after the entry was planned", step.Name)
 		}
@@ -321,6 +334,7 @@ func (a *appState) entrySources(items []*item) ([]entrySourceState, error) {
 			Offset:         shift.Offset,
 			OriginInstance: origin.instance,
 			OriginEpoch:    origin.epoch,
+			OriginBasis:    origin.basis,
 		})
 	}
 	return out, nil
@@ -358,4 +372,67 @@ func (a *appState) recheckReplayEntry(plan *entryPlan) error {
 		return err
 	}
 	return recheckEntry(plan, fresh)
+}
+
+// startEnterReplayTxn turns a live stage into one that replays the same moment
+// at every source. It plans from the live state first, keeps that plan as the
+// evidence the commit has to confirm again, and then hands the work to the same
+// preparation, settlement and commit steps the seek path uses: the stage stays
+// live and visible until one drawing-thread step installs every replacement.
+// A request that never becomes a transaction still gets its own account, and
+// that account says it was an entry rather than a seek.
+func (a *appState) startEnterReplayTxn(items []*item, event time.Duration, explicit bool) (err error) {
+	defer func() {
+		if err != nil {
+			a.publishReport(replayReport{ID: replaySeq.Add(1), Event: event, Kind: replayKindEnter, Phase: replayRefused, Reason: err.Error()})
+		}
+	}()
+	if len(items) == 0 {
+		return fmt.Errorf("no source was offered for entering replay")
+	}
+	a.seekStart.Lock()
+	defer a.seekStart.Unlock()
+
+	a.seekMu.Lock()
+	busy := a.seek != nil
+	a.seekMu.Unlock()
+	if busy {
+		return fmt.Errorf("a replay is already being prepared; wait for it to finish")
+	}
+
+	plan, err := a.planReplayEntry(items, event, explicit)
+	if err != nil {
+		return err
+	}
+	txn := &seekTxn{event: plan.Event, kind: replayKindEnter, entry: plan, done: make(chan struct{}), id: replaySeq.Add(1)}
+	txn.ctx, txn.cancel = context.WithCancel(context.Background())
+	for _, step := range plan.Steps {
+		it, _, err := a.itemBySource(step.Source)
+		if err != nil {
+			txn.cancel()
+			return err
+		}
+		runner := a.runnerFor(it)
+		if runner == nil {
+			txn.cancel()
+			return fmt.Errorf("%s has no replay buffer to cut from", a.name(it))
+		}
+		txn.steps = append(txn.steps, &seekTxnStep{
+			item:       it,
+			runner:     runner,
+			generation: it.generation,
+			content:    step.Cut,
+			alignment:  dvr.Alignment{Offset: step.Offset, Basis: step.OriginBasis},
+		})
+	}
+
+	a.seekMu.Lock()
+	a.seek = txn
+	a.seekMu.Unlock()
+	a.publishReport(txn.reportFor(replayPreparing, ""))
+	go func() {
+		defer close(txn.done)
+		a.prepareSeekTxn(txn)
+	}()
+	return nil
 }

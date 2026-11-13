@@ -77,6 +77,11 @@ type seekTxn struct {
 	// The transaction commits only while that plan still matches the session.
 	prepared dvr.SeekPlan
 
+	// entry is the frozen evidence an entry was planned from. A seek confirms
+	// the replay seat it already has; an entry has no seat yet, so the commit
+	// confirms this plan against the live stage instead.
+	entry *entryPlan
+
 	// id ties every report about this transaction to the same attempt.
 	id uint64
 
@@ -180,6 +185,16 @@ func (a *appState) startSeekTxn(items []*item, event time.Duration) (err error) 
 // commits only once every player has a picture and the authorisation still
 // describes the session. Every exit either commits or gives back what it took.
 func (a *appState) prepareSeekTxn(txn *seekTxn) {
+	// An entry's evidence is confirmed before anything is cut: a stage that
+	// moved between planning and preparation spends no files on a decision that
+	// no longer holds. A seek has nothing to confirm yet at this point; its
+	// plan is rebuilt from the recordings and checked at the commit.
+	if txn.kind == replayKindEnter {
+		if err := a.recheckReplayEntry(txn.entry); err != nil {
+			a.abortSeekTxn(txn, err.Error())
+			return
+		}
+	}
 	for _, step := range txn.steps {
 		// Ownership is re-read between sources: a newer transaction or a closing
 		// session gives the work back instead of spending more files on it.
@@ -226,6 +241,14 @@ func (a *appState) prepareSeekTxn(txn *seekTxn) {
 		a.seekMu.Unlock()
 	}
 
+	// The cuts took time. An entry still has to be the same entry: the stage it
+	// came from may have been paused, replaced or realigned meanwhile.
+	if txn.kind == replayKindEnter {
+		if err := a.recheckReplayEntry(txn.entry); err != nil {
+			a.abortSeekTxn(txn, err.Error())
+			return
+		}
+	}
 	prepared, err := dvr.PlanSeek(txn.event, seekTxnSources(txn))
 	if err != nil {
 		a.abortSeekTxn(txn, fmt.Sprintf("the cut recordings do not authorise the target: %v", err))
@@ -292,6 +315,19 @@ func seekTxnSources(txn *seekTxn) []dvr.SeekSource {
 	return sources
 }
 
+// recheckTxn confirms the transaction's own evidence is still true. A seek has
+// a replay seat to confirm: the item still shows the recording the plan was
+// built from. An entry has no seat yet, so it confirms the frozen entry plan
+// against the live stage it was planned from. Both run in the same drawing-
+// thread step that installs the new resources, so nothing can move between the
+// confirmation and the installation.
+func (a *appState) recheckTxn(txn *seekTxn) error {
+	if txn.kind == replayKindEnter {
+		return a.recheckReplayEntry(txn.entry)
+	}
+	return a.revalidateSeekTxn(txn)
+}
+
 // revalidateSeekTxn asks the live session again, now that the recordings exist:
 // every source must still be reading the buffer and the player the plan was made
 // for, and the plan rebuilt from the files that were cut must still describe the
@@ -349,7 +385,7 @@ func (a *appState) commitSeekTxn(txn *seekTxn) {
 			refusal = fmt.Errorf("this replay transaction no longer owns the session")
 			return
 		}
-		if err := a.revalidateSeekTxn(txn); err != nil {
+		if err := a.recheckTxn(txn); err != nil {
 			a.seekMu.Unlock()
 			refusal = err
 			return
@@ -387,7 +423,7 @@ func (a *appState) commitSeekTxn(txn *seekTxn) {
 		}
 	}
 	a.clearSeek(txn)
-	logf("seek", "committed %d recording(s) for event %s; each player is on the file cut for it, and the target sits %s into that file for the seek step",
+	logf("seek", "committed %d recording(s) for event %s; each player is on the file cut for it, and the target sits %s into that file",
 		len(txn.steps), shortDuration(txn.event), shortDuration(deepestPosition(txn.prepared)))
 	txn.noticeOnce.Do(func() { a.publishReport(txn.reportFor(replayCommitted, "")) })
 }
@@ -776,6 +812,14 @@ func readSeekFrame(player desktopPlayer) seekFrame {
 func (a *appState) waitSeekPlayers(txn *seekTxn) error {
 	deadline := time.Now().Add(handoverWait)
 	for {
+		// An entry's evidence is confirmed while the replacements wait for their
+		// first picture. The wait can last seconds, and a source that moved in
+		// that time must end the attempt rather than commit stale evidence.
+		if txn.kind == replayKindEnter {
+			if err := a.recheckReplayEntry(txn.entry); err != nil {
+				return err
+			}
+		}
 		pending := ""
 		for _, step := range txn.steps {
 			out, dispatched := a.seekStep(txn, step, func(player desktopPlayer) stepOutcome {

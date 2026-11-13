@@ -471,7 +471,11 @@ func seekWindowCaption(start, end time.Duration) string {
 // seekAuthorizationNote says what the candidate window does not promise. A
 // target inside it can still be refused for a source whose own anchor does not
 // explain it, so the panel never presents the whole window as authorised.
-const seekAuthorizationNote = "A target inside this window still requires per-source anchor authorization. Some targets may be refused."
+//
+// P16.4g adds the second half: content correspondence between sources is not a
+// product capability. The closure states it where a user asks for a replay
+// position, instead of leaving them to infer it from refusals.
+const seekAuthorizationNote = "A target inside this window still requires per-source anchor authorization. Cross-source content correspondence is not authorized. Some targets may be refused."
 
 // inspectorSeek is the one place the window asks for a replay seek. It offers
 // only the intersection every buffering source can show, takes a number of
@@ -511,6 +515,8 @@ func (a *appState) inspectorSeek(c *ui.Context) {
 	if a.seekNote != "" {
 		ui.Text(c, a.seekNote).FontSize(textMicro).TextColor(colorDim).Wrap()
 	}
+	ui.Text(c, "this seeks a stage that is already replaying; entering replay from live is not offered.").
+		FontSize(textMicro).TextColor(colorDim).Wrap().Padding(spaceSm, 0)
 	ui.Text(c, seekAuthorizationNote).
 		FontSize(textMicro).TextColor(colorDim).Wrap().Padding(spaceSm, 0)
 	ui.Text(c, "a commit means the players report the position asked for; it does not confirm the frame.").

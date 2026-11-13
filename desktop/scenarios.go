@@ -80,6 +80,8 @@ var scenarios = map[string]scenario{
 	"seekpaused":           runSeekPaused,
 	"retryprobe":           runRetryProbe,
 	"seekclose":            runSeekClose,
+	"enterreplay":          runEnterReplay,
+	"enterreplay-one":      runEnterReplayOne,
 	"seekedge":             runSeekEdge,
 	"interleave":           runInterleave,
 	"replayui":             runReplayUI,

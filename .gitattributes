@@ -1,4 +1,8 @@
-* text=auto
+# Text files are stored and checked out with LF everywhere: embedded assets
+# (desktop/webpanel/*) are compiled into the binary, so a CRLF checkout would
+# change the bytes of the same commit and break reproducible builds.
+* text=auto eol=lf
+
 *.go text eol=lf
 *.md text eol=lf
 *.mod text eol=lf
@@ -6,3 +10,19 @@
 *.json text eol=lf
 *.yaml text eol=lf
 *.yml text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.js text eol=lf
+*.svg text eol=lf
+*.ps1 text eol=lf
+*.sh text eol=lf
+*.txt text eol=lf
+
+# Real binaries: never normalise them.
+*.png binary
+*.jpg binary
+*.ico binary
+*.syso binary
+*.exe binary
+*.zip binary
+*.onnx binary

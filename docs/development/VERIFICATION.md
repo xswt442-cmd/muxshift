@@ -23,6 +23,7 @@ go vet ./...             # in each module
 | Web session service | `go test ./web` | loopback binding, same-origin and JSON checks, path root confinement, scene rollback | passing |
 | Replay clock and replay file | `cd desktop && go test ./...` | container↔player conversion, `playerWindow`, `replayFile` refusals, ffprobe measurement against a test segment | passing |
 | Settings | `cd desktop && go test ./...` | defaults, validation ranges, save/load round trip, damaged files, live application of a draft | passing |
+| Replay seek (P16.4a–c) | `cd desktop && go test ./...`, then the `seektxn`, `interleave` and `replayui` scenarios | authorisation refusals, a transaction committing and rolling back, two replays interleaved, the read-only account of requested/reported/residual | passing for the stages; closing the window while a seek is being prepared is Not Run, and audio across a switch is Pending (REPLAY-AUDIO-CONTINUITY) |
 
 ## 2. Scenarios (real window, real media)
 
@@ -82,3 +83,4 @@ Scenario captures, logs and notes live in the Git-ignored `testplace/` directory
 - CI runs both modules' checks (`go vet`, `go build` and `go test` at the root and inside `desktop/`, on Ubuntu and Windows); no scenario runs there, because they need a window and media that CI does not have.
 - No test covers a session open for hours, or a second source opened while another one is being switched. Both belong to P16's own continuous-run acceptance, not to the P16.5 hygiene phase, which only recorded the gap.
 - Windows is the only platform with real-window evidence; the other platforms are covered by package tests only.
+- Closing the window while a replay seek is being prepared is Not Run: the automated scenarios quit through the app's own path, which is not the same as a user closing the window mid-preparation. Audio continuity across a replay switch is Pending under REPLAY-AUDIO-CONTINUITY and is not claimed by any state assertion.

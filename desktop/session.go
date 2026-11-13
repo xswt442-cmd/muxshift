@@ -177,6 +177,9 @@ type appState struct {
 	// seekMain runs the commit step where players may be touched. Tests run
 	// without a window and call the step directly.
 	seekMain func(func())
+	// requestFrame asks for a frame where a window exists. Tests run without
+	// one and count the requests instead; see invalidate.
+	requestFrame func()
 
 	// syncNote is the outcome of the last sync command, so a refused seek stays
 	// visible in the window instead of only in the log.
@@ -535,58 +538,80 @@ func (a *appState) importSource(ctx context.Context, uri string, token int) {
 		}
 	}
 	mygoRunOnMain(func() {
-		if token != a.importToken {
-			// Cancel already cleared the busy state and said so; this landing is
-			// from the read it stopped and must not add anything.
-			return
-		}
-		it := &item{uri: uri, volume: a.settingsSourceVolume()}
-		var err error
-		switch {
-		case probeErr != nil:
-			err = probeErr
-		case probed:
-			err = a.attachStream(it, stream)
-		default:
-			err = a.addLocal(it)
-		}
-		if err == nil {
-			// An imported address is a source somebody added, so it comes back
-			// with its remembered sound, and changing that sound may be
-			// remembered in turn.
-			a.applySourceMemory(it)
-			// The player opens at import, as it does for a source given on the
-			// command line: the stage builds a video for every source with a
-			// player, and a player created later, in the same pass that first
-			// shows it, stayed unready in this build. Opening it here gives it
-			// the frames that come before the user shows it.
-			var player *ui.VideoPlayer
-			player, err = openPlayerOnMain(uri)
-			if err == nil {
-				it.player = player
-				it.generation++
-				wakeNetworkPlayer(it.uri, rawPlayer(player), a.generationIs(it, it.generation))
-				a.items = append(a.items, it)
-				a.selected = it.source.ID
-				a.apply()
-				a.closePendingWhenReady()
-			}
-		}
-		a.closeImportTicker()
-		a.importing = ""
-		a.importText = ""
-		result := commandResult{Command: command{Kind: commandAdd, URI: uri}, At: time.Now()}
-		if err != nil {
-			it.openErr = safeOpenError(err)
-			result.Err = safeOpenError(err)
-			result.Message = fmt.Sprintf("could not import %s", shortURI(uri))
-			a.lastErr = safeOpenError(err)
-		} else {
-			result.Message = fmt.Sprintf("imported %s as %s; it is selected, Show puts it on the stage", shortURI(uri), it.source.ID)
-		}
-		a.lastCommand = result
-		a.report(result)
+		a.landImport(token, uri, stream, probed, probeErr)
 	})
+}
+
+// landImport ends an import on the drawing thread: it adds the source when the
+// read worked, reports either outcome, and asks for a frame. The window shows
+// the Sources page while the read runs, so without that frame it keeps showing
+// "Reading…" and the old source count until something else happens to draw.
+func (a *appState) landImport(token int, uri string, stream hls.Stream, probed bool, probeErr error) {
+	if token != a.importToken {
+		// Cancel already cleared the busy state and said so; this landing is
+		// from the read it stopped and must not add anything.
+		return
+	}
+	it := &item{uri: uri, volume: a.settingsSourceVolume()}
+	var err error
+	switch {
+	case probeErr != nil:
+		err = probeErr
+	case probed:
+		err = a.attachStream(it, stream)
+	default:
+		err = a.addLocal(it)
+	}
+	if err == nil {
+		// An imported address is a source somebody added, so it comes back
+		// with its remembered sound, and changing that sound may be
+		// remembered in turn.
+		a.applySourceMemory(it)
+		// The player opens at import, as it does for a source given on the
+		// command line: the stage builds a video for every source with a
+		// player, and a player created later, in the same pass that first
+		// shows it, stayed unready in this build. Opening it here gives it
+		// the frames that come before the user shows it.
+		var player *ui.VideoPlayer
+		player, err = openPlayerOnMain(uri)
+		if err == nil {
+			it.player = player
+			it.generation++
+			wakeNetworkPlayer(it.uri, rawPlayer(player), a.generationIs(it, it.generation))
+			a.items = append(a.items, it)
+			a.selected = it.source.ID
+			a.apply()
+			a.closePendingWhenReady()
+		}
+	}
+	a.closeImportTicker()
+	a.importing = ""
+	a.importText = ""
+	result := commandResult{Command: command{Kind: commandAdd, URI: uri}, At: time.Now()}
+	if err != nil {
+		it.openErr = safeOpenError(err)
+		result.Err = safeOpenError(err)
+		result.Message = fmt.Sprintf("could not import %s", shortURI(uri))
+		a.lastErr = safeOpenError(err)
+	} else {
+		result.Message = fmt.Sprintf("imported %s as %s; it is selected, Show puts it on the stage", shortURI(uri), it.source.ID)
+	}
+	a.lastCommand = result
+	a.report(result)
+	a.invalidate()
+}
+
+// invalidate asks for a frame after the state the window shows has changed. It
+// runs on the drawing thread; requestFrame is the seam tests use because they
+// have no window.
+func (a *appState) invalidate() {
+	if a.requestFrame != nil {
+		a.requestFrame()
+		return
+	}
+	if a.window != nil {
+		a.window.Invalidate()
+	}
 }
 
 // tickImport keeps the window repainting while a read is in flight, so the
@@ -601,9 +626,7 @@ func (a *appState) tickImport(done chan struct{}) {
 			return
 		case <-ticker.C:
 			mygoRunOnMain(func() {
-				if a.window != nil {
-					a.window.Invalidate()
-				}
+				a.invalidate()
 			})
 		}
 	}

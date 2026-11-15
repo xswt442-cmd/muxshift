@@ -196,6 +196,7 @@ Aligned task filtering and pagination.
 - CI 至少校验相关构建/测试、文档路径与配对、CHANGELOG 双语章节、Tag 与版本一致；社区健康文件校验存放位置、必需章节与唯一性，单名文件不参与双语文档对检查。
 - 可以增加对跟踪文本的私人路径、密钥与过程用语扫描，但要人工复核误报：测试夹具出现模拟路径不代表泄漏。
 - GitHub PR 与 Release 的自动验证不能证明生产已部署；生产发布及验收需按该项目批准流程完成。
+- 提交说明以 Conventional Commit 类型前缀开头：`feat:` / `fix:` / `docs:` / `test:` / `refactor:` / `perf:` / `build:` / `ci:` / `chore:` / `release:`；需要范围时写 `fix(paths):`，冒号后一句说明本次改动。一次提交只属于一个类型，跨主题拆开。
 
 ## 9. 适用性
 

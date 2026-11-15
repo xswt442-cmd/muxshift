@@ -8,6 +8,10 @@ Pull requests target `dev`. Maintainers fast-forward `main` before a release. Me
 
 A description states the change, the work completed, and the checks actually run, in a Simplified Chinese section and a matching English section. Deferred work belongs in an issue.
 
+## Commit messages
+
+Start the subject with a Conventional Commit type: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `perf:`, `build:`, `ci:`, `chore:`, or `release:`. Add a scope in parentheses when it clarifies the area (`fix(paths):`). Follow the colon with one sentence describing the change. One commit carries one type; split unrelated changes into separate commits.
+
 ## Documentation
 
 `README.md` and `README.en.md` change together. The paired documents under `docs/development/` change together, and `CHANGELOG.md` keeps its `简体中文` and `English` sections in step. Tracked files contain no personal paths, credentials, private host details, or one-off logs.

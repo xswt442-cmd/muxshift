@@ -23,6 +23,8 @@ node .github/engineering/scripts/sync-pr.mjs --apply /path/to/repo
 
 该脚本仅同步 PR 模板与 PR Skill 的四个指定文件；只读检查发现差异时退出非零，写入必须使用 `--apply`，且拒绝覆盖目标仓库已经修改或未跟踪的文件。同步完成后仍由项目维护者审查 Diff、运行检查、决定是否提交与推送。
 
+社区健康文件另用 `sync-community.mjs` 检查位置、唯一性与必需章节，命令见 [工程化规范索引](README.md) 的「社区健康文件同步」一节。`--apply` 只补建缺失文件，已有副本一律保留；产品仓按自身信任边界和验证命令改写后，检查仍以章节为准。
+
 ## 3. 检查表
 
 | 目标 | 完成条件 |
@@ -42,7 +44,10 @@ node .github/engineering/scripts/sync-pr.mjs --apply /path/to/repo
 | testplace | 被 Git 忽略，未误纳入暂存和历史发布资产 |
 | 文档与注释 | 正确表述当前最终状态；正文不记调试历程，注释只解释当前约束，语句清楚，图示按需使用 Mermaid |
 | 文档组织 | 根目录只保留标准入口，其他文档按职责归档；没有需要依赖的私人外部文件 |
-| CI / 安全 | 文档基础检查、版本对应验证、仓库 Secret Scan 和真实功能测试 |
+| SECURITY | 位于 `.github/SECURITY.md` 等 GitHub 可识别路径；声明受支持版本、真实存在的联络方式与受理范围；公开 issue 不含复现细节 |
+| CONTRIBUTING | 位于可识别路径；写明 PR 目标分支、PR 正文结构、文档对与实际验证命令；链接到本仓 SECURITY |
+| 社区单名文件 | 由固定名称识别，全仓只保留一份；不套用 `.zh-CN.md` / `.en.md` 成对命名，不注册进 `docs:check` 文档对 |
+| CI / 安全 | 文档基础检查、版本对应验证、仓库 Secret Scan、真实功能测试与社区健康文件位置检查 |
 
 ## 4. 不同发行形式
 
@@ -71,7 +76,7 @@ node scripts/release-notes.mjs --changelog CHANGELOG.md --tag v1.2.3
 node scripts/release-notes.mjs --changelog tui/CHANGELOG.md --tag cli-v1.2.3 --manifest tui/package.json
 ~~~
 
-脚本只读取本地文件并将 Release 正文写入标准输出；不创建 Tag、提交、调用 GitHub、上传资产或部署服务。工作流应将结果保存为构建临时文件，再传给 GitHub Release CLI 的 `--notes-file`。
+脚本只读取本地文件并将 Release 正文写入标准输出；不创建 Tag、提交、调用 GitHub、上传资产或部署服务。工作流应将结果保存为构建临时文件，再传给 GitHub Release CLI 的 `--notes-file`。各产品仓按自身发行流程改造后，参数与上面的权威源示例不同，运行时以该仓库的发行手册为准。
 
 ## 6. 历史版本
 

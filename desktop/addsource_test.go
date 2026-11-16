@@ -120,7 +120,7 @@ func TestAWebsiteIsOpenedAndDoesNotBecomeASource(t *testing.T) {
 		t.Fatal("the chooser closed while the media was still in the browser")
 	}
 	if !strings.Contains(app.addNote, "opened https://example.com/watch?v=1") ||
-		!strings.Contains(app.addNote, "does not hand it back yet") {
+		!strings.Contains(app.addNote, "can hand one media address back") {
 		t.Fatalf("the note does not say where the media still is: %q", app.addNote)
 	}
 	if app.addNoteBad {
@@ -136,7 +136,7 @@ func TestAWebsiteIsOpenedAndDoesNotBecomeASource(t *testing.T) {
 		t.Fatalf("the website added %d core source(s), want none", len(app.session.Sources()))
 	}
 	if !strings.Contains(result.Message, "opened https://example.com/watch?v=1") ||
-		!strings.Contains(result.Message, "does not hand it back yet") {
+		!strings.Contains(result.Message, "can hand one media address back") {
 		t.Fatalf("the message does not say where the media still is: %q", result.Message)
 	}
 }

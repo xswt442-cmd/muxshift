@@ -59,7 +59,7 @@ func (c addChoice) explanation() string {
 	case addChoiceMedia:
 		return "An http(s) address to a playlist or a single file. It is read away from the drawing thread and joins this session when the first picture is ready."
 	case addChoiceSite:
-		return "A page in your browser. The system browser opens it, and an extension hands the stream back; the handoff step is not in this build, so nothing joins the session yet."
+		return "A page in your browser. The system browser opens it, and the MuxShift extension there hands one media address back; the page itself never becomes a source. A browser without the extension can only be used through Media link."
 	}
 	return "Say which of the three you have. The app does not guess from what is typed in the address field."
 }
@@ -227,7 +227,7 @@ func (a *appState) openSiteAddress(text string) (commandResult, bool) {
 	result := commandResult{
 		Command: command,
 		At:      time.Now(),
-		Message: fmt.Sprintf("opened %s in your browser; choosing the media there is the next step, and this build does not hand it back yet", parsed.Redacted()),
+		Message: fmt.Sprintf("opened %s in your browser; the MuxShift extension there can hand one media address back to this window", parsed.Redacted()),
 	}
 	a.report(result)
 	return result, true

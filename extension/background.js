@@ -1,4 +1,4 @@
-﻿// The service worker talks to the desktop window over a loopback address. No
+// The service worker talks to the desktop window over a loopback address. No
 // native host is installed: the window prints a pairing code and this extension
 // is given a token for it, once. Media never travels this way 鈥?only the address
 // the user selected.
@@ -97,20 +97,28 @@ function collectMedia() {
     }
   }
 
+  // Resource timings name every piece the player fetched. A segment is a piece
+  // of a stream, not a stream: handing one over would import a fragment that
+  // cannot play on its own, so segments are counted and never offered.
   const extensions = [".m3u8", ".mpd", ".mp4", ".webm", ".m4s", ".ts"];
+  let segments = 0;
   for (const entry of performance.getEntriesByType("resource")) {
     const name = entry.name || "";
     const clean = name.split("?")[0].toLowerCase();
     if (!extensions.some((ending) => clean.endsWith(ending))) continue;
     if (new URL(name, location.href).protocol === "blob:") continue;
-    const kind = clean.endsWith(".m3u8")
-      ? "hls"
-      : clean.endsWith(".mpd")
-        ? "dash"
-        : clean.endsWith(".ts") || clean.endsWith(".m4s")
-          ? "segment"
-          : "file";
+    if (clean.endsWith(".ts") || clean.endsWith(".m4s")) {
+      segments += 1;
+      continue;
+    }
+    const kind = clean.endsWith(".m3u8") ? "hls" : clean.endsWith(".mpd") ? "dash" : "file";
     add(name, kind, "resource timing");
+  }
+  if (segments) {
+    notes.push({
+      kind: "segments",
+      detail: `The page fetched ${segments} media segment(s). A segment is part of a stream, so it is not offered on its own; a playlist on the page is what can be handed over.`,
+    });
   }
 
   if (!sources.length) {
@@ -159,7 +167,9 @@ async function request(base, path, body, token) {
     parsed = { reason: text };
   }
   if (!response.ok) {
-    throw new Error(parsed.reason || `the window answered ${response.status}`);
+    const error = new Error(parsed.reason || parsed.error || `the window answered ${response.status}`);
+    error.status = response.status;
+    throw error;
   }
   return parsed;
 }
@@ -196,12 +206,27 @@ async function status() {
 }
 
 // importAddress hands one selected address to the window's own add command.
+// A pairing the window no longer knows (it restarted, or the code was replaced)
+// is dropped here, so the popup can ask for a fresh code instead of repeating
+// a request that cannot succeed.
 async function importAddress(url) {
   if (!url) throw new Error("no address was selected");
   const handoff = await stored();
   if (!handoff) {
     throw new Error("pair with the window first: open its Diagnostics page and type its code");
   }
-  const answer = await request(base(handoff.address), "/import", { url }, handoff.token);
+  let answer;
+  try {
+    answer = await request(base(handoff.address), "/import", { url }, handoff.token);
+  } catch (error) {
+    if (error.status === 401 || error.status === 403) {
+      await chrome.storage.local.remove("handoff");
+      throw new Error("this browser is no longer paired with the window; open its Diagnostics page for a new code");
+    }
+    if (error instanceof TypeError) {
+      throw new Error("the window is not answering; start MuxShift and pair again if it asks");
+    }
+    throw error;
+  }
   return { ok: true, message: answer.message || "the window accepted the address" };
 }

@@ -107,7 +107,7 @@ pairButton.addEventListener("click", () => {
 importButton.addEventListener("click", () => {
   if (!selected) return;
   importButton.disabled = true;
-  setStatus("handing the address to the window…");
+  setStatus("sending the address to the window…");
   chrome.runtime.sendMessage({ type: "import", url: selected }, (reply) => {
     if (chrome.runtime.lastError) {
       setStatus(chrome.runtime.lastError.message, "bad");
@@ -115,11 +115,20 @@ importButton.addEventListener("click", () => {
       return;
     }
     if (!reply?.ok) {
-      setStatus(reply?.reason || "the window refused the address", "bad");
+      const reason = reply?.reason || "the window refused the address";
+      setStatus(reason, "bad");
+      // The background drops a pairing the window no longer knows; say so here
+      // too, otherwise the popup keeps promising a connection that is gone.
+      if (/no longer paired/.test(reason)) {
+        setPairLine("not paired: open MuxShift's Diagnostics page for a new code");
+      }
       importButton.disabled = false;
       return;
     }
-    setStatus(reply.message || "the window accepted the address", "ok");
+    // The extension only learns that the window's add command was accepted.
+    // Ready and the first picture are the window's own status, so this line
+    // must not claim them.
+    setStatus(`${reply.message || "the window accepted the address"} — watch the window's Sources page for Ready and the first frame.`, "ok");
   });
 });
 

@@ -99,7 +99,49 @@ func TestMediaAddressesAreCheckedBeforeReading(t *testing.T) {
 	}
 }
 
-func TestAWebsiteDoesNotBecomeASource(t *testing.T) {
+func TestAWebsiteIsOpenedAndDoesNotBecomeASource(t *testing.T) {
+	app, err := newAppState(nil)
+	if err != nil {
+		t.Fatalf("new app state: %v", err)
+	}
+	var opened []string
+	app.openURL = func(address string, done func(error)) { opened = append(opened, address) }
+	app.openAddSource()
+	app.addChoice = addChoiceSite
+	app.addSiteText = "https://example.com/watch?v=1"
+	result, ok := app.submitAddSource()
+	if !ok {
+		t.Fatalf("submitting a website failed: %v", result.Err)
+	}
+	if len(opened) != 1 || opened[0] != "https://example.com/watch?v=1" {
+		t.Fatalf("the browser was asked for %v, want the one address", opened)
+	}
+	if !app.addOpen {
+		t.Fatal("the chooser closed while the media was still in the browser")
+	}
+	if !strings.Contains(app.addNote, "opened https://example.com/watch?v=1") ||
+		!strings.Contains(app.addNote, "does not hand it back yet") {
+		t.Fatalf("the note does not say where the media still is: %q", app.addNote)
+	}
+	if app.addNoteBad {
+		t.Fatal("the opened page reads as a refusal")
+	}
+	if got := app.addSubmitLabel(); got != "Open again" {
+		t.Fatalf("the button says %q after the page opened, want Open again", got)
+	}
+	if len(app.items) != 0 {
+		t.Fatalf("the website added %d item(s), want none", len(app.items))
+	}
+	if app.session.Sources() != nil && len(app.session.Sources()) != 0 {
+		t.Fatalf("the website added %d core source(s), want none", len(app.session.Sources()))
+	}
+	if !strings.Contains(result.Message, "opened https://example.com/watch?v=1") ||
+		!strings.Contains(result.Message, "does not hand it back yet") {
+		t.Fatalf("the message does not say where the media still is: %q", result.Message)
+	}
+}
+
+func TestAWebsiteWithoutABrowserIsRefused(t *testing.T) {
 	app, err := newAppState(nil)
 	if err != nil {
 		t.Fatalf("new app state: %v", err)
@@ -108,19 +150,39 @@ func TestAWebsiteDoesNotBecomeASource(t *testing.T) {
 	app.addChoice = addChoiceSite
 	app.addSiteText = "https://example.com/watch?v=1"
 	if _, ok := app.submitAddSource(); ok {
-		t.Fatal("submitting a website reported a source")
+		t.Fatal("a website without a browser reported success")
 	}
-	if len(app.items) != 0 {
-		t.Fatalf("the website added %d item(s), want none", len(app.items))
-	}
-	if app.session.Sources() != nil && len(app.session.Sources()) != 0 {
-		t.Fatalf("the website added %d core source(s), want none", len(app.session.Sources()))
-	}
-	if !strings.Contains(app.addNote, "browser is not opened") {
-		t.Fatalf("the note does not say the browser is not opened: %q", app.addNote)
+	if !app.addNoteBad || !strings.Contains(app.addNote, "no system browser") {
+		t.Fatalf("the note does not say there is no browser: %q (bad=%v)", app.addNote, app.addNoteBad)
 	}
 	if !app.addOpen {
 		t.Fatal("the chooser closed after saying it could not open the browser")
+	}
+	if len(app.items) != 0 {
+		t.Fatalf("the refused website added %d item(s)", len(app.items))
+	}
+}
+
+func TestABrowserThatFailsIsReported(t *testing.T) {
+	app, err := newAppState(nil)
+	if err != nil {
+		t.Fatalf("new app state: %v", err)
+	}
+	app.requestFrame = func() {}
+	app.openURL = func(address string, done func(error)) {
+		done(errors.New("no application is registered for this address"))
+	}
+	app.openAddSource()
+	app.addChoice = addChoiceSite
+	app.addSiteText = "https://example.com/watch?v=1"
+	if _, ok := app.submitAddSource(); !ok {
+		t.Fatal("a browser failure should still be recorded as the attempt's outcome")
+	}
+	if app.lastErr == nil || !strings.Contains(app.lastErr.Error(), "opening https://example.com/watch?v=1 failed") {
+		t.Fatalf("the browser failure was not reported: %v", app.lastErr)
+	}
+	if len(app.items) != 0 {
+		t.Fatalf("the failed browser added %d item(s)", len(app.items))
 	}
 }
 

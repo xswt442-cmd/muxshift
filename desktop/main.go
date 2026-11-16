@@ -731,6 +731,7 @@ func main() {
 	flag.DurationVar(&syncAt, "at", 10*time.Second, "syncmap: the shared event time to measure")
 	flag.DurationVar(&syncOffset, "offset", 0, "syncmap: the offset applied to the measured source")
 	flag.StringVar(&dvrDir, "dvr-dir", dvrDir, "directory the replay buffer keeps its segments in")
+	handoffPort := flag.Int("handoff-port", 8731, "loopback port the browser extension pairs with")
 	flag.DurationVar(&dvrRetention, "dvr-retention", dvrRetention, "how much history the replay buffer keeps")
 	flag.Int64Var(&dvrMaxBytes, "dvr-max-bytes", dvrMaxBytes, "byte limit of the replay buffer; 0 keeps only the retention limit")
 	flag.Int64Var(&dvrRecordingBytes, "dvr-recording-bytes", dvrRecordingBytes,
@@ -921,6 +922,15 @@ func main() {
 		})
 		installWindowIcon(window)
 		s.window = window
+		// P5.3: the browser's only way in is a loopback socket this window
+		// owns. It starts with the window and stops with it; a port already in
+		// use is a visible reason, never a quiet move to another port.
+		if handoff, err := startHandoff(s, *handoffPort); err != nil {
+			s.handoffErr = err.Error()
+			log.Printf("handoff: %v", err)
+		} else {
+			s.handoff = handoff
+		}
 		// A scripted run says what size it needs; a person's window comes back
 		// the way they left it (P18.1). The restore check is the one scripted
 		// run that has to see the restore itself. A frame given on the command
@@ -954,6 +964,9 @@ func main() {
 			// from the log.
 			s.closes++
 			log.Printf("focus: the window closed (%d time(s) so far)", s.closes)
+			// The listener holds nothing on disk, but a closed window must not
+			// leave an accepting socket behind.
+			s.handoff.stop()
 			// The window is still the window here, so this is the last moment
 			// its bounds can be read; a scripted run leaves the file alone.
 			if *scenario == "" {

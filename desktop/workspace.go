@@ -5,6 +5,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -163,6 +164,27 @@ func (a *appState) diagnosticsPage(c *ui.Context) {
 		}
 		if a.syncNote != "" {
 			ui.Text(c, a.syncNote).FontSize(textSmall).TextColor(colorTextDim)
+		}
+		// P5: the browser's way in. The code is short-lived on purpose; making a
+		// new one never closes the listener a paired browser already uses.
+		ui.Text(c, "browser handoff").FontSize(textMicro).TextColor(colorTextDim)
+		switch {
+		case a.handoffErr != "":
+			ui.Text(c, a.handoffErr).FontSize(textSmall).TextColor(colorBad).SingleLine()
+		default:
+			ui.Row(c).Gap(spaceXs).Children(func() {
+				ui.Text(c, a.handoff.codeLine()).FontSize(textSmall).TextColor(colorText).FontFeatures("tnum")
+				ui.Button(c.Key("handoff-new-code"), "New code").Height(28).Width(104).
+					Tooltip("the browser pairs with this code instead of the expired one").
+					OnClick(func() {
+						if a.handoff != nil {
+							a.handoff.rotate()
+							log.Printf("handoff: made a new pairing code")
+						}
+					})
+			})
+			ui.Text(c, "load extension/ unpacked in Edge or Chrome, open its popup and pair once with the code above").
+				FontSize(textMicro).TextColor(colorTextDim)
 		}
 		if rows := a.dvrRows(); len(rows) > 0 {
 			ui.Text(c, "replay buffers (live)").FontSize(textMicro).TextColor(colorTextDim)

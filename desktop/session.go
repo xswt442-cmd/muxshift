@@ -254,6 +254,11 @@ type appState struct {
 	openURL        func(string, func(error))
 	contextOpenURL func(string, func(error))
 
+	// handoff is the loopback listener a browser extension pairs with; it is
+	// nil when that listener could not start, and handoffErr says why (P5).
+	handoff    *handoffServer
+	handoffErr string
+
 	// seekText and seekNote belong to the inspector's replay seek entry: the
 	// first is what the small field holds, the second the sentence the last
 	// attempt produced. Neither is a decision; PlanSeek still decides.

@@ -1,20 +1,25 @@
-// The service worker is the only place that may reach the native host, so the
-// popup talks to it and never touches the bridge directly.
-const HOST = "com.muxshift.bridge";
+﻿// The service worker talks to the desktop window over a loopback address. No
+// native host is installed: the window prints a pairing code and this extension
+// is given a token for it, once. Media never travels this way 鈥?only the address
+// the user selected.
+const PORT = 8731;
+const FALLBACK_BASE = `http://127.0.0.1:${PORT}`;
 
 chrome.runtime.onMessage.addListener((message, _sender, respond) => {
   if (message?.type === "scan") {
     scan().then(respond, (error) => respond({ error: String(error?.message || error) }));
     return true;
   }
-  if (message?.type === "import") {
-    bridge({ type: "import", url: message.url }).then(respond, (error) =>
-      respond({ ok: false, reason: String(error?.message || error) }),
-    );
+  if (message?.type === "pair") {
+    pair(message.code).then(respond, (error) => respond({ ok: false, reason: String(error?.message || error) }));
     return true;
   }
-  if (message?.type === "ping") {
-    bridge({ type: "ping" }).then(respond, (error) =>
+  if (message?.type === "status") {
+    status().then(respond, (error) => respond({ paired: false, reason: String(error?.message || error) }));
+    return true;
+  }
+  if (message?.type === "import") {
+    importAddress(message.url).then(respond, (error) =>
       respond({ ok: false, reason: String(error?.message || error) }),
     );
     return true;
@@ -123,20 +128,80 @@ function collectMedia() {
   return { sources, notes, page: { title: document.title, url: location.href } };
 }
 
-// bridge sends one control message to the native host. Only control messages
-// travel this way; media never does.
-function bridge(message) {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendNativeMessage(HOST, message, (reply) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
-      }
-      if (!reply) {
-        reject(new Error("the native host closed without an answer"));
-        return;
-      }
-      resolve(reply);
-    });
+// stored returns the paired address and token, or null when this browser has
+// not paired with a window yet.
+async function stored() {
+  const { handoff } = await chrome.storage.local.get("handoff");
+  if (!handoff?.token || !handoff?.address) return null;
+  return handoff;
+}
+
+// base turns a paired address into one fetch can use. An address stored before
+// the window answered with a scheme is still a loopback address.
+function base(address) {
+  return /^https?:\/\//i.test(address) ? address : `http://${address}`;
+}
+
+// request sends one JSON request to the window and returns its JSON answer.
+async function request(base, path, body, token) {
+  const headers = { "Content-Type": "application/json" };
+  if (token) headers["X-MuxShift-Handoff"] = token;
+  const response = await fetch(`${base}${path}`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body || {}),
   });
+  const text = await response.text();
+  let parsed = {};
+  try {
+    parsed = text ? JSON.parse(text) : {};
+  } catch {
+    parsed = { reason: text };
+  }
+  if (!response.ok) {
+    throw new Error(parsed.reason || `the window answered ${response.status}`);
+  }
+  return parsed;
+}
+
+// pair exchanges the code shown in the window for a token. The code is used
+// once and then replaced by the window.
+async function pair(code) {
+  const cleaned = String(code || "").trim();
+  if (!/^\d{6}$/.test(cleaned)) {
+    throw new Error("the pairing code is six digits, as shown in the window");
+  }
+  const answer = await request(FALLBACK_BASE, "/pair", { code: cleaned });
+  if (!answer.token) {
+    throw new Error("the window did not return a token");
+  }
+  const address = answer.address || FALLBACK_BASE;
+  await chrome.storage.local.set({ handoff: { address, token: answer.token } });
+  return { ok: true, address };
+}
+
+// status reports whether this browser is paired and whether the window answers.
+async function status() {
+  const handoff = await stored();
+  if (!handoff) {
+    return { paired: false, reason: "this browser has not paired with a window yet" };
+  }
+  try {
+    const response = await fetch(`${base(handoff.address)}/health`);
+    if (!response.ok) throw new Error(`the window answered ${response.status}`);
+  } catch (error) {
+    return { paired: true, reachable: false, reason: "the window is not answering; is MuxShift running?" };
+  }
+  return { paired: true, reachable: true, address: handoff.address };
+}
+
+// importAddress hands one selected address to the window's own add command.
+async function importAddress(url) {
+  if (!url) throw new Error("no address was selected");
+  const handoff = await stored();
+  if (!handoff) {
+    throw new Error("pair with the window first: open its Diagnostics page and type its code");
+  }
+  const answer = await request(base(handoff.address), "/import", { url }, handoff.token);
+  return { ok: true, message: answer.message || "the window accepted the address" };
 }

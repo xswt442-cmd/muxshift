@@ -2,12 +2,19 @@ const list = document.getElementById("sources");
 const page = document.getElementById("page");
 const importButton = document.getElementById("import");
 const status = document.getElementById("status");
+const code = document.getElementById("code");
+const pairButton = document.getElementById("pair");
+const pairLine = document.getElementById("pair-line");
 
 let selected = null;
 
 function setStatus(text, kind) {
   status.textContent = text;
   status.className = kind || "";
+}
+
+function setPairLine(text) {
+  pairLine.textContent = text;
 }
 
 function render(scanned) {
@@ -51,6 +58,19 @@ function render(scanned) {
 }
 
 function start() {
+  chrome.runtime.sendMessage({ type: "status" }, (reply) => {
+    if (chrome.runtime.lastError) {
+      setPairLine(chrome.runtime.lastError.message);
+      return;
+    }
+    if (reply?.paired && reply.reachable) {
+      setPairLine(`paired with ${reply.address}`);
+    } else if (reply?.paired) {
+      setPairLine("paired, but the window is not answering — is MuxShift running?");
+    } else {
+      setPairLine("not paired: open MuxShift's Diagnostics page for the code");
+    }
+  });
   chrome.runtime.sendMessage({ type: "scan" }, (reply) => {
     if (chrome.runtime.lastError) {
       setStatus(chrome.runtime.lastError.message, "bad");
@@ -64,10 +84,30 @@ function start() {
   });
 }
 
+pairButton.addEventListener("click", () => {
+  const typed = code.value.trim();
+  pairButton.disabled = true;
+  setStatus("pairing…");
+  chrome.runtime.sendMessage({ type: "pair", code: typed }, (reply) => {
+    pairButton.disabled = false;
+    if (chrome.runtime.lastError) {
+      setStatus(chrome.runtime.lastError.message, "bad");
+      return;
+    }
+    if (!reply?.ok) {
+      setStatus(reply?.reason || "the window refused that code", "bad");
+      return;
+    }
+    code.value = "";
+    setPairLine(`paired with ${reply.address}`);
+    setStatus("paired; pick an address below", "ok");
+  });
+});
+
 importButton.addEventListener("click", () => {
   if (!selected) return;
   importButton.disabled = true;
-  setStatus("asking the local session…");
+  setStatus("handing the address to the window…");
   chrome.runtime.sendMessage({ type: "import", url: selected }, (reply) => {
     if (chrome.runtime.lastError) {
       setStatus(chrome.runtime.lastError.message, "bad");
@@ -75,11 +115,11 @@ importButton.addEventListener("click", () => {
       return;
     }
     if (!reply?.ok) {
-      setStatus(reply?.reason || "the import was refused", "bad");
+      setStatus(reply?.reason || "the window refused the address", "bad");
       importButton.disabled = false;
       return;
     }
-    setStatus(`imported as ${reply.source.id}`, "ok");
+    setStatus(reply.message || "the window accepted the address", "ok");
   });
 });
 

@@ -63,7 +63,7 @@ func (a *appState) sourcesPage(c *ui.Context) {
 					a.sourceCard(c, i, it)
 				}
 				if len(a.items) == 0 {
-					ui.Text(c, "no sources yet: type an address above and press Add").
+					ui.Text(c, "no sources yet: press Add to pick a file, a media address or a website").
 						FontSize(textBody).TextColor(colorTextDim).Padding(spaceMd, 0)
 				}
 			})
@@ -71,28 +71,35 @@ func (a *appState) sourcesPage(c *ui.Context) {
 	})
 }
 
-// importRow is the address field and the Add button. Both are real: Add sends
-// an add-source command, the read runs off the drawing thread, and the outcome
-// lands in the status line and the log. A failed read keeps the address here
-// with a Retry, because the source it never added has no card to retry from.
+// importRow is the address field and the Add button. P1 routes Add into the
+// same three-way chooser the top bar's Open… opens; Enter in the field still
+// reads the address it holds, because the field says what it is for. A failed
+// read keeps the address here with a Retry, because the source it never added
+// has no card to retry from.
 func (a *appState) importRow(c *ui.Context) {
 	ui.Column(c).WidthPercent(100).Gap(spaceXs).Children(func() {
 		ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).WidthPercent(100).Children(func() {
 			c.Key("import-url")
-			ui.TextInput(c, &a.importText).Grow(1).Height(34).
-				Placeholder("https://… .m3u8  or  C:\\path\\file.mp4")
-			label := "Add"
+			field := ui.TextInput(c, &a.importText).Grow(1).Height(34).
+				Placeholder("https://… .m3u8  or  C:\\path\\file.mp4").
+				Description("a media address or an absolute file path")
+			if field.Submitted() && a.importing == "" {
+				result, _ := a.addMediaAddress(a.importText)
+				a.report(result)
+			}
+			label := "Add…"
 			if a.importing != "" {
 				// Loading feedback with a real clock, not an animation: the
 				// seconds come from importSince and the ticker repaints.
 				label = fmt.Sprintf("Reading… %.0fs", time.Since(a.importSince).Seconds())
 			}
-			add := ui.Button(c.Key("import-add"), label).Width(96).Height(34)
+			add := ui.Button(c.Key("import-add"), label).Width(96).Height(34).
+				Tooltip("add a source: a file, a media address or a website")
 			if a.importing != "" {
 				add.Disabled(true).Tooltip("the read is in flight; Cancel stops it")
 			}
 			if add.Clicked() {
-				a.report(a.runCommand(command{Kind: commandAdd, URI: a.importText}))
+				a.openAddSource()
 			}
 			if a.importing != "" {
 				if ui.Button(c.Key("import-cancel"), "Cancel").Width(76).Height(34).

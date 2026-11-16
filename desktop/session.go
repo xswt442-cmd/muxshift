@@ -224,6 +224,18 @@ type appState struct {
 	// first thing checked so a second Add cannot start a second read.
 	importing string
 
+	// addOpen, addChoice, addNote and addSiteText belong to the "add a source"
+	// chooser P1 puts behind both the top bar's Open… and the Sources page's
+	// Add. The chooser asks what a person has instead of guessing from the
+	// text: a file, a media address, or a website a browser opens. Only the
+	// media choice reaches the add command; the other two say what this build
+	// does not do yet. See addsource.go.
+	addOpen     bool
+	addChoice   addChoice
+	addNote     string
+	addNoteBad  bool
+	addSiteText string
+
 	// seekText and seekNote belong to the inspector's replay seek entry: the
 	// first is what the small field holds, the second the sentence the last
 	// attempt produced. Neither is a decision; PlanSeek still decides.

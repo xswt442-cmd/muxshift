@@ -99,9 +99,12 @@ func (a *appState) topBar(c *ui.Context, width, height float32) {
 		if width >= 1100 {
 			ui.Text(c, a.globalStatus()).FontSize(textSmall).TextColor(colorTextDim).
 				FontFeatures("tnum")
-			ui.Button(c.Key("top-open"), "Open…").Width(76).Height(28).
-				Tooltip("opening a file from the desktop is not implemented; use the Sources page's address field or -media").
-				Description("Open a file picked on the desktop (not available in this build)")
+			if ui.Button(c.Key("top-open"), "Open…").Width(76).Height(28).
+				Tooltip("add a source: a file, a media address or a website").
+				Description("Add a source").
+				Clicked() {
+				a.openAddSource()
+			}
 			open := a.workspace == workspaceSettings
 			label := "Settings"
 			if open {

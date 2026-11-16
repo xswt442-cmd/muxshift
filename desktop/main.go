@@ -442,6 +442,12 @@ func (a *appState) view(c *ui.Context) {
 			a.dockPane(c)
 		}
 		a.statusBar(c)
+		// P1: the add-a-source chooser, one layer above the workbench. It is
+		// drawn here rather than inside a page so both entry points — the top
+		// bar's Open… and the Sources page's Add — show the same panel.
+		if a.addOpen {
+			ui.Modal(c, &a.addOpen, func() { a.addSourcePanel(c) })
+		}
 	})
 }
 

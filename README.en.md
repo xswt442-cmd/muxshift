@@ -1,4 +1,4 @@
-<div align="center">
+﻿<div align="center">
   <img src="web/icon.svg" alt="MuxShift" width="88" height="88">
   <h1>MuxShift</h1>
   <p>Several media sources in one session: a scene picks what is seen and heard, and one event timeline aligns them</p>
@@ -128,6 +128,11 @@ headers or keys are passed on.
   alignment or replay, and its seeks stay inside what the browser buffered.
 - A source imported while running joins playback once its player shows a
   picture; a bad address only reports an error and leaves no empty card.
+- **Video sites are not a supported feature**: the extension only hands over an
+  http(s) media address the page already loads. Pages that feed segments to MSE
+  (Bilibili and the like) expose no single replayable address, and the YouTube
+  sample asks for a login; both get a clear message, and nothing bypasses the
+  login, cross-origin rules or DRM.
 
 ## Layout
 

@@ -79,6 +79,28 @@ It prints a `http://127.0.0.1:<port>/?token=<token>` URL; the token appears
 once, the page trades it for an HttpOnly cookie and removes it from the address
 bar.
 
+## Adding a source
+
+The top bar's `Open…` and the Sources page's `Add…` open the same panel, which
+offers three choices:
+
+- **Local file** opens the system file picker; the chosen file joins the current
+  session, and cancelling changes nothing.
+- **Media link** takes an http(s) HLS playlist or a directly readable media file.
+  The desktop reads what the address actually serves rather than trusting its
+  extension, so a web page, a 404 or an unsupported type is refused with a
+  reason and never leaves an empty card behind.
+- **Website address** opens the page in the system browser. For the page's own
+  address to reach the desktop, load the `extension/` (unpacked; no Native Host
+  any more): take the one-time pairing code from the Diagnostics page, paste it
+  into the extension popup once, then pick the address the page loaded and hand
+  it to this window.
+
+Whether a page can hand anything over is up to the page: `blob:`/MSE players,
+pages that need a login or DRM, and cross-origin restrictions are not worked
+around, only explained. Only http(s) addresses are accepted; no cookies, request
+headers or keys are passed on.
+
 ## Documentation
 
 | Document | Contents |
@@ -113,7 +135,7 @@ bar.
 | --- | --- |
 | `core/` | session model, event timeline, HLS intake and DVR buffer |
 | `desktop/` | MyGo desktop app and scripted checks |
-| `web/`, `extension/` | loopback web session, browser extension and native host |
+| `web/`, `extension/` | loopback web session and browser extension (no native host) |
 | `tools/` | separation, alignment and design tokens |
 | `docs/development/` | architecture, verification index, release process |
 

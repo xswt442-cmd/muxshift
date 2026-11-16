@@ -8,11 +8,34 @@ This changelog records completed changes that matter to someone using MuxShift. 
 
 ### 简体中文
 
-<!-- 只在有真实内容时增加分类：**新增**、**改进**、**修复**、**安全**、**兼容性**、**移除**。不要预留空分类。 -->
+**新增**
+
+- 顶部 `Open…` 与 Sources 页的 `Add…` 打开同一个「添加来源」面板，三选一：本地文件、媒体链接、网站地址。
+- 本地文件走系统文件选择器，选中后加入当前会话，取消不改变任何东西。
+- 媒体链接按实际内容判断是播放列表还是可直读媒体，网页、404 与不支持的类型明确拒绝且不留空卡片。
+- 网站地址用系统浏览器打开；扩展不再需要 Native Host，改为与桌面窗口回环配对后交回页面已加载的地址。
+
+**修复**
+
+- 打开失败的本地或网络来源不再留下幽灵 Source/Track。
+- 引擎在打开成功之后才报告的失败会被收回，窗口不再保留一个永远不能播的源。
+- 读地址期间关闭窗口不再把结果落进会话。
 
 ### English
 
-<!-- Mirror the Chinese categories and facts: **Added**, **Improved**, **Fixed**, **Security**, **Compatibility**, **Removed**. Omit categories with no items. -->
+**Added**
+
+- The top bar's `Open…` and the Sources page's `Add…` open one add-a-source panel with three choices: local file, media link, website address.
+- Local file opens the system file picker; the chosen file joins the current session and cancelling changes nothing.
+- Media links are classified by what the address actually serves, so a web page, a 404 or an unsupported type is refused with a reason and leaves no empty card.
+- Website addresses open in the system browser; the extension no longer needs a Native Host and hands the page's loaded address back over a loopback pairing.
+
+**Fixed**
+
+- A source whose player cannot open no longer leaves a ghost source and track behind.
+- A failure the engine reports only after a successful open is taken back instead of keeping a source that can never play.
+- Closing the window while an address is being read no longer lands the result in the session.
+
 
 ## [0.0.1] - 2026-11-14
 

@@ -74,6 +74,15 @@ func TestSniffReadsOnlyTheFirstBytes(t *testing.T) {
 		case "/page":
 			w.Header().Set("Content-Type", "text/html")
 			fmt.Fprint(w, "<!doctype html><html><body>not media</body></html>")
+		case "/broken":
+			http.Error(w, "the origin is having a bad day", http.StatusInternalServerError)
+		case "/to-page":
+			http.Redirect(w, r, "/page", http.StatusFound)
+		case "/to-nothing":
+			http.Redirect(w, r, "/nothing", http.StatusTemporaryRedirect)
+		case "/to-file":
+			w.Header().Set("Location", "file:///C:/Windows/win.ini")
+			w.WriteHeader(http.StatusFound)
 		default:
 			http.NotFound(w, r)
 		}
@@ -107,6 +116,21 @@ func TestSniffReadsOnlyTheFirstBytes(t *testing.T) {
 	}
 	if _, err := sniffAddress(context.Background(), "http://user:secret@"+strings.TrimPrefix(server.URL, "http://")+"/movie.mp4"); err == nil || !strings.Contains(err.Error(), "user name") {
 		t.Fatalf("an address with credentials was not refused: %v", err)
+	}
+	if _, err := sniffAddress(context.Background(), server.URL+"/broken"); err == nil || !strings.Contains(err.Error(), "500") {
+		t.Fatalf("a 500 did not report the server's status: %v", err)
+	}
+	if _, err := sniffAddress(context.Background(), server.URL+"/to-page"); err == nil || !strings.Contains(err.Error(), "web page") {
+		t.Fatalf("a redirect to a web page was not refused as one: %v", err)
+	}
+	if _, err := sniffAddress(context.Background(), server.URL+"/to-nothing"); err == nil || !strings.Contains(err.Error(), "404") {
+		t.Fatalf("a redirect to a missing address did not report the status: %v", err)
+	}
+	// The http client itself refuses the scheme before this package sees the
+	// response; either wording is a refusal, and nothing below http is read.
+	if _, err := sniffAddress(context.Background(), server.URL+"/to-file"); err == nil ||
+		(!strings.Contains(err.Error(), "not an http or https address") && !strings.Contains(err.Error(), "unsupported protocol scheme")) {
+		t.Fatalf("a redirect away from http was not refused: %v", err)
 	}
 }
 

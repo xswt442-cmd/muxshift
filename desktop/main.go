@@ -964,6 +964,11 @@ func main() {
 			// from the log.
 			s.closes++
 			log.Printf("focus: the window closed (%d time(s) so far)", s.closes)
+			// A read that is still running must not land in a window that is
+			// gone: the landing writes the session and the players, and both
+			// belong to this window's drawing thread.
+			s.closed = true
+			s.closeImportTicker()
 			// The listener holds nothing on disk, but a closed window must not
 			// leave an accepting socket behind.
 			s.handoff.stop()

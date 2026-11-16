@@ -225,6 +225,14 @@ type appState struct {
 	// first thing checked so a second Add cannot start a second read.
 	importing string
 
+	// closed is set by the window's close handler. A landing that arrives after
+	// it has nothing to write into: the session and the players were released.
+	closed bool
+
+	// openPlayerForImport lets a test make the player open fail at a known
+	// point; the real path opens the player on the drawing thread.
+	openPlayerForImport func(string) (*ui.VideoPlayer, error)
+
 	// addOpen, addChoice, addNote and addSiteText belong to the "add a source"
 	// chooser P1 puts behind both the top bar's Open… and the Sources page's
 	// Add. The chooser asks what a person has instead of guessing from the
@@ -474,8 +482,9 @@ func (a *appState) addFrom(uri string, origin sourceOrigin) (*item, error) {
 	// a source that was muted last time never speaks for a frame at the default
 	// volume first.
 	a.applySourceMemory(it)
-	player, err := openPlayerOnMain(uri)
+	player, err := a.openImportedPlayer(uri)
 	if err != nil {
+		a.dropUnreachableSource(it)
 		it.openErr = safeOpenError(err)
 		return it, err
 	}
@@ -650,6 +659,13 @@ func (a *appState) landImport(token int, uri string, stream hls.Stream, mode imp
 		// from the read it stopped and must not add anything.
 		return
 	}
+	if a.closed {
+		// The window is gone: its session and players were released, so there
+		// is nothing left to import into and nothing to report to.
+		a.closeImportTicker()
+		a.importing = ""
+		return
+	}
 	it := &item{uri: uri, volume: a.settingsSourceVolume()}
 	var err error
 	switch {
@@ -673,7 +689,7 @@ func (a *appState) landImport(token int, uri string, stream hls.Stream, mode imp
 		// shows it, stayed unready in this build. Opening it here gives it
 		// the frames that come before the user shows it.
 		var player *ui.VideoPlayer
-		player, err = openPlayerOnMain(uri)
+		player, err = a.openImportedPlayer(uri)
 		if err == nil {
 			it.player = player
 			it.generation++
@@ -682,6 +698,12 @@ func (a *appState) landImport(token int, uri string, stream hls.Stream, mode imp
 			a.selected = it.source.ID
 			a.apply()
 			a.closePendingWhenReady()
+		} else {
+			// The session accepted the source and its tracks before the player
+			// was opened. An import that cannot be shown is not an import, so
+			// the source goes back out; otherwise the window would count a
+			// source nothing can play, and the next scene would pick it up.
+			a.dropUnreachableSource(it)
 		}
 	}
 	a.closeImportTicker()
@@ -699,6 +721,31 @@ func (a *appState) landImport(token int, uri string, stream hls.Stream, mode imp
 	a.lastCommand = result
 	a.report(result)
 	a.invalidate()
+}
+
+// openImportedPlayer opens the player of an imported source on the drawing
+// thread. openPlayerForImport is the seam a test uses to make the open fail
+// without depending on what this machine's Media Foundation accepts.
+func (a *appState) openImportedPlayer(uri string) (*ui.VideoPlayer, error) {
+	if a.openPlayerForImport != nil {
+		return a.openPlayerForImport(uri)
+	}
+	return openPlayerOnMain(uri)
+}
+
+// dropUnreachableSource hands back a source the session accepted when the
+// player that would have shown it could not be opened. The item never reaches
+// a.items, so nothing else in the window knows the source exists; leaving it in
+// the session would leave a source counted in every scene and in "N sources".
+func (a *appState) dropUnreachableSource(it *item) {
+	if it.source.ID == "" {
+		return
+	}
+	if err := a.session.RemoveSource(it.source.ID); err != nil {
+		log.Printf("import: could not remove %s after the player failed to open: %v", it.source.ID, err)
+		return
+	}
+	it.source = core.Source{}
 }
 
 // invalidate asks for a frame after the state the window shows has changed. It

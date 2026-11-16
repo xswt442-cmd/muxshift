@@ -698,6 +698,14 @@ func (a *appState) landImport(token int, uri string, stream hls.Stream, mode imp
 			a.selected = it.source.ID
 			a.apply()
 			a.closePendingWhenReady()
+			// The open returned nil, but this engine reports a file it cannot
+			// decode a moment later; the item is watched until it has shown a
+			// frame or reported that it never will. A test without a window has
+			// no loop for the watch to run on, so it only starts where the
+			// window (or the test's own seam) can take a callback.
+			if a.window != nil || a.onMain != nil {
+				go a.watchFirstOpen(it, it.generation)
+			}
 		} else {
 			// The session accepted the source and its tracks before the player
 			// was opened. An import that cannot be shown is not an import, so
@@ -721,6 +729,96 @@ func (a *appState) landImport(token int, uri string, stream hls.Stream, mode imp
 	a.lastCommand = result
 	a.report(result)
 	a.invalidate()
+}
+
+// firstOpenGrace is how long an imported player gets to report an error before
+// the import is treated as shown. Media Foundation accepts a file when the
+// player is created and answers "could not play the video" a moment later.
+const firstOpenGrace = 3 * time.Second
+
+// shouldAbandonImport says an import did not become a source: the player
+// reported an error and never reached ready. A player that is merely slow has no
+// error and is left alone.
+func shouldAbandonImport(ready bool, err error) bool {
+	return err != nil && !ready
+}
+
+// watchFirstOpen watches a freshly added source for the deferred error Media
+// Foundation reports after openPlayerOnMain has already returned nil. An import
+// that never shows a frame is handed back, so a source nothing can play is not
+// counted in the window or picked up by the scene.
+func (a *appState) watchFirstOpen(it *item, generation int) {
+	deadline := time.Now().Add(firstOpenGrace)
+	for time.Now().Before(deadline) {
+		time.Sleep(200 * time.Millisecond)
+		ready, err, live := a.playerState(it, generation)
+		if !live {
+			return
+		}
+		if !shouldAbandonImport(ready, err) {
+			if ready {
+				return
+			}
+			continue
+		}
+		a.abandonImport(it, generation, err)
+		return
+	}
+}
+
+// playerState reads the player on the drawing thread. live is false once the
+// item left the window or someone else owns its player now.
+func (a *appState) playerState(it *item, generation int) (ready bool, err error, live bool) {
+	a.mainDo(func() {
+		if a.closed || it.generation != generation || it.player == nil {
+			return
+		}
+		live = true
+		ready = it.player.Ready()
+		err = it.player.Err()
+	})
+	return ready, err, live
+}
+
+// abandonImport takes a source back out after its player failed to show it, and
+// says so in the same words a failed import uses.
+func (a *appState) abandonImport(it *item, generation int, cause error) {
+	a.mainDo(func() {
+		if a.closed || it.generation != generation {
+			return
+		}
+		for index, candidate := range a.items {
+			if candidate != it {
+				continue
+			}
+			if err := a.remove(index); err != nil {
+				log.Printf("import: could not remove %s after the player failed: %v", it.source.ID, err)
+				return
+			}
+			break
+		}
+		err := safeOpenError(cause)
+		a.lastErr = err
+		result := commandResult{
+			Command: command{Kind: commandAdd, URI: it.uri},
+			At:      time.Now(),
+			Err:     err,
+			Message: fmt.Sprintf("could not import %s: the player could not show it", shortURI(it.uri)),
+		}
+		a.lastCommand = result
+		a.report(result)
+		a.invalidate()
+	})
+}
+
+// mainDo runs fn on the drawing thread. onMain is the seam tests use, because a
+// test has no window loop for mygoRunOnMain to reach.
+func (a *appState) mainDo(fn func()) {
+	if a.onMain != nil {
+		a.onMain(fn)
+		return
+	}
+	mygoRunOnMain(fn)
 }
 
 // openImportedPlayer opens the player of an imported source on the drawing

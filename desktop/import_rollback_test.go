@@ -127,6 +127,52 @@ func TestALandingAfterTheWindowClosedAddsNothing(t *testing.T) {
 	}
 }
 
+// The engine error that decides whether an import worked arrives after the open
+// returns, so the rule is separate from the loop that reads it.
+func TestAnImportIsGivenBackOnlyWhenThePlayerErroredWithoutReady(t *testing.T) {
+	cases := []struct {
+		name  string
+		ready bool
+		err   error
+		want  bool
+	}{
+		{"no error, not ready yet", false, nil, false},
+		{"ready with no error", true, nil, false},
+		{"ready despite an old error", true, errNoPlayer, false},
+		{"error before any frame", false, errNoPlayer, true},
+	}
+	for _, c := range cases {
+		if got := shouldAbandonImport(c.ready, c.err); got != c.want {
+			t.Errorf("%s: shouldAbandonImport(%v, %v) = %v, want %v", c.name, c.ready, c.err, got, c.want)
+		}
+	}
+}
+
+// A player read off the drawing thread reports live only while the item still
+// owns that generation.
+func TestThePlayerStateIsReadOnlyWhileTheGenerationIsOwned(t *testing.T) {
+	app, err := newAppState(nil)
+	if err != nil {
+		t.Fatalf("new app state: %v", err)
+	}
+	app.onMain = func(fn func()) { fn() }
+	it := &item{player: &ui.VideoPlayer{}, generation: 2}
+	it.source.ID = "source-1"
+	app.items = append(app.items, it)
+
+	_, _, live := app.playerState(it, 2)
+	if !live {
+		t.Fatal("the current player was not readable")
+	}
+	if _, _, live := app.playerState(it, 1); live {
+		t.Fatal("a player from an older generation was still readable")
+	}
+	app.closed = true
+	if _, _, live := app.playerState(it, 2); live {
+		t.Fatal("a closed window still handed out a player")
+	}
+}
+
 func TestASuccessfulImportStillAddsOneSource(t *testing.T) {
 	app, err := newAppState(nil)
 	if err != nil {

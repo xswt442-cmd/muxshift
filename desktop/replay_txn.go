@@ -402,7 +402,9 @@ func (a *appState) commitSeekTxn(txn *seekTxn) {
 			it.replayAnchorErr = nil
 			it.generation++
 		}
-		a.seek = nil
+		// The slot stays held until the account is published: a caller that
+		// looked while the commit was finishing must not see the slot free and
+		// then read the previous transaction's "preparing" line.
 		a.seekMu.Unlock()
 	})
 	if !ran {
@@ -422,10 +424,10 @@ func (a *appState) commitSeekTxn(txn *seekTxn) {
 			a.leftLease()
 		}
 	}
-	a.clearSeek(txn)
 	logf("seek", "committed %d recording(s) for event %s; each player is on the file cut for it, and the target sits %s into that file",
 		len(txn.steps), shortDuration(txn.event), shortDuration(deepestPosition(txn.prepared)))
 	txn.noticeOnce.Do(func() { a.publishReport(txn.reportFor(replayCommitted, "")) })
+	a.clearSeek(txn)
 }
 
 // abortSeekTxn gives back every file and player the attempt took. The items keep
@@ -549,9 +551,9 @@ func (a *appState) abortSeekTxn(txn *seekTxn, why string) {
 			a.leftLease()
 		}
 	}
-	a.clearSeek(txn)
 	logf("seek", "rolled back the replay for event %s: %s", shortDuration(txn.event), why)
 	txn.noticeOnce.Do(func() { a.publishReport(txn.reportFor(replayRolledBack, why)) })
+	a.clearSeek(txn)
 }
 
 // seekInFlight returns the transaction the window is preparing, if any.

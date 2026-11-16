@@ -545,6 +545,20 @@ func (a *appState) addLocal(it *item) error {
 		it.openErr = fmt.Errorf("%s is not a regular file", shortURI(it.uri))
 		return it.openErr
 	}
+	return a.registerUnenumerated(it)
+}
+
+// addDirect registers an http(s) address that serves a media file rather than a
+// playlist. The player opens it the way it opens a local file and does not
+// enumerate its tracks either, so the session records the same two streams and
+// says so in the labels.
+func (a *appState) addDirect(it *item) error {
+	return a.registerUnenumerated(it)
+}
+
+// registerUnenumerated adds a source whose tracks the player does not list: one
+// video and one audio stream, labelled so a reader knows where they came from.
+func (a *appState) registerUnenumerated(it *item) error {
 	source, err := a.session.AddSource(it.uri)
 	if err != nil {
 		it.openErr = safeOpenError(err)
@@ -564,26 +578,53 @@ func (a *appState) addLocal(it *item) error {
 	return nil
 }
 
-// importSource adds a source without freezing the window. Reading an HLS
-// address takes as long as the origin takes, so the probe runs off the drawing
-// thread; everything that writes the session or opens a player happens back on
-// it. The outcome is reported as a command result, so the status line and the
-// log say what happened to the import that was asked for.
+// importMode says how an import reached the session. A local path is recorded as
+// the one video and one audio stream the player takes from it; a playlist
+// brings the tracks it declared; a plain media address is recorded like a local
+// file, because the player does not enumerate its tracks either.
+type importMode int
+
+const (
+	importLocal importMode = iota
+	importProbed
+	importDirect
+)
+
+// importSource adds a source without freezing the window. Reading a network
+// address takes as long as the origin takes, so both the sniff and the probe run
+// off the drawing thread; everything that writes the session or opens a player
+// happens back on it. The outcome is reported as a command result, so the status
+// line and the log say what happened to the import that was asked for.
+//
+// An http(s) address is not assumed to be HLS: it is asked what it serves first.
+// A playlist goes through core/hls, so the session gets the tracks the stream
+// declares; anything else that looks like media is handed to the player as it
+// is. A failed probe is never treated as "probably an MP4": the failure is the
+// outcome, with the address's own words in it.
 func (a *appState) importSource(ctx context.Context, uri string, token int) {
 	var (
 		stream   hls.Stream
-		probed   bool
+		mode     importMode
 		probeErr error
 	)
 	if isNetworkAddress(uri) {
-		stream, probeErr = hls.Probe(ctx, uri, hls.Options{})
-		probed = probeErr == nil
-		if probeErr != nil && ctx.Err() != nil {
-			probeErr = fmt.Errorf("reading %s stopped: %w", shortURI(uri), ctx.Err())
+		kind, err := sniffAddress(ctx, uri)
+		switch {
+		case err != nil:
+			probeErr = err
+		case kind == addressPlaylist:
+			stream, probeErr = hls.Probe(ctx, uri, hls.Options{})
+			if probeErr == nil {
+				mode = importProbed
+			} else if ctx.Err() != nil {
+				probeErr = fmt.Errorf("reading %s stopped: %w", shortURI(uri), ctx.Err())
+			}
+		default:
+			mode = importDirect
 		}
 	}
 	mygoRunOnMain(func() {
-		a.landImport(token, uri, stream, probed, probeErr)
+		a.landImport(token, uri, stream, mode, probeErr)
 	})
 }
 
@@ -591,7 +632,7 @@ func (a *appState) importSource(ctx context.Context, uri string, token int) {
 // read worked, reports either outcome, and asks for a frame. The window shows
 // the Sources page while the read runs, so without that frame it keeps showing
 // "Reading…" and the old source count until something else happens to draw.
-func (a *appState) landImport(token int, uri string, stream hls.Stream, probed bool, probeErr error) {
+func (a *appState) landImport(token int, uri string, stream hls.Stream, mode importMode, probeErr error) {
 	if token != a.importToken {
 		// Cancel already cleared the busy state and said so; this landing is
 		// from the read it stopped and must not add anything.
@@ -602,8 +643,10 @@ func (a *appState) landImport(token int, uri string, stream hls.Stream, probed b
 	switch {
 	case probeErr != nil:
 		err = probeErr
-	case probed:
+	case mode == importProbed:
 		err = a.attachStream(it, stream)
+	case mode == importDirect:
+		err = a.addDirect(it)
 	default:
 		err = a.addLocal(it)
 	}

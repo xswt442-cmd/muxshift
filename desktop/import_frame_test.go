@@ -22,7 +22,7 @@ func TestAFinishedImportAsksForAFrame(t *testing.T) {
 	app.importing = "reading"
 	missing := filepath.Join(t.TempDir(), "not-there.mp4")
 
-	app.landImport(0, missing, hls.Stream{}, false, errors.New("read playlist: connection refused"))
+	app.landImport(0, missing, hls.Stream{}, importLocal, errors.New("read playlist: connection refused"))
 
 	if frames == 0 {
 		t.Fatal("an import that failed left the page without a frame to draw")
@@ -50,7 +50,7 @@ func TestACancelledReadDoesNotDrawTwice(t *testing.T) {
 	app.requestFrame = func() { frames++ }
 	app.importToken = 3
 
-	app.landImport(2, filepath.Join(t.TempDir(), "late.mp4"), hls.Stream{}, false, nil)
+	app.landImport(2, filepath.Join(t.TempDir(), "late.mp4"), hls.Stream{}, importLocal, nil)
 
 	if frames != 0 {
 		t.Fatalf("a cancelled read asked for %d frame(s)", frames)

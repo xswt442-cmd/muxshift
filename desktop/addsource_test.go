@@ -5,10 +5,15 @@ package main
 // becomes a Core source.
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// errPicked is the failure a picker can hand back, e.g. when the dialog cannot
+// be created.
+var errPicked = errors.New("the dialog could not open")
 
 func TestTheChooserOpensOnNoChoiceAndForgetsTheLastNote(t *testing.T) {
 	app, err := newAppState(nil)
@@ -138,21 +143,96 @@ func TestABadWebsiteAddressIsRefusedBeforeTheNote(t *testing.T) {
 	}
 }
 
-func TestChoosingAFileSaysThePickerIsNotHereYet(t *testing.T) {
+func TestAFileChoiceOpensThePickerAndAddsItsAnswer(t *testing.T) {
 	app, err := newAppState(nil)
 	if err != nil {
 		t.Fatalf("new app state: %v", err)
 	}
+	app.requestFrame = func() {}
+	path := filepath.Join(t.TempDir(), "clip.mp4")
+	released := make(chan struct{})
+	done := make(chan struct{})
+	app.pickFile = func() (string, error) {
+		<-released
+		return path, nil
+	}
+	app.onMain = func(f func()) {
+		f()
+		close(done)
+	}
+	app.openAddSource()
+	app.addChoice = addChoiceFile
+	if _, ok := app.submitAddSource(); !ok {
+		t.Fatal("the file choice did not start the picker")
+	}
+	if !app.pickingFile {
+		t.Fatal("the picker did not mark itself as open")
+	}
+	if app.addOpen {
+		t.Fatal("the chooser stayed open while the picker ran")
+	}
+	close(released)
+	<-done
+	if app.pickingFile {
+		t.Fatal("the picker stayed marked as open after its answer")
+	}
+	if app.importing == "" {
+		t.Fatal("the picked path did not reach the add command")
+	}
+	app.runCommand(command{Kind: commandCancelImport})
+}
+
+func TestACancelledPickerTouchesNothing(t *testing.T) {
+	app, err := newAppState(nil)
+	if err != nil {
+		t.Fatalf("new app state: %v", err)
+	}
+	app.requestFrame = func() {}
+	app.acceptPickedFile("", nil)
+	if len(app.items) != 0 || app.importing != "" || app.lastErr != nil {
+		t.Fatalf("a cancelled picker left items=%d importing=%q lastErr=%v", len(app.items), app.importing, app.lastErr)
+	}
+	if app.pickingFile {
+		t.Fatal("the cancelled picker stayed marked as open")
+	}
+}
+
+func TestAPickerErrorIsReportedAndAddsNothing(t *testing.T) {
+	app, err := newAppState(nil)
+	if err != nil {
+		t.Fatalf("new app state: %v", err)
+	}
+	app.requestFrame = func() {}
+	app.acceptPickedFile("", errPicked)
+	if len(app.items) != 0 {
+		t.Fatalf("a failed picker added %d item(s)", len(app.items))
+	}
+	if app.lastErr == nil || !strings.Contains(app.lastErr.Error(), "choosing a file failed") {
+		t.Fatalf("the failure is not reported: %v", app.lastErr)
+	}
+	if !strings.Contains(app.lastErr.Error(), "the dialog could not open") {
+		t.Fatalf("the reported failure loses the reason: %v", app.lastErr)
+	}
+}
+
+func TestASecondFileChoiceWhileOneIsOpenIsRefused(t *testing.T) {
+	app, err := newAppState(nil)
+	if err != nil {
+		t.Fatalf("new app state: %v", err)
+	}
+	called := false
+	app.pickFile = func() (string, error) { called = true; return "", nil }
+	app.pickingFile = true
 	app.openAddSource()
 	app.addChoice = addChoiceFile
 	if _, ok := app.submitAddSource(); ok {
-		t.Fatal("the file choice reported a source")
+		t.Fatal("a second picker was started")
 	}
-	if len(app.items) != 0 {
-		t.Fatalf("the file choice added %d item(s)", len(app.items))
+	if called {
+		t.Fatal("the second choice reached the picker")
 	}
-	if !strings.Contains(app.addNote, "file picker") {
-		t.Fatalf("the note does not name the missing picker: %q", app.addNote)
+	if !strings.Contains(app.addNote, "already open") {
+		t.Fatalf("the note does not explain the open picker: %q", app.addNote)
 	}
 }
 
@@ -200,4 +280,22 @@ func TestAValidMediaAddressReachesTheAddCommand(t *testing.T) {
 	}
 	// Stop the read before the test ends; nothing was added either way.
 	app.runCommand(command{Kind: commandCancelImport})
+}
+
+func TestALocalPathMustNameAFile(t *testing.T) {
+	app, err := newAppState(nil)
+	if err != nil {
+		t.Fatalf("new app state: %v", err)
+	}
+	missing := filepath.Join(t.TempDir(), "gone.mp4")
+	if err := app.addLocal(&item{uri: missing}); err == nil {
+		t.Fatal("a missing file was accepted")
+	}
+	dir := t.TempDir()
+	if err := app.addLocal(&item{uri: dir}); err == nil {
+		t.Fatal("a directory was accepted")
+	}
+	if sources := app.session.Sources(); len(sources) != 0 {
+		t.Fatalf("the refusals left %d source(s)", len(sources))
+	}
 }

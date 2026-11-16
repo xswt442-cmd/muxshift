@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -227,14 +228,24 @@ type appState struct {
 	// addOpen, addChoice, addNote and addSiteText belong to the "add a source"
 	// chooser P1 puts behind both the top bar's Open… and the Sources page's
 	// Add. The chooser asks what a person has instead of guessing from the
-	// text: a file, a media address, or a website a browser opens. Only the
-	// media choice reaches the add command; the other two say what this build
-	// does not do yet. See addsource.go.
+	// text: a file, a media address, or a website a browser opens. The file
+	// choice opens the desktop's picker (P2), the media choice reaches the add
+	// command, and the website choice says what this build does not do yet.
+	// See addsource.go.
 	addOpen     bool
 	addChoice   addChoice
 	addNote     string
 	addNoteBad  bool
 	addSiteText string
+
+	// pickingFile is true while the desktop file picker is open, so one
+	// picker at a time. pickFile is the seam tests use: it returns the path
+	// the picker would have returned, or "" when cancelled.
+	pickingFile bool
+	pickFile    func() (string, error)
+	// onMain runs the picker's answer on the drawing thread; tests have no
+	// window loop and replace it with a direct call.
+	onMain func(func())
 
 	// seekText and seekNote belong to the inspector's replay seek entry: the
 	// first is what the small field holds, the second the sentence the last
@@ -518,6 +529,22 @@ func (a *appState) attachStream(it *item, stream hls.Stream) error {
 // file it opens, so the session records the one video and one audio stream the
 // player takes from it, and says so in the labels.
 func (a *appState) addLocal(it *item) error {
+	// A local choice names a file that must already be there: a path that does
+	// not exist, a directory or a device is refused before the session grows a
+	// source that could never play.
+	info, err := os.Stat(it.uri)
+	if err != nil {
+		it.openErr = safeOpenError(err)
+		return fmt.Errorf("no file at %s: %w", shortURI(it.uri), err)
+	}
+	if info.IsDir() {
+		it.openErr = fmt.Errorf("%s is a directory, not a media file", shortURI(it.uri))
+		return it.openErr
+	}
+	if !info.Mode().IsRegular() {
+		it.openErr = fmt.Errorf("%s is not a regular file", shortURI(it.uri))
+		return it.openErr
+	}
 	source, err := a.session.AddSource(it.uri)
 	if err != nil {
 		it.openErr = safeOpenError(err)

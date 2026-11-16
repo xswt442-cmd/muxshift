@@ -9,11 +9,13 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -53,7 +55,7 @@ func (c addChoice) label() string {
 func (c addChoice) explanation() string {
 	switch c {
 	case addChoiceFile:
-		return "A video on this machine. The desktop file picker is not in this build yet; an absolute path still works under Media link."
+		return "A video on this machine. It opens the desktop's own file picker, and what you pick joins this session like any other source."
 	case addChoiceMedia:
 		return "An http(s) address to a playlist or a single file. It is read away from the drawing thread and joins this session when the first picture is ready."
 	case addChoiceSite:
@@ -105,13 +107,82 @@ func (a *appState) submitAddSource() (commandResult, bool) {
 		a.addNoteBad = false
 		return commandResult{}, false
 	case addChoiceFile:
-		a.addNote = "the desktop file picker is not in this build; an absolute path under Media link is the way a file is added today"
-		a.addNoteBad = false
-		return commandResult{}, false
+		// P2: the picker blocks until it is dismissed, so it runs off the
+		// drawing thread and comes back through acceptPickedFile.
+		if a.pickingFile {
+			a.addNote = "a file dialog is already open; finish it first"
+			a.addNoteBad = false
+			return commandResult{}, false
+		}
+		a.closeAddSource()
+		a.startFilePick()
+		return commandResult{}, true
 	}
 	a.addNote = "choose one of the three first"
 	a.addNoteBad = false
 	return commandResult{}, false
+}
+
+// startFilePick opens the desktop's file picker off the drawing thread. The
+// picker returns nothing when it is cancelled, and a cancellation must leave
+// the session and the last error exactly as they were.
+func (a *appState) startFilePick() {
+	a.pickingFile = true
+	go func() {
+		path, err := a.chooseLocalFile()
+		deliver := func() { a.acceptPickedFile(path, err) }
+		if a.onMain != nil {
+			a.onMain(deliver)
+			return
+		}
+		mygoRunOnMain(deliver)
+	}()
+}
+
+// chooseLocalFile is the real picker. The seam keeps the tests off native
+// dialogs while the same outcome runs through acceptPickedFile.
+func (a *appState) chooseLocalFile() (string, error) {
+	if a.pickFile != nil {
+		return a.pickFile()
+	}
+	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+		Parent: a.window,
+		Title:  "Add a source",
+		Filters: []mygo.FileFilter{
+			{Name: "Media files", Extensions: []string{"mp4", "m4v", "mov", "mkv", "webm", "ts", "m3u8"}},
+			{Name: "All files", Extensions: []string{"*"}},
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	if len(paths) == 0 {
+		return "", nil
+	}
+	return paths[0], nil
+}
+
+// acceptPickedFile turns the picker's answer into an add command, or into
+// nothing at all when the picker was cancelled.
+func (a *appState) acceptPickedFile(path string, err error) {
+	a.pickingFile = false
+	if err != nil {
+		result := commandResult{
+			Command: command{Kind: commandAdd},
+			At:      time.Now(),
+			Err:     fmt.Errorf("choosing a file failed: %w", err),
+		}
+		a.lastErr = result.Err
+		a.report(result)
+		a.invalidate()
+		return
+	}
+	if path == "" {
+		log.Printf("add-source: the file picker was cancelled; the session was not touched")
+		return
+	}
+	result, _ := a.addMediaAddress(path)
+	a.report(result)
 }
 
 // addMediaAddress checks the address and starts the existing add command. Both
@@ -181,7 +252,7 @@ func (a *appState) addSourcePanel(c *ui.Context) {
 			case addChoiceSite:
 				submit.Disabled(true).Tooltip("the system browser opens a website in the handoff step; this build does not open it")
 			case addChoiceFile:
-				submit.Disabled(true).Tooltip("the desktop file picker is not in this build")
+				submit.Tooltip("open the desktop file picker")
 			default:
 				submit.Disabled(true).Tooltip("choose what you want to add first")
 			}

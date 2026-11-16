@@ -59,7 +59,7 @@ func (c addChoice) explanation() string {
 	case addChoiceMedia:
 		return "An http(s) address to a playlist or a single file. It is read away from the drawing thread and joins this session when the first picture is ready."
 	case addChoiceSite:
-		return "A page in your browser. The system browser opens it, and an extension hands the stream back; in this build the browser is not opened yet."
+		return "A page in your browser. The system browser opens it, and an extension hands the stream back; the handoff step is not in this build, so nothing joins the session yet."
 	}
 	return "Say which of the three you have. The app does not guess from what is typed in the address field."
 }
@@ -72,6 +72,7 @@ func (a *appState) openAddSource() {
 	a.addNote = ""
 	a.addNoteBad = false
 	a.addSiteText = ""
+	a.siteOpened = false
 }
 
 // closeAddSource closes the chooser, including the note the attempt left.
@@ -80,6 +81,7 @@ func (a *appState) closeAddSource() {
 	a.addChoice = addChoiceNone
 	a.addNote = ""
 	a.addNoteBad = false
+	a.siteOpened = false
 }
 
 // submitAddSource runs the chosen path. Only the media choice reaches the
@@ -100,12 +102,19 @@ func (a *appState) submitAddSource() (commandResult, bool) {
 			a.addNote, a.addNoteBad = err.Error(), true
 			return commandResult{}, false
 		}
-		// P4 opens the system browser. Until it exists, keeping the address
-		// and saying so is the honest outcome: a page that opens is not a
-		// source, and a source that fails to appear would be worse.
-		a.addNote = "the browser is not opened in this build, so no source was added; the handoff step is where this path continues"
-		a.addNoteBad = false
-		return commandResult{}, false
+		// P4 opens the page and says plainly that the media is still in the
+		// browser: an opened page is not a source, and handing the stream back
+		// is the extension step, which this build does not have.
+		result, ok := a.openSiteAddress(a.addSiteText)
+		if !ok {
+			a.addNote, a.addNoteBad = result.Err.Error(), true
+			return result, false
+		}
+		// The browser is open, but the media is still there: the panel stays and
+		// says so, because closing it would look like the page had been added.
+		a.siteOpened = true
+		a.addNote, a.addNoteBad = result.Message, false
+		return result, true
 	case addChoiceFile:
 		// P2: the picker blocks until it is dismissed, so it runs off the
 		// drawing thread and comes back through acceptPickedFile.
@@ -185,6 +194,45 @@ func (a *appState) acceptPickedFile(path string, err error) {
 	a.report(result)
 }
 
+// openSiteAddress hands the page to the system browser. The browser is opened
+// by the frame's own context, so the seam is what a test replaces; without a
+// seam or a browser the attempt says so and nothing is recorded. An opened page
+// is never a source: the message says where the media still is.
+func (a *appState) openSiteAddress(text string) (commandResult, bool) {
+	address := strings.TrimSpace(text)
+	command := command{Kind: commandAdd, URI: address}
+	refuse := func(format string, args ...any) (commandResult, bool) {
+		return commandResult{Command: command, At: time.Now(), Err: fmt.Errorf(format, args...)}, false
+	}
+	parsed, err := url.Parse(address)
+	if err != nil {
+		return refuse("%q is not an address a browser can open: %v", address, err)
+	}
+	opener := a.openURL
+	if opener == nil {
+		opener = a.contextOpenURL
+	}
+	if opener == nil {
+		return refuse("this build has no system browser to open %s", parsed.Redacted())
+	}
+	opener(address, func(err error) {
+		if err != nil {
+			a.lastErr = fmt.Errorf("opening %s failed: %w", parsed.Redacted(), err)
+			a.report(commandResult{Command: command, At: time.Now(), Err: a.lastErr})
+			a.invalidate()
+			return
+		}
+		log.Printf("add-source: opened %s in the system browser", parsed.Redacted())
+	})
+	result := commandResult{
+		Command: command,
+		At:      time.Now(),
+		Message: fmt.Sprintf("opened %s in your browser; choosing the media there is the next step, and this build does not hand it back yet", parsed.Redacted()),
+	}
+	a.report(result)
+	return result, true
+}
+
 // addMediaAddress checks the address and starts the existing add command. Both
 // the chooser's Add and Enter in the Sources address field go through it, so a
 // person who types an address sees one set of rules.
@@ -200,8 +248,21 @@ func (a *appState) addMediaAddress(text string) (commandResult, bool) {
 	return result, result.Err == nil
 }
 
+// addSubmitLabel names what the Confirm button does: a page that is already in
+// the browser can only be opened again, and saying so keeps the two states apart.
+func (a *appState) addSubmitLabel() string {
+	if a.addChoice == addChoiceSite && a.siteOpened {
+		return "Open again"
+	}
+	return "Add"
+}
+
 // addSourcePanel draws the chooser inside the modal's panel.
 func (a *appState) addSourcePanel(c *ui.Context) {
+	// The website choice needs a browser, and the frame's context owns the only
+	// way to ask for one. Handing it over here keeps the choice usable from the
+	// panel alone, while a test can still put its own opener in place instead.
+	a.contextOpenURL = c.OpenURLThen
 	ui.Column(c).Gap(spaceSm).MinWidth(520).MaxWidth(560).Children(func() {
 		ui.Text(c, "Add a source").FontSize(textTitle).TextColor(colorText)
 		ui.Text(c, "Three things can be added. Pick the one you have; the app does not guess from the address text.").
@@ -245,12 +306,12 @@ func (a *appState) addSourcePanel(c *ui.Context) {
 			if ui.Button(c.Key("add-cancel"), "Cancel").Width(88).Height(34).Clicked() {
 				a.closeAddSource()
 			}
-			submit := ui.Button(c.Key("add-submit"), "Add").Width(96).Height(34)
+			submit := ui.Button(c.Key("add-submit"), a.addSubmitLabel()).Width(116).Height(34)
 			switch a.addChoice {
 			case addChoiceMedia:
 				submit.Tooltip("read this address and add it to the session")
 			case addChoiceSite:
-				submit.Disabled(true).Tooltip("the system browser opens a website in the handoff step; this build does not open it")
+				submit.Tooltip("open this page in your default browser; the media still has to be handed back")
 			case addChoiceFile:
 				submit.Tooltip("open the desktop file picker")
 			default:

@@ -237,6 +237,9 @@ type appState struct {
 	addNote     string
 	addNoteBad  bool
 	addSiteText string
+	// siteOpened records that the last website attempt did reach a browser, so
+	// the panel can say where the media still is instead of looking finished.
+	siteOpened bool
 
 	// pickingFile is true while the desktop file picker is open, so one
 	// picker at a time. pickFile is the seam tests use: it returns the path
@@ -246,6 +249,10 @@ type appState struct {
 	// onMain runs the picker's answer on the drawing thread; tests have no
 	// window loop and replace it with a direct call.
 	onMain func(func())
+	// openURL asks the system browser for a page; a test can put a recorder in
+	// its place, and contextOpenURL is what the panel hands over each frame.
+	openURL        func(string, func(error))
+	contextOpenURL func(string, func(error))
 
 	// seekText and seekNote belong to the inspector's replay seek entry: the
 	// first is what the small field holds, the second the sentence the last

@@ -53,10 +53,13 @@ func canvasLiveBody(window *mygo.Window, a *appState, dir string) {
 			return
 		}
 		a.apply()
-		for _, it := range []*item{first, second} {
-			if it.player != nil {
-				it.player.Play()
-			}
+		// Play all is the product's own start: the shared clock and every
+		// player in the group. Starting only the players would leave the top
+		// bar saying "paused" while two pictures ran, which is the mismatch
+		// this run is supposed to rule out, not reproduce.
+		if problems := a.playAll(); len(problems) > 0 {
+			fail = fmt.Sprintf("play all: %v", problems)
+			return
 		}
 		window.Invalidate()
 	})

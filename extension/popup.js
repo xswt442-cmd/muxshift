@@ -5,6 +5,7 @@ const status = document.getElementById("status");
 const code = document.getElementById("code");
 const pairButton = document.getElementById("pair");
 const pairLine = document.getElementById("pair-line");
+const resolveButton = document.getElementById("resolve");
 
 let selected = null;
 
@@ -22,6 +23,12 @@ function render(scanned) {
   list.textContent = "";
   selected = null;
   importButton.disabled = true;
+  // Only the two sites with a resolver get the extra button. Everywhere else it
+  // would promise an address the page cannot name.
+  const live = liveSite(scanned.tab?.url || "");
+  resolveButton.hidden = !live;
+  resolveButton.textContent =
+    live === "bilibili" ? "Find this room's live HLS address" : "Find this channel's live HLS address";
 
   const sources = scanned.sources || [];
   for (const source of sources) {
@@ -56,6 +63,68 @@ function render(scanned) {
     setStatus("Nothing can be imported from this tab.", "bad");
   }
 }
+
+// liveSite names the resolver the active page has, or an empty string. The
+// background repeats this test itself, so a page navigated between the scan and
+// the click is still refused there.
+function liveSite(url) {
+  try {
+    const host = new URL(url).hostname;
+    if (host.endsWith("bilibili.com")) return "bilibili";
+    if (host === "twitch.tv" || host.endsWith(".twitch.tv")) return "twitch";
+  } catch {
+    return "";
+  }
+  return "";
+}
+
+// offer puts a resolved address at the top of the list and selects it: resolving
+// is the work, and the person should not have to click the same thing twice.
+function offer(reply) {
+  const item = document.createElement("li");
+  const kind = document.createElement("div");
+  kind.className = "kind";
+  kind.textContent = "live hls";
+  const url = document.createElement("div");
+  url.className = "url";
+  url.textContent = reply.url;
+  const from = document.createElement("div");
+  from.className = "from";
+  from.textContent = "resolved in the page's own session";
+  item.append(kind, url, from);
+  item.addEventListener("click", () => {
+    selected = reply.url;
+    for (const other of list.children) other.classList.toggle("selected", other === item);
+    importButton.disabled = false;
+  });
+  for (const other of list.children) other.classList.remove("selected");
+  item.classList.add("selected");
+  list.prepend(item);
+  selected = reply.url;
+  importButton.disabled = false;
+  setStatus(reply.note || "the page named a live address", "ok");
+}
+
+resolveButton.addEventListener("click", () => {
+  resolveButton.disabled = true;
+  setStatus("asking the page for its live address…");
+  chrome.runtime.sendMessage({ type: "resolve" }, (reply) => {
+    resolveButton.disabled = false;
+    if (chrome.runtime.lastError) {
+      setStatus(chrome.runtime.lastError.message, "bad");
+      return;
+    }
+    if (reply?.error) {
+      setStatus(reply.error, "bad");
+      return;
+    }
+    if (!reply?.url) {
+      setStatus(reply?.note || "this page did not name a live address", "bad");
+      return;
+    }
+    offer(reply);
+  });
+});
 
 function start() {
   chrome.runtime.sendMessage({ type: "status" }, (reply) => {

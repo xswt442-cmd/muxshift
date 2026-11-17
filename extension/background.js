@@ -24,6 +24,10 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
     );
     return true;
   }
+  if (message?.type === "resolve") {
+    resolveLive().then(respond, (error) => respond({ error: String(error?.message || error) }));
+    return true;
+  }
   return false;
 });
 
@@ -203,6 +207,158 @@ async function status() {
     return { paired: true, reachable: false, reason: "the window is not answering; is MuxShift running?" };
   }
   return { paired: true, reachable: true, address: handoff.address };
+}
+
+// resolveLive asks the page to trade its own session for one address the window
+// can fetch by itself. The trade happens inside the page: the site's own API is
+// called with the tab's cookies, and only the resulting playlist address leaves
+// the browser. No cookie, storage item, or request header is read or exported.
+async function resolveLive() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) {
+    return { error: "no active tab" };
+  }
+  const results = await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    func: resolveLivePage,
+  });
+  const found = results?.[0]?.result || { error: "the page did not answer" };
+  return { tab: { id: tab.id, title: tab.title, url: tab.url }, ...found };
+}
+
+// resolveLivePage runs inside the page. It knows exactly two sites, and says so
+// rather than guessing on any other: a resolver is a small piece of site
+// knowledge, and a wrong guess hands the window an address that cannot play.
+async function resolveLivePage() {
+  const host = location.hostname;
+  const site = host.endsWith("bilibili.com")
+    ? "bilibili"
+    : host === "twitch.tv" || host.endsWith(".twitch.tv")
+      ? "twitch"
+      : "";
+  if (!site) {
+    return {
+      url: "",
+      note:
+        "This extension resolves live addresses for Bilibili and Twitch only. This page is neither, so scan it for a playlist instead.",
+    };
+  }
+  try {
+    return site === "bilibili" ? await resolveBilibiliLive() : await resolveTwitchLive();
+  } catch (error) {
+    return { url: "", note: `The page could not trade its session for an address: ${String(error?.message || error)}` };
+  }
+
+  // resolveBilibiliLive asks the live API for the stream this room is presenting.
+  // The h5 platform is asked for on purpose: it answers with HLS, which the
+  // window can read, while the web platform answers with a raw FLV address that
+  // only plays when a Referer is supplied by whatever fetches it.
+  async function resolveBilibiliLive() {
+    const fromPath = (location.pathname.match(/^\/(?:blanc\/)?(\d+)/) || [])[1];
+    const bootstrap = window.__NEPTUNE_IS_MY_WAIFU__;
+    const room = fromPath || String(bootstrap?.roomInitRes?.data?.room_id || "");
+    if (!room) {
+      return { url: "", note: "This page does not name a live room, so there is no room to ask about." };
+    }
+    const endpoint = `https://api.live.bilibili.com/room/v1/Room/playUrl?cid=${room}&qn=10000&platform=h5`;
+    const answer = await fetch(endpoint, { credentials: "include" });
+    if (!answer.ok) {
+      return { url: "", note: `Bilibili answered ${answer.status} for room ${room}.` };
+    }
+    const body = await answer.json();
+    if (body?.code !== 0) {
+      return { url: "", note: `Bilibili answered code ${body?.code}: ${body?.message || "no reason given"}` };
+    }
+    const urls = [];
+    const streams = body?.data?.playurl_info?.playurl?.stream || [];
+    for (const stream of streams) {
+      for (const format of stream.format || []) {
+        for (const codec of format.codec || []) {
+          urls.push(`${codec?.url_info?.host || ""}${codec?.base_url || ""}`);
+        }
+      }
+    }
+    for (const piece of body?.data?.durl || []) {
+      urls.push(piece?.url || "");
+    }
+    const mirrors = urls.filter((candidate) => candidate.includes(".m3u8"));
+    if (!mirrors.length) {
+      return {
+        url: "",
+        note: `Room ${room} answered ${urls.length} address(es) but none is HLS; this build does not import FLV.`,
+      };
+    }
+    const reachable = await firstReachable(mirrors);
+    return {
+      url: reachable,
+      note:
+        mirrors.length > 1
+          ? `Live room ${room}, HLS address signed by the site (${mirrors.length} mirrors, the first that answered was kept).`
+          : `Live room ${room}, HLS address signed by the site.`,
+    };
+  }
+
+  // firstReachable asks each mirror for its playlist without reading the answer.
+  // A mirror that does not resolve rejects the fetch, which is the only signal a
+  // cross-origin page can get; an answer of any kind means the host is there.
+  async function firstReachable(candidates) {
+    for (const candidate of candidates) {
+      const answered = await Promise.race([
+        fetch(candidate, { mode: "no-cors", cache: "no-store" }).then(
+          () => true,
+          () => false,
+        ),
+        new Promise((resolve) => setTimeout(() => resolve(false), 4000)),
+      ]);
+      if (answered) return candidate;
+    }
+    return candidates[0] || "";
+  }
+
+  // resolveTwitchLive asks Twitch's own GraphQL for the playback token. The page
+  // cannot be scanned for it: the player fetches the stream from a worker, so no
+  // address ever appears in the document or in its resource timings.
+  async function resolveTwitchLive() {
+    const login = (location.pathname.match(/^\/([^/?#]+)/) || [])[1] || "";
+    if (!login || ["directory", "videos", "settings", "search"].includes(login)) {
+      return { url: "", note: "This page is not a channel, so there is no stream to ask about." };
+    }
+    const query =
+      "query($login:String!){streamPlaybackAccessToken(channelName:$login,params:{platform:\"web\",playerBackend:\"mediaplayer\",playerType:\"site\"}){value signature}}";
+    const answer = await fetch("https://gql.twitch.tv/gql", {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ query, variables: { login } }),
+    });
+    if (!answer.ok) {
+      return { url: "", note: `Twitch answered ${answer.status} for channel ${login}.` };
+    }
+    const body = await answer.json();
+    const token = body?.data?.streamPlaybackAccessToken;
+    if (!token?.value || !token?.signature) {
+      return { url: "", note: `Twitch says ${login} is not live right now.` };
+    }
+    const params = new URLSearchParams({
+      allow_source: "true",
+      allow_audio_only: "true",
+      fast_bread: "true",
+      p: "1234567",
+      player: "twitchweb",
+      playlist_include_framerate: "true",
+      segment_queue_len: "0",
+      sig: token.signature,
+      token: token.value,
+      supported_codecs: "av1,h264",
+    });
+    return {
+      url: `https://usher.ttvnw.net/api/channel/hls/${encodeURIComponent(login)}.m3u8?${params.toString()}`,
+      note: `Live channel ${login}, HLS address carrying Twitch's own token.`,
+    };
+  }
 }
 
 // importAddress hands one selected address to the window's own add command.

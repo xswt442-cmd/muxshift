@@ -106,7 +106,9 @@ offers three choices:
 Whether a page can hand anything over is up to the page: `blob:`/MSE players,
 pages that need a login or DRM, and cross-origin restrictions are not worked
 around, only explained. Only http(s) addresses are accepted; no cookies, request
-headers or keys are passed on.
+headers or keys are passed on. Twitch's token is therefore anonymous: that site
+refuses a credentialed cross-origin request, so a public channel plays while one
+that needs a subscription or a region is refused honestly.
 
 ## Documentation
 

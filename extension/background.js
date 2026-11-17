@@ -325,9 +325,15 @@ async function resolveLivePage() {
     }
     const query =
       "query($login:String!){streamPlaybackAccessToken(channelName:$login,params:{platform:\"web\",playerBackend:\"mediaplayer\",playerType:\"site\"}){value signature}}";
+    // No credentials on purpose. Twitch's GraphQL endpoint accepts a
+    // cross-origin POST without them (200) and refuses one with them (the
+    // browser reports "Failed to fetch"), so a logged-in token cannot be asked
+    // for from a page. The token that comes back is anonymous, which is enough
+    // for a public channel and not enough for one that needs the viewer's
+    // entitlement; that case is refused at the window, by probing the address.
     const answer = await fetch("https://gql.twitch.tv/gql", {
       method: "POST",
-      credentials: "include",
+      credentials: "omit",
       headers: {
         "Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko",
         "Content-Type": "application/json",

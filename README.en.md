@@ -95,13 +95,18 @@ offers three choices:
   any more): take the one-time pairing code from the Diagnostics page, paste it
   into the extension popup once, then pick the address the page loaded and hand
   it to this window.
-- **Live streams** on Bilibili and Twitch pages give the popup one more button,
-  `Use this live stream`. The address is exchanged inside the page's own session
-  against the site's API (Bilibili's `platform=h5` m3u8, Twitch's playback
-  token); the desktop receives a signed URL and no cookie. It then reads the
-  playlist itself: a master playlist contributes one variant, a stream with
+- **Live streams** on Bilibili, Twitch and Kick pages, and on YouTube live
+  pages, give the popup one more button, `Use this live stream`. The address is
+  exchanged inside the page's own session (Bilibili's `platform=h5` m3u8,
+  Twitch's playback token, the playback address in Kick's channel answer, the
+  page's own `hlsManifestUrl` on YouTube); the desktop receives a signed URL and
+  no cookie. Each site is one entry in a table that says which page it answers
+  for, which endpoint it asks, and which field holds the address; the shared
+  part — the request, the first mirror that answers, the HLS test, the wording —
+  exists once, so adding a site means adding one entry. The desktop then reads
+  the playlist itself: a master playlist contributes one variant, a stream with
   `#EXT-X-KEY` is refused with the method it names, and a stream without
-  `#EXT-X-ENDLIST` is opened as live.
+  `#EXT-X-ENDLIST` is opened as live and starts on its own — no Play needed.
 
 Whether a page can hand anything over is up to the page: `blob:`/MSE players,
 pages that need a login or DRM, and cross-origin restrictions are not worked
@@ -138,16 +143,18 @@ that needs a subscription or a region is refused honestly.
 - A source imported while running joins playback once its player shows a
   picture; a bad address only reports an error and leaves no empty card.
 - **Video sites are still not a supported feature**: the extension hands over an
-  http(s) media address the page already loads, plus the address the Bilibili and
-  Twitch live pages exchange against the site's API. On-demand pages that feed
-  segments to MSE (Bilibili and the like) expose no single replayable address, and
-  the YouTube sample asks for a login; both get a clear message, and nothing
-  bypasses the login, cross-origin rules or DRM. No resolver exists for YouTube
-  live: it needs a signed-in session, and the address it yields is tied to the
-  exit IP that asked for it.
+  http(s) media address the page already loads, plus the address the four live
+  pages exchange. On-demand pages that feed segments to MSE (Bilibili and the
+  like) expose no single replayable address, and the YouTube sample asks for a
+  login; both get a clear message, and nothing bypasses the login, cross-origin
+  rules or DRM. YouTube live does yield an `hlsManifestUrl`, but the `/ip/<exit>/`
+  inside it is tied to the exit that asked for it: on this machine the playlist
+  reads and the media segments are refused by the edge (`403`), so it does not
+  reach a picture on this path, and both the extension and the desktop say so
+  instead of pretending to play.
 - **Live plays only what is happening now**: no replay buffer and no
-  cross-source alignment; the stage position starts at zero, and an address that
-  expires has to be fetched again from the extension.
+  cross-source alignment; the shared clock starts with the picture, and an
+  address that expires has to be fetched again from the extension.
 - **Machines behind a proxy**: the desktop reads `HTTP_PROXY`/`HTTPS_PROXY`
   first, then the Windows Internet Settings proxy, and always connects to
   loopback directly.

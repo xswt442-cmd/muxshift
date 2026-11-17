@@ -376,6 +376,13 @@ func clock(d time.Duration) string {
 // once the video was a direct child.
 func (a *appState) view(c *ui.Context) {
 	defer a.signalFrame()
+	// P9: the canvas experiment draws the two probe players and nothing else.
+	// Keeping it above the workbench is the point — a picture that never
+	// arrives here cannot be excused by the layout around it.
+	if a.probe != nil {
+		a.probe.view(c)
+		return
+	}
 	// P15.5: the display-scale walk. A zoom lays the view out in a window 1/z
 	// its size and draws it z times larger, which is what a larger display scale
 	// does to the same window pixels; 0 leaves the scale alone.

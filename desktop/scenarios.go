@@ -35,6 +35,7 @@ var scenarios = map[string]scenario{
 	"align-async":       runAlignAsync,
 	"commands":          runCommands,
 	"webview":           runWebView,
+	"canvas":            runCanvas,
 	"workspaces":        runWorkspaces,
 	"workbench":         runWorkbench,
 	"matrix":            runMatrix,

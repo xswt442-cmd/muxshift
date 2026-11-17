@@ -134,6 +134,11 @@ type appState struct {
 	firesWhileTyping int
 	closes           int
 
+	// probe, when set, replaces the whole workbench with the canvas
+	// experiment: two videos, two rectangles, nothing else. Only the -scenario
+	// canvas run sets it, so a person's window never sees this branch.
+	probe *canvasProbe
+
 	// dvrRoot is the cache root the DVR directories live under, and dvrSession
 	// is this run's own directory in it. The session holds a lock for as long as
 	// the process runs, so a later run can tell this one's leftovers from a live

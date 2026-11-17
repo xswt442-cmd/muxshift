@@ -226,76 +226,176 @@ async function resolveLive() {
   return { tab: { id: tab.id, title: tab.title, url: tab.url }, ...found };
 }
 
-// resolveLivePage runs inside the page. It knows exactly two sites, and says so
+// resolveLivePage runs inside the page. It knows a handful of sites and says so
 // rather than guessing on any other: a resolver is a small piece of site
 // knowledge, and a wrong guess hands the window an address that cannot play.
+//
+// Every site is one entry in the table below. An entry says how to name what the
+// page is showing, how to get an answer (the site's own API, or what the page
+// already holds), and how to turn that answer into candidate addresses. The HLS
+// filter, the mirror race and the note are shared, so a new site is a short
+// description rather than another copy of the same procedure.
 async function resolveLivePage() {
+  const SITES = [
+    {
+      name: "Bilibili",
+      hosts: ["bilibili.com"],
+      missing: "This page does not name a live room, so there is no room to ask about.",
+      subject: () => {
+        const fromPath = (location.pathname.match(/^\/(?:blanc\/)?(\d+)/) || [])[1];
+        const bootstrap = window.__NEPTUNE_IS_MY_WAIFU__;
+        return fromPath || String(bootstrap?.roomInitRes?.data?.room_id || "") || "";
+      },
+      // The h5 platform is asked for on purpose: it answers with HLS, which the
+      // window can read, while the web platform answers with a raw FLV address
+      // that only plays when a Referer comes from whatever fetches it.
+      request: (room) => ({
+        url: `https://api.live.bilibili.com/room/v1/Room/playUrl?cid=${room}&qn=10000&platform=h5`,
+        credentials: "include",
+      }),
+      addresses: (body) => {
+        if (body?.code !== 0) {
+          throw new Error(`Bilibili answered code ${body?.code}: ${body?.message || "no reason given"}`);
+        }
+        const listed = [];
+        for (const stream of body?.data?.playurl_info?.playurl?.stream || []) {
+          for (const format of stream.format || []) {
+            for (const codec of format.codec || []) {
+              listed.push(`${codec?.url_info?.host || ""}${codec?.base_url || ""}`);
+            }
+          }
+        }
+        for (const piece of body?.data?.durl || []) listed.push(piece?.url || "");
+        return listed;
+      },
+      noHls: (room, count) => `Room ${room} answered ${count} address(es) but none is HLS; this build does not import FLV.`,
+      describe: (room, count) =>
+        count > 1
+          ? `Live room ${room}, HLS address signed by the site (${count} mirrors, the first that answered was kept).`
+          : `Live room ${room}, HLS address signed by the site.`,
+    },
+    {
+      name: "Twitch",
+      hosts: ["twitch.tv"],
+      missing: "This page is not a channel, so there is no stream to ask about.",
+      subject: () => {
+        const login = (location.pathname.match(/^\/([^/?#]+)/) || [])[1] || "";
+        return ["", "directory", "videos", "settings", "search"].includes(login) ? "" : login;
+      },
+      // The page cannot be scanned for the address: the player fetches the
+      // stream from a worker, so nothing appears in the document or in its
+      // resource timings. The token is asked for without credentials on
+      // purpose: Twitch's GraphQL refuses a credentialed cross-origin POST
+      // before it is sent ("Failed to fetch"), so an anonymous token is the only
+      // one a page can get. A public channel plays with it; one that needs the
+      // viewer's entitlement is refused at the window, by probing the address.
+      request: (login) => ({
+        url: "https://gql.twitch.tv/gql",
+        method: "POST",
+        credentials: "omit",
+        headers: { "Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query:
+            "query($login:String!){streamPlaybackAccessToken(channelName:$login,params:{platform:\"web\",playerBackend:\"mediaplayer\",playerType:\"site\"}){value signature}}",
+          variables: { login },
+        }),
+      }),
+      addresses: (body, login) => {
+        const token = body?.data?.streamPlaybackAccessToken;
+        if (!token?.value || !token?.signature) return [];
+        const params = new URLSearchParams({
+          allow_source: "true",
+          allow_audio_only: "true",
+          fast_bread: "true",
+          p: "1234567",
+          player: "twitchweb",
+          playlist_include_framerate: "true",
+          segment_queue_len: "0",
+          sig: token.signature,
+          token: token.value,
+          supported_codecs: "av1,h264",
+        });
+        return [`https://usher.ttvnw.net/api/channel/hls/${encodeURIComponent(login)}.m3u8?${params.toString()}`];
+      },
+      noHls: (login) => `Twitch says ${login} is not live right now.`,
+      describe: (login) => `Live channel ${login}, HLS address carrying Twitch's own token.`,
+    },
+    {
+      name: "YouTube",
+      hosts: ["youtube.com", "youtu.be"],
+      missing: "This page does not name a video, so there is nothing to ask about.",
+      // A live channel page names its video only in what the player was given
+      // (the address is /@handle/live), so the id is read from either place.
+      subject: () =>
+        (location.search.match(/[?&]v=([^&#]+)/) || [])[1] ||
+        window.ytInitialPlayerResponse?.videoDetails?.videoId ||
+        "",
+      // Nothing is requested: the page already holds the answer it was given.
+      // A manifest is there only when the session this page plays as is allowed
+      // to watch, so a page that cannot play simply has none; that is reported
+      // rather than guessed at.
+      read: () => [window.ytInitialPlayerResponse?.streamingData?.hlsManifestUrl || ""],
+      noHls: () =>
+        "This page carries no live HLS manifest; YouTube adds one only for a stream this session is allowed to play.",
+      describe: () => "Live video, HLS manifest taken from the page's own player response.",
+    },
+    {
+      name: "Kick",
+      hosts: ["kick.com"],
+      missing: "This page is not a channel, so there is no stream to ask about.",
+      subject: () => {
+        const slug = (location.pathname.match(/^\/([^/?#]+)/) || [])[1] || "";
+        return ["", "browse", "categories", "following", "search", "video"].includes(slug) ? "" : slug;
+      },
+      // The page's own API names the address; its answer is the same one the
+      // player uses. A channel that is not live still returns a playback address
+      // that no longer plays, so liveness is read from `livestream` first.
+      request: (slug) => ({ url: `https://kick.com/api/v2/channels/${encodeURIComponent(slug)}` }),
+      addresses: (body) => (body?.livestream ? [body.playback_url || ""] : []),
+      noHls: (slug) => `Kick says ${slug} is not live right now.`,
+      describe: (slug) => `Live channel ${slug}, HLS address carrying Kick's own token.`,
+    },
+  ];
+
   const host = location.hostname;
-  const site = host.endsWith("bilibili.com")
-    ? "bilibili"
-    : host === "twitch.tv" || host.endsWith(".twitch.tv")
-      ? "twitch"
-      : "";
+  const site = SITES.find((entry) => entry.hosts.some((known) => host === known || host.endsWith(`.${known}`)));
   if (!site) {
+    const names = SITES.map((entry) => entry.name);
+    const list = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0];
     return {
       url: "",
-      note:
-        "This extension resolves live addresses for Bilibili and Twitch only. This page is neither, so scan it for a playlist instead.",
+      note: `This extension resolves live addresses for ${list} only. This page is none of them, so scan it for a playlist instead.`,
     };
   }
   try {
-    return site === "bilibili" ? await resolveBilibiliLive() : await resolveTwitchLive();
+    const subject = site.subject();
+    if (!subject) {
+      return { url: "", note: site.missing };
+    }
+    const listed = site.request ? site.addresses(await ask(site, subject), subject) : site.read(subject);
+    const addresses = (listed || []).filter(Boolean);
+    const hls = addresses.filter((candidate) => /\.m3u8(\?|$)/.test(candidate));
+    if (!hls.length) {
+      return { url: "", note: site.noHls ? site.noHls(subject, addresses.length) : `${site.name} listed ${addresses.length} address(es) but none is HLS.` };
+    }
+    return { url: await firstReachable(hls), note: site.describe(subject, hls.length) };
   } catch (error) {
     return { url: "", note: `The page could not trade its session for an address: ${String(error?.message || error)}` };
   }
 
-  // resolveBilibiliLive asks the live API for the stream this room is presenting.
-  // The h5 platform is asked for on purpose: it answers with HLS, which the
-  // window can read, while the web platform answers with a raw FLV address that
-  // only plays when a Referer is supplied by whatever fetches it.
-  async function resolveBilibiliLive() {
-    const fromPath = (location.pathname.match(/^\/(?:blanc\/)?(\d+)/) || [])[1];
-    const bootstrap = window.__NEPTUNE_IS_MY_WAIFU__;
-    const room = fromPath || String(bootstrap?.roomInitRes?.data?.room_id || "");
-    if (!room) {
-      return { url: "", note: "This page does not name a live room, so there is no room to ask about." };
-    }
-    const endpoint = `https://api.live.bilibili.com/room/v1/Room/playUrl?cid=${room}&qn=10000&platform=h5`;
-    const answer = await fetch(endpoint, { credentials: "include" });
+  // ask performs the site's own request and hands back the parsed answer.
+  async function ask(entry, subject) {
+    const spec = entry.request(subject);
+    const answer = await fetch(spec.url, {
+      method: spec.method || "GET",
+      credentials: spec.credentials || "omit",
+      headers: spec.headers,
+      body: spec.body,
+    });
     if (!answer.ok) {
-      return { url: "", note: `Bilibili answered ${answer.status} for room ${room}.` };
+      throw new Error(`${entry.name} answered ${answer.status} for ${subject}.`);
     }
-    const body = await answer.json();
-    if (body?.code !== 0) {
-      return { url: "", note: `Bilibili answered code ${body?.code}: ${body?.message || "no reason given"}` };
-    }
-    const urls = [];
-    const streams = body?.data?.playurl_info?.playurl?.stream || [];
-    for (const stream of streams) {
-      for (const format of stream.format || []) {
-        for (const codec of format.codec || []) {
-          urls.push(`${codec?.url_info?.host || ""}${codec?.base_url || ""}`);
-        }
-      }
-    }
-    for (const piece of body?.data?.durl || []) {
-      urls.push(piece?.url || "");
-    }
-    const mirrors = urls.filter((candidate) => candidate.includes(".m3u8"));
-    if (!mirrors.length) {
-      return {
-        url: "",
-        note: `Room ${room} answered ${urls.length} address(es) but none is HLS; this build does not import FLV.`,
-      };
-    }
-    const reachable = await firstReachable(mirrors);
-    return {
-      url: reachable,
-      note:
-        mirrors.length > 1
-          ? `Live room ${room}, HLS address signed by the site (${mirrors.length} mirrors, the first that answered was kept).`
-          : `Live room ${room}, HLS address signed by the site.`,
-    };
+    return answer.json();
   }
 
   // firstReachable asks each mirror for its playlist without reading the answer.
@@ -313,57 +413,6 @@ async function resolveLivePage() {
       if (answered) return candidate;
     }
     return candidates[0] || "";
-  }
-
-  // resolveTwitchLive asks Twitch's own GraphQL for the playback token. The page
-  // cannot be scanned for it: the player fetches the stream from a worker, so no
-  // address ever appears in the document or in its resource timings.
-  async function resolveTwitchLive() {
-    const login = (location.pathname.match(/^\/([^/?#]+)/) || [])[1] || "";
-    if (!login || ["directory", "videos", "settings", "search"].includes(login)) {
-      return { url: "", note: "This page is not a channel, so there is no stream to ask about." };
-    }
-    const query =
-      "query($login:String!){streamPlaybackAccessToken(channelName:$login,params:{platform:\"web\",playerBackend:\"mediaplayer\",playerType:\"site\"}){value signature}}";
-    // No credentials on purpose. Twitch's GraphQL endpoint accepts a
-    // cross-origin POST without them (200) and refuses one with them (the
-    // browser reports "Failed to fetch"), so a logged-in token cannot be asked
-    // for from a page. The token that comes back is anonymous, which is enough
-    // for a public channel and not enough for one that needs the viewer's
-    // entitlement; that case is refused at the window, by probing the address.
-    const answer = await fetch("https://gql.twitch.tv/gql", {
-      method: "POST",
-      credentials: "omit",
-      headers: {
-        "Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ query, variables: { login } }),
-    });
-    if (!answer.ok) {
-      return { url: "", note: `Twitch answered ${answer.status} for channel ${login}.` };
-    }
-    const body = await answer.json();
-    const token = body?.data?.streamPlaybackAccessToken;
-    if (!token?.value || !token?.signature) {
-      return { url: "", note: `Twitch says ${login} is not live right now.` };
-    }
-    const params = new URLSearchParams({
-      allow_source: "true",
-      allow_audio_only: "true",
-      fast_bread: "true",
-      p: "1234567",
-      player: "twitchweb",
-      playlist_include_framerate: "true",
-      segment_queue_len: "0",
-      sig: token.signature,
-      token: token.value,
-      supported_codecs: "av1,h264",
-    });
-    return {
-      url: `https://usher.ttvnw.net/api/channel/hls/${encodeURIComponent(login)}.m3u8?${params.toString()}`,
-      note: `Live channel ${login}, HLS address carrying Twitch's own token.`,
-    };
   }
 }
 

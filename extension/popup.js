@@ -23,12 +23,11 @@ function render(scanned) {
   list.textContent = "";
   selected = null;
   importButton.disabled = true;
-  // Only the two sites with a resolver get the extra button. Everywhere else it
-  // would promise an address the page cannot name.
-  const live = liveSite(scanned.tab?.url || "");
+  // Only a page with a resolver gets the extra button. Everywhere else it would
+  // promise an address the page cannot name.
+  const live = liveLabel(scanned.tab?.url || "");
   resolveButton.hidden = !live;
-  resolveButton.textContent =
-    live === "bilibili" ? "Find this room's live HLS address" : "Find this channel's live HLS address";
+  resolveButton.textContent = live;
 
   const sources = scanned.sources || [];
   for (const source of sources) {
@@ -64,17 +63,20 @@ function render(scanned) {
   }
 }
 
-// liveSite names the resolver the active page has, or an empty string. The
+// liveLabel names the resolver the active page has, or an empty string. The
 // background repeats this test itself, so a page navigated between the scan and
 // the click is still refused there.
-function liveSite(url) {
+function liveLabel(url) {
+  let host;
   try {
-    const host = new URL(url).hostname;
-    if (host.endsWith("bilibili.com")) return "bilibili";
-    if (host === "twitch.tv" || host.endsWith(".twitch.tv")) return "twitch";
+    host = new URL(url).hostname;
   } catch {
     return "";
   }
+  if (host === "bilibili.com" || host.endsWith(".bilibili.com")) return "Find this room's live HLS address";
+  if (host === "twitch.tv" || host.endsWith(".twitch.tv")) return "Find this channel's live HLS address";
+  if (host === "kick.com" || host.endsWith(".kick.com")) return "Find this channel's live HLS address";
+  if (host === "youtube.com" || host.endsWith(".youtube.com")) return "Find this video's live HLS address";
   return "";
 }
 

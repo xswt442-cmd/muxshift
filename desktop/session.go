@@ -626,6 +626,7 @@ func (a *appState) importSource(ctx context.Context, uri string, token int) {
 	var (
 		stream   hls.Stream
 		mode     importMode
+		live     bool
 		probeErr error
 	)
 	if isNetworkAddress(uri) {
@@ -649,6 +650,7 @@ func (a *appState) importSource(ctx context.Context, uri string, token int) {
 				// the player is never asked to choose between variants.
 				uri = role.address
 				mode = importDirect
+				live = true
 			default:
 				// A playlist that ends is read as before, so the session gets
 				// the tracks the stream declares.
@@ -664,7 +666,7 @@ func (a *appState) importSource(ctx context.Context, uri string, token int) {
 		}
 	}
 	mygoRunOnMain(func() {
-		a.landImport(token, uri, stream, mode, probeErr)
+		a.landImport(token, uri, stream, mode, live, probeErr)
 	})
 }
 
@@ -672,7 +674,7 @@ func (a *appState) importSource(ctx context.Context, uri string, token int) {
 // read worked, reports either outcome, and asks for a frame. The window shows
 // the Sources page while the read runs, so without that frame it keeps showing
 // "Reading…" and the old source count until something else happens to draw.
-func (a *appState) landImport(token int, uri string, stream hls.Stream, mode importMode, probeErr error) {
+func (a *appState) landImport(token int, uri string, stream hls.Stream, mode importMode, live bool, probeErr error) {
 	if token != a.importToken {
 		// Cancel already cleared the busy state and said so; this landing is
 		// from the read it stopped and must not add anything.
@@ -716,6 +718,15 @@ func (a *appState) landImport(token int, uri string, stream hls.Stream, mode imp
 			a.items = append(a.items, it)
 			a.selected = it.source.ID
 			a.apply()
+			if live {
+				// A live stream arrives without a timeline to align against:
+				// the picture is already moving, so the shared clock starts
+				// with it. Without this the top bar called a running stream
+				// "paused" and its event time stayed at zero.
+				a.sync.playhead.Play()
+				it.player.Play()
+				a.invalidate()
+			}
 			a.closePendingWhenReady()
 			// The open returned nil, but this engine reports a file it cannot
 			// decode a moment later; the item is watched until it has shown a

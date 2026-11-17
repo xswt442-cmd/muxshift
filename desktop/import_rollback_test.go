@@ -29,7 +29,7 @@ func TestAFailedOpenLeavesNoSourceBehind(t *testing.T) {
 		t.Fatal(err)
 	}
 	app.openPlayerForImport = func(string) (*ui.VideoPlayer, error) { return nil, errNoPlayer }
-	app.landImport(0, file, hls.Stream{}, importLocal, nil)
+	app.landImport(0, file, hls.Stream{}, importLocal, false, nil)
 
 	if got := len(app.session.Sources()); got != 0 {
 		t.Fatalf("a failed open left %d source(s) in the session", got)
@@ -61,7 +61,7 @@ func TestAFailedOpenRollsBackTheProbedTracks(t *testing.T) {
 		},
 	}
 	app.openPlayerForImport = func(string) (*ui.VideoPlayer, error) { return nil, errNoPlayer }
-	app.landImport(0, stream.URI, stream, importProbed, nil)
+	app.landImport(0, stream.URI, stream, importProbed, false, nil)
 
 	if got := len(app.session.Sources()); got != 0 {
 		t.Fatalf("a failed open left %d source(s)", got)
@@ -109,7 +109,7 @@ func TestALandingAfterTheWindowClosedAddsNothing(t *testing.T) {
 	done := make(chan struct{})
 	app.importDone = done
 	app.closed = true
-	app.landImport(0, file, hls.Stream{}, importLocal, nil)
+	app.landImport(0, file, hls.Stream{}, importLocal, false, nil)
 
 	if len(app.items) != 0 {
 		t.Fatalf("a landing after close added %d item(s)", len(app.items))
@@ -183,7 +183,7 @@ func TestASuccessfulImportStillAddsOneSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	app.openPlayerForImport = func(string) (*ui.VideoPlayer, error) { return &ui.VideoPlayer{}, nil }
-	app.landImport(0, file, hls.Stream{}, importLocal, nil)
+	app.landImport(0, file, hls.Stream{}, importLocal, false, nil)
 
 	if got := len(app.session.Sources()); got != 1 {
 		t.Fatalf("a good import left %d source(s), want 1", got)

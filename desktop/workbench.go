@@ -258,6 +258,7 @@ func (a *appState) center(c *ui.Context, width, height float32) {
 	if pictureCap < 200 {
 		pictureCap = 200
 	}
+	a.layoutBar(c)
 	ui.Box(c).WidthPercent(100).Grow(1).MaxHeight(pictureCap).Children(func() {
 		a.stage(c)
 	})
@@ -267,6 +268,45 @@ func (a *appState) center(c *ui.Context, width, height float32) {
 			ui.WebView(c, a.webView).Grow(1)
 		})
 	}
+}
+
+// layoutBar picks how the stage arranges the pictures the scene shows. It is
+// workbench-only: a watching mode has no chrome, and the arrangement belongs to
+// the scene, not to the window.
+func (a *appState) layoutBar(c *ui.Context) {
+	ui.Row(c).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "layout").FontSize(textMicro).TextColor(colorDim)
+		for _, kind := range layoutKinds {
+			button := ui.Button(c.Key("layout-"+kind.String()), kind.label()).Width(64)
+			if kind == a.layout {
+				button = button.Border(1, colorAccent).Background(colorPanel2)
+			}
+			if button.Clicked() {
+				a.setLayout(kind)
+			}
+		}
+		if note := a.layoutNote(); note != "" {
+			ui.Text(c, note).FontSize(textMicro).TextColor(colorTextDim)
+		}
+	})
+}
+
+// layoutNote explains what the arrangement cannot show, instead of leaving a
+// person to wonder why a source is missing from the stage.
+func (a *appState) layoutNote() string {
+	shown := 0
+	for _, it := range a.items {
+		if it.player != nil && it.shown {
+			shown++
+		}
+	}
+	if shown == 0 {
+		return ""
+	}
+	if max := a.layout.slots(); shown > max {
+		return itoa(shown) + " shown, " + a.layout.String() + " places " + itoa(max)
+	}
+	return a.layout.String()
 }
 
 // inspector is the right pane. Without a selection it shows the session, which

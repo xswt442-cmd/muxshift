@@ -31,6 +31,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/video"
+	"github.com/xswt442-cmd/muxshift/core"
 	"github.com/xswt442-cmd/muxshift/core/dvr"
 )
 
@@ -469,27 +470,69 @@ func (a *appState) view(c *ui.Context) {
 	})
 }
 
-// stageRect is where one source's picture sits on the stage, in percent of the
-// picture area. Percent rather than pixels: the same numbers hold when the
-// window is resized, which is the property a saved layout needs.
-type stageRect struct {
-	left, top, width, height float32
+// stagePictures is the list of sources the stage draws in this frame: the ones
+// the scene shows, in the order the layout places them. A layout that holds
+// fewer pictures than the scene shows keeps the extra ones off the stage — it
+// never draws the same picture twice to fill a slot.
+func (a *appState) stagePictures() []*item {
+	var shown []*item
+	for _, it := range a.items {
+		if it.player != nil && it.shown {
+			shown = append(shown, it)
+		}
+	}
+	if len(shown) == 0 {
+		return nil
+	}
+	// The order a person asked for wins; sources not named there follow in
+	// scene order, so a scene edited elsewhere still has an order.
+	if len(a.layoutTaken) > 0 {
+		ordered := make([]*item, 0, len(shown))
+		taken := map[*item]bool{}
+		for _, id := range a.layoutTaken {
+			for _, it := range shown {
+				if it.source.ID != id || taken[it] {
+					continue
+				}
+				ordered = append(ordered, it)
+				taken[it] = true
+			}
+		}
+		for _, it := range shown {
+			if !taken[it] {
+				ordered = append(ordered, it)
+			}
+		}
+		shown = ordered
+	}
+	if max := a.layout.slots(); len(shown) > max {
+		shown = shown[:max]
+	}
+	return shown
 }
 
-// stageLayout places the sources the scene shows. P9 only proves that two
-// pictures can be drawn side by side; the named presets arrive in P11 and will
-// replace this single arrangement, not the rect plumbing below it.
-func stageLayout(shown int) []stageRect {
-	if shown <= 1 {
-		return []stageRect{{0, 0, 100, 100}}
+// setLayout switches the stage arrangement. The scene, the players, the sound
+// and the shared clock are untouched: a layout only says where pictures sit.
+func (a *appState) setLayout(kind layoutKind) {
+	if a.layout == kind {
+		return
 	}
-	const gap = 2.0
-	width := (100 - gap*float32(shown-1)) / float32(shown)
-	rects := make([]stageRect, shown)
-	for i := range rects {
-		rects[i] = stageRect{left: float32(i) * (width + gap), top: 0, width: width, height: 100}
+	a.layout = kind
+	a.invalidate()
+}
+
+// setPrimary puts a source first in the arrangement, so the layout that has one
+// large slot — pip and hero — gives it to that source. The rest keep the order
+// the scene already has.
+func (a *appState) setPrimary(id core.SourceID) {
+	taken := []core.SourceID{id}
+	for _, it := range a.items {
+		if it.source.ID != id && it.player != nil && it.shown {
+			taken = append(taken, it.source.ID)
+		}
 	}
-	return rects
+	a.layoutTaken = taken
+	a.invalidate()
 }
 
 // stage draws every player in one frame. The scene hides the players it does
@@ -502,21 +545,11 @@ func stageLayout(shown int) []stageRect {
 // shows more than one.
 func (a *appState) stage(c *ui.Context) {
 	box := ui.Box(c).Fill().Grow(1).Radius(radiusLg).Border(1, colorLine).Background(colorPanel).Children(func() {
-		shown := 0
-		for _, it := range a.items {
-			if it.player != nil && it.shown {
-				shown++
-			}
-		}
-		rects := stageLayout(shown)
-		placed := map[*item]stageRect{}
-		next := 0
-		for _, it := range a.items {
-			if it.player == nil || !it.shown {
-				continue
-			}
-			placed[it] = rects[next]
-			next++
+		shown := a.stagePictures()
+		rects := layoutSlots(a.layout, len(shown))
+		placed := map[*item]slotRect{}
+		for i, it := range shown {
+			placed[it] = rects[i]
 		}
 		// place gives one video element its rectangle. With a single shown
 		// source the stage is filled the way it always was.
@@ -527,7 +560,7 @@ func (a *appState) stage(c *ui.Context) {
 		// picture.
 		place := func(e ui.Element, it *item) ui.Element {
 			e = e.IgnoreInput(true)
-			if shown <= 1 {
+			if len(shown) <= 1 && a.layout == layoutFocus {
 				// Contain, not the raw Fill: a picture stretched to the
 				// window's own ratio is not the picture. The stage keeps the
 				// bars at the edges instead.
@@ -535,10 +568,10 @@ func (a *appState) stage(c *ui.Context) {
 			}
 			r, ok := placed[it]
 			if !ok {
-				r = stageRect{0, 0, 100, 100}
+				r = slotRect{0, 0, 100, 100, 0}
 			}
 			return e.Absolute().LeftPercent(r.left).TopPercent(r.top).
-				WidthPercent(r.width).HeightPercent(r.height).Fit(ui.Contain)
+				WidthPercent(r.width).HeightPercent(r.height).Fit(ui.Contain).ZIndex(r.z)
 		}
 		for _, it := range a.items {
 			if it.player == nil {
@@ -567,7 +600,7 @@ func (a *appState) stage(c *ui.Context) {
 			}
 			place(ui.Video(c, rawPlayer(it.player)), it).Hidden(!it.shown)
 		}
-		if shown == 0 {
+		if len(shown) == 0 {
 			ui.Text(c, "no picture yet\nopen a source, or press Show on a card").
 				FontSize(textBody).TextColor(colorTextDim).Center().Fill()
 		}
@@ -657,6 +690,12 @@ func (a *appState) sourceCard(c *ui.Context, i int, it *item) {
 			if ui.Button(c.Key("show-"+itoa(i)), "Show").Width(72).KeyShortcuts(ui.Ctrl, ui.KeyS).
 				Tooltip("put this source's picture on the stage (Ctrl+S)").Clicked() {
 				a.selectVideo(item)
+			}
+			if item.shown && a.layout != layoutFocus {
+				if ui.Button(c.Key("main-"+itoa(i)), "Main").Width(64).
+					Tooltip("put this picture in the layout's largest slot").Clicked() {
+					a.setPrimary(item.source.ID)
+				}
 			}
 		}
 		if item.audio != "" {

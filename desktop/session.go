@@ -342,6 +342,16 @@ type appState struct {
 	inspector paneMode
 	dock      paneMode
 
+	// layout is how the stage arranges the pictures the scene shows; see
+	// layout.go. It never changes which sources are in the scene, what the
+	// output hears, or where the players are — only where the pictures sit.
+	layout layoutKind
+
+	// layoutTaken holds the sources a person explicitly asked to see, in the
+	// order they asked. When it is empty the stage falls back to the scene
+	// order, so a scene edited elsewhere still draws something.
+	layoutTaken []core.SourceID
+
 	// viewing is the P10 watching state and savedForViewing is what the
 	// workbench looked like when a watching mode was entered, so leaving can
 	// put the window back. onTop is compact mode's switch, kept here so the

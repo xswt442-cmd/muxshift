@@ -634,11 +634,30 @@ func (a *appState) importSource(ctx context.Context, uri string, token int) {
 		case err != nil:
 			probeErr = err
 		case kind == addressPlaylist:
-			stream, probeErr = hls.Probe(ctx, uri, hls.Options{})
-			if probeErr == nil {
-				mode = importProbed
-			} else if ctx.Err() != nil {
-				probeErr = fmt.Errorf("reading %s stopped: %w", shortURI(uri), ctx.Err())
+			role, roleErr := inspectPlaylist(ctx, uri)
+			switch {
+			case roleErr != nil:
+				// A protected stream is refused before a player is opened, with
+				// the key method it asked for rather than a failed read; any
+				// other answer that is not a playlist is reported as it came.
+				probeErr = roleErr
+			case role.live:
+				// A live playlist never ends, so there is nothing to enumerate
+				// and no timeline to align against: the player is given the
+				// media playlist itself, which is what its live support reads.
+				// A master playlist is narrowed to one variant first, because
+				// the player is never asked to choose between variants.
+				uri = role.address
+				mode = importDirect
+			default:
+				// A playlist that ends is read as before, so the session gets
+				// the tracks the stream declares.
+				stream, probeErr = hls.Probe(ctx, uri, hls.Options{})
+				if probeErr == nil {
+					mode = importProbed
+				} else if ctx.Err() != nil {
+					probeErr = fmt.Errorf("reading %s stopped: %w", shortURI(uri), ctx.Err())
+				}
 			}
 		default:
 			mode = importDirect

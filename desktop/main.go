@@ -739,6 +739,7 @@ func main() {
 	flag.DurationVar(&commonShift, "common-shift", commonShift,
 		"common: the timestamp shift the second fixture was built with; 0 for two identical fixtures")
 	showVersion := flag.Bool("version", false, "print the build and exit")
+	silent := flag.Bool("silent", false, "start with the master mute on, for checks that should not play sound")
 	flag.Parse()
 	if *showVersion {
 		// Before every other check: asking a binary what it is must not need a
@@ -820,6 +821,13 @@ func main() {
 	}
 	s.settingsPath = path
 	s.settingsTrusted = note == ""
+	// A check that takes pictures should not take sound with it: the same master
+	// mute the overlay offers is switched on before the first source is opened,
+	// so nothing has to be turned down on the machine that runs it.
+	if *silent {
+		s.masterMute = true
+		log.Printf("silent: master mute is on, sound stays off for this run")
+	}
 	if note != "" {
 		log.Printf("settings: %s", note)
 	}

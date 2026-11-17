@@ -1,4 +1,4 @@
-﻿<div align="center">
+<div align="center">
   <img src="web/icon.svg" alt="MuxShift" width="88" height="88">
   <h1>MuxShift</h1>
   <p>Several media sources in one session: a scene picks what is seen and heard, and one event timeline aligns them</p>
@@ -95,6 +95,13 @@ offers three choices:
   any more): take the one-time pairing code from the Diagnostics page, paste it
   into the extension popup once, then pick the address the page loaded and hand
   it to this window.
+- **Live streams** on Bilibili and Twitch pages give the popup one more button,
+  `Use this live stream`. The address is exchanged inside the page's own session
+  against the site's API (Bilibili's `platform=h5` m3u8, Twitch's playback
+  token); the desktop receives a signed URL and no cookie. It then reads the
+  playlist itself: a master playlist contributes one variant, a stream with
+  `#EXT-X-KEY` is refused with the method it names, and a stream without
+  `#EXT-X-ENDLIST` is opened as live.
 
 Whether a page can hand anything over is up to the page: `blob:`/MSE players,
 pages that need a login or DRM, and cross-origin restrictions are not worked
@@ -128,11 +135,20 @@ headers or keys are passed on.
   alignment or replay, and its seeks stay inside what the browser buffered.
 - A source imported while running joins playback once its player shows a
   picture; a bad address only reports an error and leaves no empty card.
-- **Video sites are not a supported feature**: the extension only hands over an
-  http(s) media address the page already loads. Pages that feed segments to MSE
-  (Bilibili and the like) expose no single replayable address, and the YouTube
-  sample asks for a login; both get a clear message, and nothing bypasses the
-  login, cross-origin rules or DRM.
+- **Video sites are still not a supported feature**: the extension hands over an
+  http(s) media address the page already loads, plus the address the Bilibili and
+  Twitch live pages exchange against the site's API. On-demand pages that feed
+  segments to MSE (Bilibili and the like) expose no single replayable address, and
+  the YouTube sample asks for a login; both get a clear message, and nothing
+  bypasses the login, cross-origin rules or DRM. No resolver exists for YouTube
+  live: it needs a signed-in session, and the address it yields is tied to the
+  exit IP that asked for it.
+- **Live plays only what is happening now**: no replay buffer and no
+  cross-source alignment; the stage position starts at zero, and an address that
+  expires has to be fetched again from the extension.
+- **Machines behind a proxy**: the desktop reads `HTTP_PROXY`/`HTTPS_PROXY`
+  first, then the Windows Internet Settings proxy, and always connects to
+  loopback directly.
 
 ## Layout
 

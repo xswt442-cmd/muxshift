@@ -746,6 +746,11 @@ func main() {
 		fmt.Println(buildLine())
 		return
 	}
+	// Before the first request: the streams a browser can open are the ones this
+	// window can open, and on this kind of machine that includes the proxy.
+	if proxy := applySystemProxy(); proxy != "" {
+		log.Printf("proxy: using the Windows Internet Settings proxy %s", proxy)
+	}
 	// -scenario-extra is a check's input, not an option a person can hand to a
 	// normal start: an address passed with it would look like a source and be
 	// dropped without a word.

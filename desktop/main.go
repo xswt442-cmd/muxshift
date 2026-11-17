@@ -458,12 +458,68 @@ func (a *appState) view(c *ui.Context) {
 	})
 }
 
+// stageRect is where one source's picture sits on the stage, in percent of the
+// picture area. Percent rather than pixels: the same numbers hold when the
+// window is resized, which is the property a saved layout needs.
+type stageRect struct {
+	left, top, width, height float32
+}
+
+// stageLayout places the sources the scene shows. P9 only proves that two
+// pictures can be drawn side by side; the named presets arrive in P11 and will
+// replace this single arrangement, not the rect plumbing below it.
+func stageLayout(shown int) []stageRect {
+	if shown <= 1 {
+		return []stageRect{{0, 0, 100, 100}}
+	}
+	const gap = 2.0
+	width := (100 - gap*float32(shown-1)) / float32(shown)
+	rects := make([]stageRect, shown)
+	for i := range rects {
+		rects[i] = stageRect{left: float32(i) * (width + gap), top: 0, width: width, height: 100}
+	}
+	return rects
+}
+
 // stage draws every player in one frame. The scene hides the players it does
 // not show instead of removing their elements: the window stops repainting
 // when a video element is added or removed while it is running.
+//
+// P9: a shown source's picture is placed by its own rect, so two shown sources
+// put two pictures on the stage at once. A single shown source keeps filling
+// the stage exactly as before; the rect path is only entered when the scene
+// shows more than one.
 func (a *appState) stage(c *ui.Context) {
 	ui.Box(c).Fill().Grow(1).Radius(radiusLg).Border(1, colorLine).Background(colorPanel).Children(func() {
 		shown := 0
+		for _, it := range a.items {
+			if it.player != nil && it.shown {
+				shown++
+			}
+		}
+		rects := stageLayout(shown)
+		placed := map[*item]stageRect{}
+		next := 0
+		for _, it := range a.items {
+			if it.player == nil || !it.shown {
+				continue
+			}
+			placed[it] = rects[next]
+			next++
+		}
+		// place gives one video element its rectangle. With a single shown
+		// source the stage is filled the way it always was.
+		place := func(e ui.Element, it *item) ui.Element {
+			if shown <= 1 {
+				return e.Fill()
+			}
+			r, ok := placed[it]
+			if !ok {
+				r = stageRect{0, 0, 100, 100}
+			}
+			return e.Absolute().LeftPercent(r.left).TopPercent(r.top).
+				WidthPercent(r.width).HeightPercent(r.height).Fit(ui.Contain)
+		}
 		for _, it := range a.items {
 			if it.player == nil {
 				continue
@@ -477,23 +533,19 @@ func (a *appState) stage(c *ui.Context) {
 				// while it is still waiting. The element stays in the tree
 				// either way, because adding and removing video elements while
 				// the window runs stops it repainting.
-				ui.Video(c, it.swap.player).Fill().Hidden(!it.shown)
+				place(ui.Video(c, it.swap.player), it).Hidden(!it.shown)
 			}
 			if it.previous != nil {
-				ui.Video(c, rawPlayer(it.previous)).Fill()
-				shown++
+				place(ui.Video(c, rawPlayer(it.previous)), it)
 			}
 			if pending := a.pendingSeekPlayer(it); pending != nil {
 				// The replacement is drawn for the same reason the swap
 				// candidate is: a player that is never drawn never produces its
 				// first frame, and the transaction waits for one. The source
 				// keeps its old picture until the commit.
-				ui.Video(c, rawPlayer(pending)).Fill().Hidden(!it.shown)
+				place(ui.Video(c, rawPlayer(pending)), it).Hidden(!it.shown)
 			}
-			ui.Video(c, rawPlayer(it.player)).Fill().Hidden(!it.shown)
-			if it.shown {
-				shown++
-			}
+			place(ui.Video(c, rawPlayer(it.player)), it).Hidden(!it.shown)
 		}
 		if shown == 0 {
 			ui.Text(c, "no picture yet\nopen a source, or press Show on a card").

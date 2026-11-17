@@ -39,6 +39,13 @@ under [quick start](#quick-start).
 - **Desktop app**: a native MyGo window plays several sources, scenes choose
   picture and sound, each source has its own volume; manual nudges of ±0.1 s,
   and the automatic alignment only ever suggests, it never writes the timeline.
+- **Watching modes**: besides editing, the scene can be watched in cinema
+  (window frame kept, editing chrome hidden), full screen with F11, or a small
+  always-on-top window. Moving between the four never reopens a player or jumps
+  the clock, and leaving one restores the old window bounds, maximized state and
+  open panes. The floating bar hides after 2.5 s of no input but stays while the
+  pointer or the keyboard focus is on it; F11, Esc, a double click, Tab, Space
+  and the arrow keys reach the same places.
 - **DVR buffer**: live segments are kept in a bounded directory, the really
   available range and its gaps are reported, and one continuous span is cut into
   a recording; a switch puts the new player's picture up before replacing the

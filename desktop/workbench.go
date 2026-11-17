@@ -134,6 +134,33 @@ func (a *appState) topBar(c *ui.Context, width, height float32) {
 				a.workspace = next
 			}
 		}
+		// P10: the two watching modes worth a permanent button. Full screen
+		// lives inside them (and on F11), so it is not a third one.
+		//
+		// A narrow workbench cannot afford both words, but it must still be
+		// able to start watching: at 747 DIP it keeps one button and the
+		// overlay inside cinema offers the small window instead.
+		if width >= 980 {
+			if ui.Button(c.Key("top-cinema"), "Cinema").Width(88).Height(28).
+				Tooltip("watch the scene across the whole window, keeping the window frame").
+				Description("Watch in cinema mode").
+				Clicked() {
+				a.enterViewing(viewCinema, a.windowRef())
+			}
+			if ui.Button(c.Key("top-compact"), "Compact").Width(92).Height(28).
+				Tooltip("watch in a small window that can stay on top").
+				Description("Watch in compact mode").
+				Clicked() {
+				a.enterViewing(viewCompact, a.windowRef())
+			}
+		} else {
+			if ui.Button(c.Key("top-cinema"), "Watch").Width(72).Height(28).
+				Tooltip("watch the scene across the whole window; cinema offers the small window too").
+				Description("Watch in cinema mode").
+				Clicked() {
+				a.enterViewing(viewCinema, a.windowRef())
+			}
+		}
 		a.paneButton(c, paneRail, "Rail", a.rail.shown(width >= railAutoWidth))
 		a.paneButton(c, paneInspector, "Inspect", a.inspector.shown(width >= inspectorAutoWidth))
 		a.paneButton(c, paneDock, "Dock", a.dock.shown(a.settings.DockOpen && height >= dockAutoHeight))

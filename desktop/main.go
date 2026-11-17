@@ -390,6 +390,14 @@ func (a *appState) view(c *ui.Context) {
 		c.SetZoom(a.zoom)
 	}
 	c.SetTheme(muxshiftTheme())
+	// P10: a watching mode draws the picture and its overlay instead of the
+	// workbench. The keys stay available there, because a mode that can only be
+	// left with the mouse is a trap.
+	if !a.viewing.editing() {
+		a.viewingShortcuts(c)
+		a.viewingView(c)
+		return
+	}
 	// P15.4: window shortcuts. They are declared every pass because ui actions
 	// live one frame; each one sends the same command a button would, against
 	// whatever source is selected when the key is pressed.
@@ -413,6 +421,9 @@ func (a *appState) view(c *ui.Context) {
 		c.OnWindowShortcut(ui.Ctrl, ui.Key3, func() { a.workspace = workspaceDiagnostics })
 		c.OnWindowShortcut(ui.Ctrl, ui.Key4, func() { a.workspace = workspaceSettings })
 		c.OnWindowShortcut(ui.Ctrl, ui.Key5, func() { a.workspace = workspaceMixer })
+		// P10.3: F11 is the standard full-screen key and works from the
+		// workbench too, so a person does not have to find Cinema first.
+		c.OnWindowShortcut(0, ui.KeyF11, func() { a.enterViewing(viewFullscreen, a.windowRef()) })
 	}
 	// P15.1: the workbench. The top bar and the status bar always exist; the
 	// rail, the inspector and the dock fold away by window size, and each can
@@ -490,7 +501,7 @@ func stageLayout(shown int) []stageRect {
 // the stage exactly as before; the rect path is only entered when the scene
 // shows more than one.
 func (a *appState) stage(c *ui.Context) {
-	ui.Box(c).Fill().Grow(1).Radius(radiusLg).Border(1, colorLine).Background(colorPanel).Children(func() {
+	box := ui.Box(c).Fill().Grow(1).Radius(radiusLg).Border(1, colorLine).Background(colorPanel).Children(func() {
 		shown := 0
 		for _, it := range a.items {
 			if it.player != nil && it.shown {
@@ -509,9 +520,18 @@ func (a *appState) stage(c *ui.Context) {
 		}
 		// place gives one video element its rectangle. With a single shown
 		// source the stage is filled the way it always was.
+		//
+		// The picture ignores the pointer so the stage hears the click: a
+		// click lands on the element that draws the video, and the double
+		// click asking for full screen is counted on the stage, not below the
+		// picture.
 		place := func(e ui.Element, it *item) ui.Element {
+			e = e.IgnoreInput(true)
 			if shown <= 1 {
-				return e.Fill()
+				// Contain, not the raw Fill: a picture stretched to the
+				// window's own ratio is not the picture. The stage keeps the
+				// bars at the edges instead.
+				return e.Fill().Fit(ui.Contain)
 			}
 			r, ok := placed[it]
 			if !ok {
@@ -552,6 +572,11 @@ func (a *appState) stage(c *ui.Context) {
 				FontSize(textBody).TextColor(colorTextDim).Center().Fill()
 		}
 	})
+	// A double click on the picture is the third way into full screen, and it
+	// has to work from the workbench too, not only from a watching mode.
+	if box.DoubleClicked() && a.viewing.editing() {
+		a.enterViewing(viewFullscreen, a.windowRef())
+	}
 }
 
 // transportRow is play/pause for the whole group plus the actions that act on

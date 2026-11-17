@@ -342,6 +342,29 @@ type appState struct {
 	inspector paneMode
 	dock      paneMode
 
+	// viewing is the P10 watching state and savedForViewing is what the
+	// workbench looked like when a watching mode was entered, so leaving can
+	// put the window back. onTop is compact mode's switch, kept here so the
+	// exit path can restore the state the window had before.
+	viewing         viewingMode
+	viewingReturn   viewingMode
+	savedForViewing viewingSaved
+	onTop           bool
+
+	// The overlay in a watching mode hides itself after controlsIdle without a
+	// pointer move. controlsShown is what the last frame drew, controlsAt when
+	// the pointer last moved, controlsHovered whether the pointer rests on the
+	// bar itself, controlsFocused whether a keyboard user has a button in it,
+	// and idleTick makes an older hide timer harmless.
+	controlsShown      bool
+	controlsAt         time.Time
+	controlsHovered    bool
+	controlsFocused    bool
+	focusControls      bool
+	idleTick           uint64
+	pointerX, pointerY float32
+	pointerKnown       bool
+
 	// frameWidth and frameHeight are the size the last frame laid out at, so
 	// a scenario log can name the size it actually drew instead of the size
 	// it asked the window for.

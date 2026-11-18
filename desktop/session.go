@@ -352,6 +352,31 @@ type appState struct {
 	// order, so a scene edited elsewhere still draws something.
 	layoutTaken []core.SourceID
 
+	// edits is the stage's own arrangement per scene: the rectangles a person
+	// dragged out and the stacking order they chose, keyed by scene. It lives
+	// in this session only — a scene has no stable identity across restarts
+	// yet, so a layout is not written to disk and the stage says so.
+	edits map[core.SceneID]*stageEdits
+
+	// drag is the gesture in progress: which source, which handle, and the
+	// stage size the press happened in, so a drag keeps following the hand
+	// even if the window is resized mid-gesture.
+	drag       dragState
+	freeRatio  bool
+	editNote   string
+	hoverX     float32
+	hoverY     float32
+	hoverKnown bool
+	boxFields  boxFields
+
+	// stageW and stageH are the stage's size in the frame just built, kept so
+	// a keyboard nudge or a gesture can turn a pixel step into a fraction.
+	// stageAt is where the stage sits in the window, which is what a mouse
+	// script needs to aim at a picture.
+	stageW  float32
+	stageH  float32
+	stageAt stageBox
+
 	// viewing is the P10 watching state and savedForViewing is what the
 	// workbench looked like when a watching mode was entered, so leaving can
 	// put the window back. onTop is compact mode's switch, kept here so the
@@ -963,6 +988,7 @@ func (a *appState) closeImportTicker() {
 // are drawn, everything else is hidden, and each source's player takes the
 // level the scene gives its audio track, muted when it is not in the scene.
 func (a *appState) apply() {
+	a.pruneStageEdits()
 	scene, err := a.session.Scene(a.scene)
 	if err != nil {
 		a.lastErr = safeOpenError(err)

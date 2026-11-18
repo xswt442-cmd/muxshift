@@ -369,6 +369,9 @@ func (a *appState) inspectorSource(c *ui.Context, it *item, index int) {
 	if entry.OpenErr != "" && entry.OpenErr != "nil" {
 		a.detailRow(c, "error", entry.OpenErr)
 	}
+	if it.video != "" && it.shown {
+		a.editControls(c, it)
+	}
 	ui.Row(c).Wrap().Gap(spaceXs).Padding(spaceSm, 0).Children(func() {
 		if it.video != "" && ui.Button(c.Key("inspector-show"), "Show").Width(72).Height(26).Clicked() {
 			a.report(a.runCommand(command{Kind: commandShow, Source: it.source.ID}))

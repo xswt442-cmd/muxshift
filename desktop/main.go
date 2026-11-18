@@ -425,6 +425,17 @@ func (a *appState) view(c *ui.Context) {
 		// P10.3: F11 is the standard full-screen key and works from the
 		// workbench too, so a person does not have to find Cinema first.
 		c.OnWindowShortcut(0, ui.KeyF11, func() { a.enterViewing(viewFullscreen, a.windowRef()) })
+		// P12: the arrow keys place the selected picture without a drag, so a
+		// fine adjustment does not depend on the pointer's precision. Shift
+		// takes a larger step; neither key is bound elsewhere in the workbench.
+		c.OnWindowShortcut(0, ui.KeyLeft, func() { a.nudgeSelected(-nudgeStep, 0) })
+		c.OnWindowShortcut(0, ui.KeyRight, func() { a.nudgeSelected(nudgeStep, 0) })
+		c.OnWindowShortcut(0, ui.KeyUp, func() { a.nudgeSelected(0, -nudgeStep) })
+		c.OnWindowShortcut(0, ui.KeyDown, func() { a.nudgeSelected(0, nudgeStep) })
+		c.OnWindowShortcut(ui.Shift, ui.KeyLeft, func() { a.nudgeSelected(-nudgeStepFast, 0) })
+		c.OnWindowShortcut(ui.Shift, ui.KeyRight, func() { a.nudgeSelected(nudgeStepFast, 0) })
+		c.OnWindowShortcut(ui.Shift, ui.KeyUp, func() { a.nudgeSelected(0, -nudgeStepFast) })
+		c.OnWindowShortcut(ui.Shift, ui.KeyDown, func() { a.nudgeSelected(0, nudgeStepFast) })
 	}
 	// P15.1: the workbench. The top bar and the status bar always exist; the
 	// rail, the inspector and the dock fold away by window size, and each can
@@ -549,12 +560,24 @@ func (a *appState) stage(c *ui.Context) {
 	// placed with percentages resolve against a taller containing box than the
 	// one the stage is clipped to, so the arrangement is worked out in pixels.
 	bounds := stage.Bounds()
+	a.stageW, a.stageH = bounds.W, bounds.H
+	a.stageAt = stageBox{X: bounds.X, Y: bounds.Y}
 	stage.Children(func() {
-		shown := a.stagePictures()
-		rects := layoutSlots(a.layout, len(shown))
+		// The arrangement is read once and used both to draw the pictures and
+		// to draw their frames: a picture and its handles can never disagree
+		// about where it is.
+		geometry := a.stageGeometry()
+		shown := make([]*item, 0, len(geometry))
 		placed := map[*item]slotRect{}
-		for i, it := range shown {
-			placed[it] = rects[i]
+		for i, spot := range geometry {
+			shown = append(shown, spot.item)
+			placed[spot.item] = slotRect{
+				left:   spot.box.X * 100,
+				top:    spot.box.Y * 100,
+				width:  spot.box.W * 100,
+				height: spot.box.H * 100,
+				z:      i,
+			}
 		}
 		// A source the arrangement cannot hold stays in the tree — removing a
 		// video element while the window runs stops it repainting — but it
@@ -582,7 +605,7 @@ func (a *appState) stage(c *ui.Context) {
 				return e.Absolute().LeftPercent(r.left).TopPercent(r.top).
 					WidthPercent(r.width).HeightPercent(r.height).Fit(ui.Contain).ZIndex(r.z)
 			}
-			if len(shown) <= 1 && a.layout == layoutFocus {
+			if len(shown) <= 1 && a.layout == layoutFocus && !a.manualBox(it.source.ID) {
 				// Contain, not the raw Fill: a picture stretched to the
 				// window's own ratio is not the picture. The stage keeps the
 				// bars at the edges instead.
@@ -646,6 +669,11 @@ func (a *appState) stage(c *ui.Context) {
 				ui.Text(c, "waiting for the first picture\n"+a.name(it)).
 					FontSize(textSmall).TextColor(colorTextDim)
 			})
+		}
+		// The frames and handles only exist while the workbench is editing; a
+		// watching mode has no editable border at all.
+		if a.viewing.editing() {
+			a.stageEditing(c, geometry, bounds.W, bounds.H)
 		}
 		if len(shown) == 0 {
 			ui.Text(c, "no picture yet\nopen a source, or press Show on a card").

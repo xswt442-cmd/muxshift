@@ -498,22 +498,17 @@ func (a *appState) editControls(c *ui.Context, it *item) {
 		}
 	})
 	ui.Row(c).Wrap().Gap(spaceXs).Children(func() {
-		ids := a.shownIDs()
 		if ui.Button(c.Key("layer-front"), "Front").Width(64).Height(24).Clicked() {
-			a.sceneEdits().raise(it.source.ID, ids, true)
-			a.invalidate()
+			a.raiseStage(it.source.ID, true)
 		}
 		if ui.Button(c.Key("layer-forward"), "Up").Width(52).Height(24).Clicked() {
-			a.sceneEdits().raise(it.source.ID, ids, false)
-			a.invalidate()
+			a.raiseStage(it.source.ID, false)
 		}
 		if ui.Button(c.Key("layer-backward"), "Down").Width(60).Height(24).Clicked() {
-			a.sceneEdits().lower(it.source.ID, ids, false)
-			a.invalidate()
+			a.lowerStage(it.source.ID, false)
 		}
 		if ui.Button(c.Key("layer-back"), "Back").Width(60).Height(24).Clicked() {
-			a.sceneEdits().lower(it.source.ID, ids, true)
-			a.invalidate()
+			a.lowerStage(it.source.ID, true)
 		}
 	})
 	if a.boxFields.note != "" {
@@ -607,4 +602,18 @@ func lockLabel(locked bool) string {
 		return "Unlock"
 	}
 	return "Lock"
+}
+
+// raiseStage puts one shown source in front of the others. The Sources page
+// and the inspector both call it, so the stacking order a person sets there is
+// the order the stage draws.
+func (a *appState) raiseStage(id core.SourceID, toFront bool) {
+	a.sceneEdits().raise(id, a.shownIDs(), toFront)
+	a.invalidate()
+}
+
+// lowerStage is the other direction of raiseStage.
+func (a *appState) lowerStage(id core.SourceID, toBack bool) {
+	a.sceneEdits().lower(id, a.shownIDs(), toBack)
+	a.invalidate()
 }

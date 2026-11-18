@@ -736,7 +736,7 @@ func (a *appState) transportRow(c *ui.Context) {
 func (a *appState) sourceCard(c *ui.Context, i int, it *item) {
 	item := it
 	selected := a.selected == item.source.ID
-	row := ui.Row(c).Gap(spaceSm).Padding(spaceMd).Radius(radiusMd).Wrap().
+	row := ui.Row(c).Gap(spaceSm).Padding(spaceSm, spaceMd).Radius(radiusMd).Wrap().
 		AlignItems(ui.Center).Background(colorPanel)
 	if selected {
 		row.Border(2, colorAccent).Background(colorPanel2)
@@ -776,6 +776,18 @@ func (a *appState) sourceCard(c *ui.Context, i int, it *item) {
 				if ui.Button(c.Key("main-"+itoa(i)), "Main").Width(64).
 					Tooltip("put this picture in the layout's largest slot").Clicked() {
 					a.setPrimary(item.source.ID)
+				}
+			}
+			// P13.3: the stacking order a picture gets here is the order the
+			// stage draws, the same one the inspector's four buttons set.
+			if item.shown && len(a.shownIDs()) > 1 {
+				if ui.Button(c.Key("front-"+itoa(i)), "Front").Width(58).Height(26).
+					Tooltip("draw this picture above the other shown sources").Clicked() {
+					a.raiseStage(item.source.ID, true)
+				}
+				if ui.Button(c.Key("back-"+itoa(i)), "Back").Width(54).Height(26).
+					Tooltip("draw this picture below the other shown sources").Clicked() {
+					a.lowerStage(item.source.ID, true)
 				}
 			}
 		}

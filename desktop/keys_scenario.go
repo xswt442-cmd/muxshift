@@ -14,8 +14,15 @@ import (
 // handling fire, so the keys must come from outside.
 func runKeys(window *mygo.Window, a *appState, dir string) {
 	go func() {
-		defer a.release()
-		defer mygo.App.Quit()
+		// The window and its players may only be released on the drawing thread,
+		// and Quit has to come after that: releasing from this goroutine leaves
+		// the process alive with the window already gone.
+		defer func() {
+			mygoRunOnMain(func() {
+				a.release()
+				mygo.App.Quit()
+			})
+		}()
 		for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); {
 			var ready bool
 			done := make(chan struct{})

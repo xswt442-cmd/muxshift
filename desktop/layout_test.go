@@ -149,3 +149,25 @@ func TestLayoutNamesRoundTrip(t *testing.T) {
 		t.Fatalf("an unknown name parsed as %v, want focus", got)
 	}
 }
+
+func TestSlotPixelsKeepsThePictureShape(t *testing.T) {
+	// A half-width slot on a 800x450 stage, for a 16:9 picture: the slot is
+	// 400x450, so the picture keeps 400x225 and is centered vertically.
+	got := slotPixels(slotRect{left: 50, top: 0, width: 50, height: 100}, 800, 450, 1920, 1080)
+	if got.width != 400 || got.height != 225 {
+		t.Fatalf("got %vx%v, want 400x225", got.width, got.height)
+	}
+	if got.left != 400 || got.top != 112.5 {
+		t.Fatalf("got at %v,%v, want 400,112.5", got.left, got.top)
+	}
+	// Without a picture size the slot is used as it is.
+	plain := slotPixels(slotRect{left: 0, top: 0, width: 50, height: 50}, 800, 450, 0, 0)
+	if plain.width != 400 || plain.height != 225 {
+		t.Fatalf("got %vx%v, want the slot 400x225", plain.width, plain.height)
+	}
+	// A 4:3 picture in a wide slot is limited by height.
+	tall := slotPixels(slotRect{left: 0, top: 0, width: 100, height: 100}, 800, 450, 640, 480)
+	if tall.width != 600 || tall.height != 450 {
+		t.Fatalf("got %vx%v, want 600x450", tall.width, tall.height)
+	}
+}

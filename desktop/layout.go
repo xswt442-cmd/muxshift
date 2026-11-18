@@ -4,6 +4,21 @@ package main
 // layout decides rectangles, stacking and which source owns the largest slot;
 // it never decides what plays: sound, players, sync groups and the event clock
 // stay exactly where the scene put them.
+//
+// The contract with the scene (P11.1):
+//
+//   - The scene's video tracks, in scene order, are the pictures the stage may
+//     show; a source is on the stage when the scene lists its video track, which
+//     is what the Show/Hide button writes through SetSceneVideo.
+//   - A layout only reads that order. The first source a person marked Main
+//     goes first, the rest keep scene order, and the arrangement takes as many
+//     as its slots hold (1, 2, 2, 4, 3). Sources beyond that keep playing and
+//     keep their audio; they simply have no rectangle.
+//   - Slots are normalized percentages of the stage box and are turned into
+//     pixels against the box measured a frame earlier, so a resize or an entry
+//     into full screen changes rectangles, never the scene's geometry.
+//   - Nothing about the arrangement is persisted: a session or a settings file
+//     from before P11 opens on Focus, the single picture filling the stage.
 
 // layoutKind names an arrangement. The zero value is the editing default, the
 // one picture filling the stage.
@@ -167,6 +182,35 @@ func heroSlots(n int) []slotRect {
 			height: sideHeight,
 			z:      1,
 		})
+	}
+	return out
+}
+
+// slotPixels turns one percentage slot into the pixel rectangle the stage
+// draws in. A video element given a box of a different ratio letterboxes the
+// picture in white, so the box itself takes the picture's shape and sits
+// centered where the slot was: the space that is left shows the stage, not a
+// bar of the wrong color.
+func slotPixels(r slotRect, stageW, stageH float32, shapeW, shapeH int) slotRect {
+	out := slotRect{
+		left:   r.left / 100 * stageW,
+		top:    r.top / 100 * stageH,
+		width:  r.width / 100 * stageW,
+		height: r.height / 100 * stageH,
+		z:      r.z,
+	}
+	if shapeW <= 0 || shapeH <= 0 || out.width <= 0 || out.height <= 0 {
+		return out
+	}
+	shape := float32(shapeW) / float32(shapeH)
+	if out.width/out.height > shape {
+		w := out.height * shape
+		out.left += (out.width - w) / 2
+		out.width = w
+	} else {
+		h := out.width / shape
+		out.top += (out.height - h) / 2
+		out.height = h
 	}
 	return out
 }

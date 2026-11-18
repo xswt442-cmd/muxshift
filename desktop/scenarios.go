@@ -39,6 +39,8 @@ var scenarios = map[string]scenario{
 	"canvaslive":        runCanvasLive,
 	"viewing":           runViewing,
 	"layouts":           runLayouts,
+	"editing":           runEditing,
+	"editing-live":      runEditingLive,
 	"workspaces":        runWorkspaces,
 	"workbench":         runWorkbench,
 	"matrix":            runMatrix,

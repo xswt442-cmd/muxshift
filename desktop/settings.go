@@ -157,7 +157,7 @@ func defaultSettings() settings {
 		NudgeStep:     0.1,
 		MuteUnaligned: true,
 		MasterVolume:  1,
-		DockOpen:      true,
+		DockOpen:      false,
 		Compact:       false,
 		DVR:           builtinDVRBudget(),
 		// Source memory starts off in both senses: nothing is applied and

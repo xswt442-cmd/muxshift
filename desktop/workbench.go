@@ -3,11 +3,13 @@
 // bar that stays visible when the window gets small.
 //
 // The rules are simple and measured from the window size the frame reports:
-// below 900px the rail folds away, below 1160px the inspector does, and below
-// 660px of content height the dock does. The numbers are client area, which is
-// a little smaller than the size a window is asked for. A person can override any of the three with
-// its button, and that choice keeps; the automatic rule only applies while a
-// pane is left on auto.
+// the stage owns the window, so the rail and the inspector only open by
+// themselves once there is room to spare for a picture beside them (1600px),
+// and the dock only when its own switch is on and the window is tall enough.
+// The numbers are client area, which is a little smaller than the size a
+// window is asked for. A person can override any of the three with its button,
+// and that choice keeps; the automatic rule only applies while a pane is left
+// on auto.
 //
 // Nothing here invents a control: Mixer and DVR are drawn disabled because
 // this build has neither, and every disabled button says why in its tooltip.
@@ -30,8 +32,8 @@ const (
 	// The sizes below which a pane folds itself away. They are thresholds for
 	// the whole window, not for the pane, because a pane cannot measure the
 	// room it was given in this layout engine.
-	inspectorAutoWidth = 1160
-	railAutoWidth      = 900
+	inspectorAutoWidth = 1600
+	railAutoWidth      = 1600
 	dockAutoHeight     = 660
 	// Below this width the product name is dropped from the bar so the source
 	// count and the three layout switches keep their whole labels.
@@ -79,7 +81,12 @@ func (a *appState) topBar(c *ui.Context, width, height float32) {
 		// the source count matter more, and a squeezed "MuxS…" tells nobody
 		// anything.
 		if width >= brandAutoWidth {
-			ui.Text(c, "MuxShift").FontSize(textTitle).TextColor(colorText).SingleLine()
+			// The bar is crowded once the panes are closed and every switch
+			// shares it, so the name gets a width of its own and never ends in
+			// an ellipsis.
+			ui.Box(c).Width(132).Children(func() {
+				ui.Text(c, "MuxShift").FontSize(textTitle).TextColor(colorText).SingleLine()
+			})
 		}
 		// Below the rail threshold the chips would wrap the bar, so only the
 		// source count stays: it is the one number the stage needs.

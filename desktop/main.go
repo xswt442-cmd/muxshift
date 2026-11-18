@@ -676,8 +676,23 @@ func (a *appState) stage(c *ui.Context) {
 			a.stageEditing(c, geometry, bounds.W, bounds.H)
 		}
 		if len(shown) == 0 {
-			ui.Text(c, "no picture yet\nopen a source, or press Show on a card").
-				FontSize(textBody).TextColor(colorTextDim).Center().Fill()
+			// An empty stage says what to do and offers the two first steps,
+			// instead of naming a button that is not on this page.
+			ui.Column(c).Fill().Center().Gap(spaceSm).Children(func() {
+				ui.Text(c, "no picture yet").FontSize(textTitle).TextColor(colorTextDim)
+				ui.Text(c, "a file, a media address or a website: any of the three lands here.").
+					FontSize(textSmall).TextColor(colorDim)
+				ui.Row(c).Gap(spaceSm).Children(func() {
+					if ui.Button(c.Key("empty-open"), "Open\u2026").Width(96).Height(30).Clicked() {
+						a.openAddSource()
+					}
+					if ui.Button(c.Key("empty-sources"), "Sources").Width(96).Height(30).
+						Tooltip("list every source and show one").Clicked() {
+						a.workspace = workspaceSources
+						a.invalidate()
+					}
+				})
+			})
 		}
 	})
 	// A double click on the picture is the third way into full screen, and it

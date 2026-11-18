@@ -357,21 +357,19 @@ func (a *appState) inspectorSource(c *ui.Context, it *item, index int) {
 			a.selected = ""
 		}
 	})
+	// P13.4: the pane answers what a person came for — what this source is,
+	// whether it is on the stage, how far along it is and how it sits against
+	// the others. The Core ids, the generation counter and the player handle
+	// moved to Diagnostics, where a bug report can still read them.
 	a.detailRow(c, "address", shortURI(it.uri))
-	a.detailRow(c, "id", string(it.source.ID))
-	a.detailRow(c, "video", string(it.video))
-	a.detailRow(c, "audio", string(it.audio))
-	a.detailRow(c, "generation", itoa(entry.Generation))
-	a.detailRow(c, "player", fmt.Sprintf("%v", entry.Player))
-	a.detailRow(c, "ready", fmt.Sprintf("%v", entry.Ready))
-	a.detailRow(c, "playing", fmt.Sprintf("%v", entry.Playing))
+	a.detailRow(c, "picture", pictureState(entry))
+	a.detailRow(c, "sound", soundState(entry))
 	a.detailRow(c, "position", formatEvent(entry.Position))
 	a.detailRow(c, "duration", formatEvent(entry.Duration))
-	a.detailRow(c, "volume", fmt.Sprintf("%.2f", entry.Volume))
-	a.detailRow(c, "muted", fmt.Sprintf("%v", entry.Muted))
+	a.detailRow(c, "volume", volumeState(entry))
 	if it.audio != "" {
 		a.detailRow(c, "offset", fmt.Sprintf("%+.1fs", entry.Offset.Seconds()))
-		a.detailRow(c, "aligned", fmt.Sprintf("%v", entry.Aligned))
+		a.detailRow(c, "aligned", alignedState(entry))
 	}
 	if entry.OpenErr != "" && entry.OpenErr != "nil" {
 		a.detailRow(c, "error", entry.OpenErr)
@@ -457,6 +455,51 @@ func (a *appState) detailRow(c *ui.Context, name, value string) {
 		ui.Text(c, name).FontSize(textMicro).TextColor(colorDim).Width(64)
 		ui.Text(c, value).FontSize(textSmall).TextColor(colorText).Grow(1).FontFeatures("tnum")
 	})
+}
+
+// pictureState says what the stage is doing with this source in words, not in
+// booleans.
+func pictureState(entry sourceSnapshot) string {
+	switch {
+	case !entry.Player:
+		return "no player yet"
+	case !entry.Ready:
+		return "opening"
+	case !entry.Playing:
+		return "held at " + formatEvent(entry.Position)
+	default:
+		return "playing"
+	}
+}
+
+// soundState is the same for the audio side.
+func soundState(entry sourceSnapshot) string {
+	switch {
+	case !entry.Player:
+		return "silent: no player"
+	case entry.Muted:
+		return "muted"
+	case entry.Volume <= 0:
+		return "silent: volume is zero"
+	default:
+		return "heard"
+	}
+}
+
+// volumeState shows the number only when the player reports one.
+func volumeState(entry sourceSnapshot) string {
+	if !entry.Player {
+		return ""
+	}
+	return fmt.Sprintf("%.2f", entry.Volume)
+}
+
+// alignedState turns the alignment flag into the sentence a person needs.
+func alignedState(entry sourceSnapshot) string {
+	if entry.Aligned {
+		return "yes"
+	}
+	return "not yet: no common clock found"
 }
 
 // dockPane is the timeline dock. It is read-only in this build: it shows the

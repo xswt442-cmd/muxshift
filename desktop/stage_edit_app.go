@@ -469,15 +469,19 @@ func (a *appState) editControls(c *ui.Context, it *item) {
 		{"box-w", "w", &a.boxFields.w},
 		{"box-h", "h", &a.boxFields.h},
 	}
-	ui.Row(c).Wrap().Gap(spaceXs).WidthPercent(100).Children(func() {
-		for _, field := range fields {
-			ui.Column(c).Gap(0).Width(72).Children(func() {
-				ui.Text(c, field.label).FontSize(textMicro).TextColor(colorDim)
-				c.Key(field.key)
-				ui.TextInput(c, field.value).Height(24)
-			})
-		}
-	})
+	// Two rows of two: the pane is 292 wide, and four fields on one line made
+	// the fourth wrap under the first three on its own.
+	for row := 0; row < len(fields); row += 2 {
+		ui.Row(c).Gap(spaceXs).WidthPercent(100).Children(func() {
+			for _, field := range fields[row : row+2] {
+				ui.Column(c).Gap(0).Grow(1).Children(func() {
+					ui.Text(c, field.label).FontSize(textMicro).TextColor(colorDim)
+					c.Key(field.key)
+					ui.TextInput(c, field.value).Height(24)
+				})
+			}
+		})
+	}
 	ui.Row(c).Wrap().Gap(spaceXs).Children(func() {
 		if ui.Button(c.Key("box-apply"), "Apply").Width(72).Height(24).Clicked() {
 			a.applyBoxFields(it)
@@ -490,7 +494,7 @@ func (a *appState) editControls(c *ui.Context, it *item) {
 			a.forgetBox(it.source.ID)
 			a.reloadBoxFields(it)
 		}
-		if ui.Button(c.Key("box-ratio"), ratioLabel(!a.freeRatio)).Width(76).Height(24).Clicked() {
+		if ui.Button(c.Key("box-ratio"), ratioLabel(!a.freeRatio)).Width(96).Height(24).Clicked() {
 			a.freeRatio = !a.freeRatio
 		}
 		if ui.Button(c.Key("box-lock"), lockLabel(a.stageLocked(it.source.ID))).Width(76).Height(24).Clicked() {
@@ -504,7 +508,7 @@ func (a *appState) editControls(c *ui.Context, it *item) {
 		if ui.Button(c.Key("layer-forward"), "Up").Width(52).Height(24).Clicked() {
 			a.raiseStage(it.source.ID, false)
 		}
-		if ui.Button(c.Key("layer-backward"), "Down").Width(60).Height(24).Clicked() {
+		if ui.Button(c.Key("layer-backward"), "Down").Width(72).Height(24).Clicked() {
 			a.lowerStage(it.source.ID, false)
 		}
 		if ui.Button(c.Key("layer-back"), "Back").Width(60).Height(24).Clicked() {
@@ -592,9 +596,9 @@ func (a *appState) applyBoxFields(it *item) {
 
 func ratioLabel(locked bool) string {
 	if locked {
-		return "Ratio on"
+		return "Keep ratio"
 	}
-	return "Ratio off"
+	return "Any ratio"
 }
 
 func lockLabel(locked bool) string {

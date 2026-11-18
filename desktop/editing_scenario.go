@@ -67,7 +67,13 @@ func editingBody(window *mygo.Window, a *appState, dir string) {
 	}
 
 	// The first shot is the arrangement before any gesture: frames around both
-	// pictures, handles on the selected one.
+	// pictures, handles on the selected one, and the inspector open on it so
+	// the pane's wording is in the evidence too.
+	mygoRunOnMain(func() {
+		a.inspector = paneOpen
+		window.Invalidate()
+	})
+	time.Sleep(400 * time.Millisecond)
 	shot("1-frames")
 
 	var target *item

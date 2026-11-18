@@ -150,9 +150,10 @@ func (a *appState) diagnosticsPage(c *ui.Context) {
 			snapshot.Event.Round(100*1e6), snapshot.Playing, snapshot.LastCommand)).
 			FontSize(textSmall).TextColor(colorTextDim)
 		for i, source := range snapshot.Sources {
-			ui.Text(c, fmt.Sprintf("%d · %s · %s · gen %d · %s · ready %v · %s / %s · offset %s",
+			ui.Text(c, fmt.Sprintf("%d · %s · %s · gen %d · %s · ready %v · player %v · playing %v · %s / %s · offset %s",
 				i+1, source.ID, shortURI(source.URI), source.Generation,
 				tracksLine([]core.TrackID{source.Video, source.Audio}), source.Ready,
+				source.Player, source.Playing,
 				source.Position.Round(100*1e6), source.Duration.Round(100*1e6), source.Offset)).
 				FontSize(textSmall).TextColor(colorText).FontFeatures("tnum")
 		}

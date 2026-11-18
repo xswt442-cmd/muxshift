@@ -38,6 +38,11 @@ const (
 	// Below this width the product name is dropped from the bar so the source
 	// count and the three layout switches keep their whole labels.
 	brandAutoWidth = 760
+	// Below this width the status line keeps the numbers and drops the word
+	// "ready" instead of letting the label truncate into "2 so…".
+	statusQuietWidth float32 = 1280
+	// compactButtonWidth is where the bar can afford the second watching word.
+	compactButtonWidth float32 = 1200
 )
 
 // paneMode says whether a pane follows the window-size rule or a person's
@@ -104,8 +109,11 @@ func (a *appState) topBar(c *ui.Context, width, height float32) {
 		}
 		ui.Box(c).Grow(1)
 		if width >= 1100 {
-			ui.Text(c, a.globalStatus()).FontSize(textSmall).TextColor(colorTextDim).
-				FontFeatures("tnum")
+			status := a.globalStatusFor(width)
+			ui.Box(c).MinWidth(labelWidth(status, textSmall)).Children(func() {
+				ui.Text(c, status).FontSize(textSmall).TextColor(colorTextDim).
+					FontFeatures("tnum").SingleLine()
+			})
 			if ui.Button(c.Key("top-open"), "Open…").Width(76).Height(28).
 				Tooltip("add a source: a file, a media address or a website").
 				Description("Add a source").
@@ -154,11 +162,16 @@ func (a *appState) topBar(c *ui.Context, width, height float32) {
 				Clicked() {
 				a.enterViewing(viewCinema, a.windowRef())
 			}
-			if ui.Button(c.Key("top-compact"), "Compact").Width(92).Height(28).
-				Tooltip("watch in a small window that can stay on top").
-				Description("Watch in compact mode").
-				Clicked() {
-				a.enterViewing(viewCompact, a.windowRef())
+			// Below this width the bar has no room left for a second word, and a
+			// squeezed label ("Comp…") is worse than one button fewer: cinema's
+			// overlay carries the small window.
+			if width >= compactButtonWidth {
+				if ui.Button(c.Key("top-compact"), "Compact").Width(92).Height(28).
+					Tooltip("watch in a small window that can stay on top").
+					Description("Watch in compact mode").
+					Clicked() {
+					a.enterViewing(viewCompact, a.windowRef())
+				}
 			}
 		} else {
 			if ui.Button(c.Key("top-cinema"), "Watch").Width(72).Height(28).
@@ -177,6 +190,12 @@ func (a *appState) topBar(c *ui.Context, width, height float32) {
 // globalStatus is the one line the top bar keeps current: shared event time,
 // whether the group plays, and how many sources are ready.
 func (a *appState) globalStatus() string {
+	return a.globalStatusFor(10000)
+}
+
+// globalStatusFor drops the trailing word when the bar has no room for it: the
+// three numbers are the claim, "ready" is the explanation.
+func (a *appState) globalStatusFor(width float32) string {
 	ready := 0
 	for _, it := range a.items {
 		if it.player != nil && it.player.Ready() {
@@ -187,7 +206,11 @@ func (a *appState) globalStatus() string {
 	if a.sync.playhead.Playing() {
 		state = "playing"
 	}
-	return fmt.Sprintf("%s · %s · %d/%d ready", formatEvent(a.sync.playhead.Event()), state, ready, len(a.items))
+	line := fmt.Sprintf("%s · %s · %d/%d", formatEvent(a.sync.playhead.Event()), state, ready, len(a.items))
+	if width >= statusQuietWidth {
+		line += " ready"
+	}
+	return line
 }
 
 // paneButton draws a layout switch. It is a real command: pressing flips the
@@ -282,7 +305,8 @@ func (a *appState) center(c *ui.Context, width, height float32) {
 // the scene, not to the window.
 func (a *appState) layoutBar(c *ui.Context) {
 	ui.Row(c).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "layout").FontSize(textMicro).TextColor(colorDim)
+		// No leading word: the five names are the label, and the word itself
+		// was the only thing that ever got cut at the window's left edge.
 		for _, kind := range layoutKinds {
 			button := ui.Button(c.Key("layout-"+kind.String()), kind.label()).Width(76)
 			if kind == a.layout {

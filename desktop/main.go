@@ -850,8 +850,18 @@ func pill(c *ui.Context, label string, tint ui.Color, on bool) {
 		textColor = tint
 	}
 	// SingleLine: in a narrow window a wrapping label turned "1 source" into a
-	// two line column and made the bar taller than its buttons.
-	ui.Text(c, label).FontSize(textMicro).TextColor(textColor).SingleLine()
+	// two line column and made the bar taller than its buttons. The box keeps
+	// the label from being squeezed into "2 sour…" when the switches need room.
+	ui.Box(c).MinWidth(labelWidth(label, textMicro)).Children(func() {
+		ui.Text(c, label).FontSize(textMicro).TextColor(textColor).SingleLine()
+	})
+}
+
+// labelWidth estimates the width a one-line label needs. It is deliberately a
+// little generous: a label that is short of its box is fine, a truncated count
+// is not.
+func labelWidth(label string, size float32) float32 {
+	return float32(len([]rune(label)))*size*0.62 + size
 }
 
 // first is the item the buttons drive: the first one given.

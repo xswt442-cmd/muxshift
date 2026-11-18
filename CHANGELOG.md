@@ -15,6 +15,12 @@ This changelog records completed changes that matter to someone using MuxShift. 
 - 媒体链接按实际内容判断是播放列表还是可直读媒体，网页、404 与不支持的类型明确拒绝且不留空卡片。
 - 网站地址用系统浏览器打开；扩展不再需要 Native Host，改为与桌面窗口回环配对后交回页面已加载的地址。
 
+- 舞台有五种布局（Focus / Split / PiP / Grid / Hero），切换只改落位，不重开播放器、不动声音与同步。
+- 画面可以自由摆放：拖动、八向缩放、锁定比例、在检查器里填精确数值、方向键微调、置顶置底与上移下移；位置按舞台比例保存。
+- 空舞台直接给出两条起始动作（打开选择器、去 Sources），不再指向别的页面上的按钮。
+- 工作台默认把窗口留给画面：窄窗口不再自动打开固定栏，底部 dock 默认收起；检查和轨道仍然一键打开。
+- 检查器改用动作与状态的说法（`playing`、`held at 3.2s`、`muted`、`silent: volume is zero`、`not yet: no common clock found`），Core id、代次与播放器句柄移到 Diagnostics。
+
 **修复**
 
 - 打开失败的本地或网络来源不再留下幽灵 Source/Track。

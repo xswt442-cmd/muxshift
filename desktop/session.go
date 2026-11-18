@@ -1002,8 +1002,10 @@ func (a *appState) apply() {
 	}
 }
 
-// showVideo makes one source's video the scene's video, keeping the audio
-// levels as they are.
+// showVideo puts a source's picture on the stage, or takes it off again when it
+// is already there. The scene keeps every shown track in the order it was added,
+// which is the order the layout places the pictures in; the audio levels are
+// untouched either way.
 func (a *appState) showVideo(index int) error {
 	it, err := a.at(index)
 	if err != nil {
@@ -1012,14 +1014,32 @@ func (a *appState) showVideo(index int) error {
 	if it.video == "" {
 		return fmt.Errorf("source %d has no video track", index+1)
 	}
-	if err := a.ensurePlayer(it); err != nil {
+	scene, err := a.session.Scene(a.scene)
+	if err != nil {
 		return err
 	}
-	if _, err := a.session.SetSceneVideo(a.scene, it.video); err != nil {
+	tracks := make([]core.TrackID, 0, len(scene.Video)+1)
+	showing := false
+	for _, track := range scene.Video {
+		if track == it.video {
+			showing = true
+			continue
+		}
+		tracks = append(tracks, track)
+	}
+	if !showing {
+		if err := a.ensurePlayer(it); err != nil {
+			return err
+		}
+		tracks = append(tracks, it.video)
+	}
+	if _, err := a.session.SetSceneVideo(a.scene, tracks...); err != nil {
 		return err
 	}
 	a.apply()
-	a.wakeShown(it)
+	if !showing {
+		a.wakeShown(it)
+	}
 	return nil
 }
 

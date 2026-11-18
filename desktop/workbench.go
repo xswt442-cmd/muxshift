@@ -277,7 +277,7 @@ func (a *appState) layoutBar(c *ui.Context) {
 	ui.Row(c).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "layout").FontSize(textMicro).TextColor(colorDim)
 		for _, kind := range layoutKinds {
-			button := ui.Button(c.Key("layout-"+kind.String()), kind.label()).Width(64)
+			button := ui.Button(c.Key("layout-"+kind.String()), kind.label()).Width(76)
 			if kind == a.layout {
 				button = button.Border(1, colorAccent).Background(colorPanel2)
 			}

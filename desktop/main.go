@@ -544,34 +544,57 @@ func (a *appState) setPrimary(id core.SourceID) {
 // the stage exactly as before; the rect path is only entered when the scene
 // shows more than one.
 func (a *appState) stage(c *ui.Context) {
-	box := ui.Box(c).Fill().Grow(1).Radius(radiusLg).Border(1, colorLine).Background(colorPanel).Children(func() {
+	stage := ui.Box(c).Fill().Grow(1).Radius(radiusLg).Border(1, colorLine).Background(colorPanel)
+	// The box's own size, from the frame before this one. Absolute children
+	// placed with percentages resolve against a taller containing box than the
+	// one the stage is clipped to, so the arrangement is worked out in pixels.
+	bounds := stage.Bounds()
+	stage.Children(func() {
 		shown := a.stagePictures()
 		rects := layoutSlots(a.layout, len(shown))
 		placed := map[*item]slotRect{}
 		for i, it := range shown {
 			placed[it] = rects[i]
 		}
-		// place gives one video element its rectangle. With a single shown
-		// source the stage is filled the way it always was.
-		//
-		// The picture ignores the pointer so the stage hears the click: a
-		// click lands on the element that draws the video, and the double
-		// click asking for full screen is counted on the stage, not below the
-		// picture.
-		place := func(e ui.Element, it *item) ui.Element {
+		// A source the arrangement cannot hold stays in the tree — removing a
+		// video element while the window runs stops it repainting — but it
+		// draws nothing, and it must not fall back to the whole stage: that
+		// would paint a picture over the ones the layout did place.
+		onStage := map[*item]bool{}
+		for _, it := range shown {
+			onStage[it] = true
+		}
+		// place gives one video element its rectangle. The picture ignores the
+		// pointer so the stage hears the click: a click lands on the element
+		// that draws the video, and the double click asking for full screen is
+		// counted on the stage, not below the picture.
+		place := func(e ui.Element, it *item, p *ui.VideoPlayer) ui.Element {
 			e = e.IgnoreInput(true)
+			if !onStage[it] {
+				// Hiding alone is not enough: the engine composites a video
+				// element on its own and keeps drawing its last frame in the
+				// flow. A source the arrangement cannot hold is moved out of
+				// the stage and shrunk to nothing as well as hidden.
+				return e.Absolute().Left(-4000).Top(-4000).Width(1).Height(1).Hidden(true)
+			}
+			r := placed[it]
+			if bounds.W < 1 || bounds.H < 1 {
+				return e.Absolute().LeftPercent(r.left).TopPercent(r.top).
+					WidthPercent(r.width).HeightPercent(r.height).Fit(ui.Contain).ZIndex(r.z)
+			}
 			if len(shown) <= 1 && a.layout == layoutFocus {
 				// Contain, not the raw Fill: a picture stretched to the
 				// window's own ratio is not the picture. The stage keeps the
 				// bars at the edges instead.
 				return e.Fill().Fit(ui.Contain)
 			}
-			r, ok := placed[it]
-			if !ok {
-				r = slotRect{0, 0, 100, 100, 0}
+			shapeW, shapeH := 0, 0
+			if p != nil {
+				shapeW, shapeH = p.Size()
 			}
-			return e.Absolute().LeftPercent(r.left).TopPercent(r.top).
-				WidthPercent(r.width).HeightPercent(r.height).Fit(ui.Contain).ZIndex(r.z)
+			px := slotPixels(r, bounds.W, bounds.H, shapeW, shapeH)
+			return e.Absolute().Left(px.left).Top(px.top).
+				Width(px.width).Height(px.height).Fit(ui.Contain).ZIndex(px.z)
 		}
 		for _, it := range a.items {
 			if it.player == nil {
@@ -586,19 +609,43 @@ func (a *appState) stage(c *ui.Context) {
 				// while it is still waiting. The element stays in the tree
 				// either way, because adding and removing video elements while
 				// the window runs stops it repainting.
-				place(ui.Video(c, it.swap.player), it).Hidden(!it.shown)
+				place(ui.Video(c, it.swap.player), it, it.swap.player).Hidden(!it.shown)
 			}
 			if it.previous != nil {
-				place(ui.Video(c, rawPlayer(it.previous)), it)
+				place(ui.Video(c, rawPlayer(it.previous)), it, rawPlayer(it.previous))
 			}
 			if pending := a.pendingSeekPlayer(it); pending != nil {
 				// The replacement is drawn for the same reason the swap
 				// candidate is: a player that is never drawn never produces its
 				// first frame, and the transaction waits for one. The source
 				// keeps its old picture until the commit.
-				place(ui.Video(c, rawPlayer(pending)), it).Hidden(!it.shown)
+				place(ui.Video(c, rawPlayer(pending)), it, rawPlayer(pending)).Hidden(!it.shown)
 			}
-			place(ui.Video(c, rawPlayer(it.player)), it).Hidden(!it.shown)
+			place(ui.Video(c, rawPlayer(it.player)), it, rawPlayer(it.player)).Hidden(!it.shown)
+		}
+		// A player that has not produced its first frame draws at a size of its
+		// own — a thumbnail in the middle of its slot. The element has to keep
+		// being drawn or it never produces that frame, so the stage covers it
+		// with a placeholder instead of leaving a stray picture.
+		for _, it := range shown {
+			if it.previous != nil || it.swap != nil || a.pendingSeekPlayer(it) != nil {
+				continue
+			}
+			p := rawPlayer(it.player)
+			if w, h := p.Size(); w > 0 && h > 0 {
+				continue
+			}
+			r := placed[it]
+			if bounds.W < 1 || bounds.H < 1 {
+				continue
+			}
+			px := slotPixels(r, bounds.W, bounds.H, 0, 0)
+			ui.Box(c).Absolute().Left(px.left).Top(px.top).
+				Width(px.width).Height(px.height).ZIndex(r.z + 1).
+				Background(colorPanel2).Padding(spaceSm).Children(func() {
+				ui.Text(c, "waiting for the first picture\n"+a.name(it)).
+					FontSize(textSmall).TextColor(colorTextDim)
+			})
 		}
 		if len(shown) == 0 {
 			ui.Text(c, "no picture yet\nopen a source, or press Show on a card").
@@ -607,7 +654,7 @@ func (a *appState) stage(c *ui.Context) {
 	})
 	// A double click on the picture is the third way into full screen, and it
 	// has to work from the workbench too, not only from a watching mode.
-	if box.DoubleClicked() && a.viewing.editing() {
+	if stage.DoubleClicked() && a.viewing.editing() {
 		a.enterViewing(viewFullscreen, a.windowRef())
 	}
 }
@@ -687,8 +734,14 @@ func (a *appState) sourceCard(c *ui.Context, i int, it *item) {
 			ui.Text(c, status(item)).FontSize(textMicro).TextColor(colorTextDim).FontFeatures("tnum")
 		})
 		if item.video != "" {
-			if ui.Button(c.Key("show-"+itoa(i)), "Show").Width(72).KeyShortcuts(ui.Ctrl, ui.KeyS).
-				Tooltip("put this source's picture on the stage (Ctrl+S)").Clicked() {
+			label := "Show"
+			tip := "put this source's picture on the stage (Ctrl+S)"
+			if item.shown {
+				label = "Hide"
+				tip = "take this source's picture off the stage (Ctrl+S)"
+			}
+			if ui.Button(c.Key("show-"+itoa(i)), label).Width(72).KeyShortcuts(ui.Ctrl, ui.KeyS).
+				Tooltip(tip).Clicked() {
 				a.selectVideo(item)
 			}
 			if item.shown && a.layout != layoutFocus {

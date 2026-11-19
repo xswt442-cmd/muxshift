@@ -16,6 +16,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -218,8 +219,11 @@ func (h *handoffServer) importAddress(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "a browser can only hand over an http or https address", http.StatusBadRequest)
 		return
 	}
-	if err := mediaAddressProblem(address); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if parsed, err := url.Parse(address); err != nil || parsed.Host == "" {
+		http.Error(w, "the address names no host", http.StatusBadRequest)
+		return
+	} else if parsed.User != nil {
+		http.Error(w, "addresses with a user name are not read", http.StatusBadRequest)
 		return
 	}
 	var out commandResult

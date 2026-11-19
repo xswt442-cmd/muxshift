@@ -43,10 +43,10 @@ func TestWebsiteAddressesAreCheckedBeforeOpening(t *testing.T) {
 	}{
 		{"", "type the address"},
 		{"   ", "type the address"},
-		{"javascript:alert(1)", "not an http or https address"},
-		{"file:///C:/media/a.mp4", "not an http or https address"},
-		{"data:text/html,hi", "not an http or https address"},
-		{"example.com/watch", "not an http or https address"},
+		{"javascript:alert(1)", "only http and https addresses can be opened"},
+		{"file:///C:/media/a.mp4", "only http and https addresses can be opened"},
+		{"data:text/html,hi", "only http and https addresses can be opened"},
+		{"example.com/watch", "only http and https addresses can be opened"},
 		{"https://user:secret@example.com/watch", "credentials"},
 		{"https://example.com/a b", "space"},
 		{"https://", "names no host"},
@@ -79,9 +79,9 @@ func TestMediaAddressesAreCheckedBeforeReading(t *testing.T) {
 		{"   ", "type a media address"},
 		{local, ""},
 		{"https://example.com/a.mp4?sig=abc", ""},
-		{"ftp://example.com/a.mp4", "scheme"},
-		{"file:///C:/media/a.mp4", "scheme"},
-		{"javascript:alert(1)", "scheme"},
+		{"ftp://example.com/a.mp4", "http and https"},
+		{"file:///C:/media/a.mp4", "http and https"},
+		{"javascript:alert(1)", "http and https"},
 		{"media/a.mp4", "relative path"},
 		{"https://user:secret@example.com/a.mp4", "credentials"},
 		{"https://", "names no host"},
@@ -197,7 +197,7 @@ func TestABadWebsiteAddressIsRefusedBeforeTheNote(t *testing.T) {
 	if _, ok := app.submitAddSource(); ok {
 		t.Fatal("a javascript: address reported a source")
 	}
-	if !app.addNoteBad || !strings.Contains(app.addNote, "not an http or https address") {
+	if !app.addNoteBad || !strings.Contains(app.addNote, "only http and https addresses can be opened") {
 		t.Fatalf("note %q (bad=%v) does not explain the refusal", app.addNote, app.addNoteBad)
 	}
 	if len(app.items) != 0 || app.importing != "" {

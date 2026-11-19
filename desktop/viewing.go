@@ -307,10 +307,10 @@ func (a *appState) viewingError(c *ui.Context) {
 		Padding(a.space(10, 12)).Radius(a.space(radiusSm, radiusSm)).
 		Background(colorBgSoft).Border(1, colorBad).AlignItems(ui.Center).
 		Children(func() {
-			ui.Text(c, "error: "+a.lastErr.Error()).FontSize(textSmall).
+			ui.Text(c, a.errorShort()).FontSize(textSmall).
 				TextColor(colorBad).SingleLine().Grow(1)
-			if ui.Button(c.Key("view-dismiss"), "Dismiss").Width(84).Height(24).
-				FontSize(textSmall).Tooltip("clear the last error; the log keeps its record").
+			if ui.Button(c.Key("view-dismiss"), a.tr("Dismiss", "关闭")).Width(84).Height(24).
+				FontSize(textSmall).Tooltip(a.tr("hides the message; the log keeps it", "只隐藏这条消息，日志里仍然保留")).
 				Clicked() {
 				a.dismissError()
 				a.showControls()
@@ -340,90 +340,81 @@ func (a *appState) viewingControls(c *ui.Context, width, height float32) ui.Elem
 		// that the timer promise keeps in place.
 		first := a.focusControls
 		a.focusControls = false
-		label, width := "Pause all", float32(96)
-		if !a.sync.playhead.Playing() {
-			label = "Play all"
+		playing := a.sync.playhead.Playing()
+		label, buttonWidth := a.tr("Pause", "暂停"), float32(88)
+		if !playing {
+			label = a.tr("Play", "播放")
 		}
-		if narrow {
-			label, width = "Pause", 72
-			if !a.sync.playhead.Playing() {
-				label = "Play"
-			}
-		}
-		play := ui.Button(c.Key("view-play"), label).Width(width).Height(30)
+		play := ui.Button(c.Key("view-play"), label).Width(buttonWidth).Height(a.controlHeight() - 2)
 		if first {
 			play = play.AutoFocus()
 		}
 		if play.Clicked() {
 			kind := commandPlay
-			if a.sync.playhead.Playing() {
+			if playing {
 				kind = commandPause
 			}
 			a.report(a.runCommand(command{Kind: kind}))
 			a.showControls()
 		}
 		if main := a.first(); main != nil && main.player != nil {
-			muteWidth := float32(88)
-			if narrow {
-				muteWidth = 96
+			muted := main.player.Muted()
+			muteText := a.tr("Mute", "静音")
+			if muted {
+				muteText = a.tr("Unmute", "取消静音")
 			}
-			if ui.Button(c.Key("view-mute"), muteLabel(rawPlayer(main.player))).Width(muteWidth).Height(30).Clicked() {
-				main.player.SetMuted(!main.player.Muted())
+			if ui.Button(c.Key("view-mute"), muteText).Width(88).
+				Height(a.controlHeight() - 2).Clicked() {
+				main.player.SetMuted(!muted)
 				a.showControls()
 			}
 		}
-		if !narrow {
-			ui.Text(c, a.viewing.String()).FontSize(textMicro).TextColor(colorTextDim)
+		// Group two: where the picture is. A rule and a mode word, so the
+		// transport keys are not mixed in with the window switches.
+		ui.Box(c).Width(1).Height(20).Background(colorLine).Padding(0, a.space(2, 6))
+		if main := a.firstShown(); main != nil {
+			if entry := a.entryOf(main); entry.Player {
+				ui.Text(c, formatEvent(entry.Position)).FontSize(textSmall).
+					TextColor(colorTextDim).FontFeatures("tnum")
+			}
 		}
+		ui.Box(c).Width(1).Height(20).Background(colorLine).Padding(0, a.space(2, 6))
 		if a.viewing == viewCompact {
-			label := "On top"
+			onTop := a.tr("On top", "置顶")
 			if a.onTop {
-				label = "On top ✓"
+				onTop = a.tr("Pinned", "已置顶")
 			}
-			width := float32(96)
-			if narrow {
-				// A 460 px window has no room for "On top ✓": the compact bar
-				// names the switch in one short word and shows its state in
-				// the word itself.
-				width = 80
-				label = "Top"
-				if a.onTop {
-					label = "Pinned"
-				}
-			}
-			if ui.Button(c.Key("view-ontop"), label).Width(width).Height(30).Clicked() {
+			if ui.Button(c.Key("view-ontop"), onTop).Width(96).
+				Height(a.controlHeight() - 2).Clicked() {
 				a.toggleOnTop(a.windowRef())
 				a.showControls()
 			}
 		}
-		fullLabel, fullWidth := "Full screen", float32(112)
-		backLabel, backWidth := "Back to editing", float32(132)
-		if narrow {
-			fullLabel, fullWidth = "Full", 62
-			backLabel, backWidth = "Back", 62
-		}
-		// Compact is reachable from the overlay as well: a narrow workbench
-		// has room for one entry only, and the small window is the mode a
-		// viewer most often wants once the picture is already full-bleed.
 		if a.viewing == viewCinema || a.viewing == viewFullscreen {
-			smallLabel, smallWidth := "Small", float32(64)
-			if narrow {
-				smallLabel, smallWidth = "Small", 60
-			}
-			if ui.Button(c.Key("view-small"), smallLabel).Width(smallWidth).Height(30).
-				Tooltip("shrink to a small window that can stay on top").
+			if ui.Button(c.Key("view-small"), a.tr("Small", "小窗")).Width(72).
+				Height(a.controlHeight() - 2).
+				Tooltip(a.tr("a small window that can stay on top", "一个可以置顶的小窗口")).
 				Clicked() {
 				a.enterViewing(viewCompact, a.windowRef())
 			}
 		}
-		if ui.Button(c.Key("view-full"), fullLabel).Width(fullWidth).Height(30).
-			Tooltip("F11 or a double click on the picture does the same").
+		fullLabel := a.tr("Window full screen", "窗口全屏")
+		backLabel := a.tr("Back to editing", "回到编辑")
+		fullWidth, backWidth := float32(104), float32(124)
+		if narrow {
+			fullLabel, fullWidth = a.tr("Full", "全屏"), 64
+			backLabel, backWidth = a.tr("Back", "返回"), 64
+		}
+		if ui.Button(c.Key("view-full"), fullLabel).Width(fullWidth).
+			Height(a.controlHeight() - 2).
+			Tooltip(a.tr("F11 or a double click does the same", "F11 或双击画面也可以")).
 			Clicked() {
 			a.toggleFullscreen(a.windowRef())
 			a.showControls()
 		}
-		if ui.Button(c.Key("view-back"), backLabel).Width(backWidth).Height(30).
-			Tooltip("Esc returns to the workbench as it was").
+		if ui.Button(c.Key("view-back"), backLabel).Width(backWidth).
+			Height(a.controlHeight() - 2).
+			Tooltip(a.tr("Esc returns to the workbench", "Esc 回到工作台")).
 			Clicked() {
 			a.leaveViewing(a.windowRef())
 		}

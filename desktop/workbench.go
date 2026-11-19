@@ -1,47 +1,46 @@
-// P15.1: the workbench layout — a top bar, a collapsible rail, a native stage
-// with its transport, a collapsible inspector, a timeline dock and a status
-// bar that stays visible when the window gets small.
+// The workbench is arranged the way a live mixer is: a scene and source list on
+// the left, the picture in the middle, and the selected source's properties with
+// the audio levels on the right. Pages (sources, diagnostics, settings, mixer)
+// take the middle column instead of replacing the window, so the scene list and
+// the picture stay where they are.
 //
-// The rules are simple and measured from the window size the frame reports:
-// the stage owns the window, so the rail and the inspector only open by
-// themselves once there is room to spare for a picture beside them (1600px),
-// and the dock only when its own switch is on and the window is tall enough.
-// The numbers are client area, which is a little smaller than the size a
-// window is asked for. A person can override any of the three with its button,
-// and that choice keeps; the automatic rule only applies while a pane is left
-// on auto.
-//
-// Nothing here invents a control: Mixer and DVR are drawn disabled because
-// this build has neither, and every disabled button says why in its tooltip.
+// The shell folds by width, not by a pile of toggles. At 900px and up all three
+// columns are drawn; below that the scene list folds into a drawer and the
+// properties open over the picture; below 747px even the drawers give way to the
+// picture, a bottom bar and the page menu. Nothing here is hidden without a way
+// to reach it.
 package main
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
 const (
-	topBarHeight   = 56
-	railWidth      = 188
-	inspectorWidth = 292
-	dockHeight     = 132
-	statusHeight   = 30
+	// The three columns. 240 + 608 + 300 is the 1150-wide case in the review;
+	// the middle column is whatever is left.
+	sceneWidth      = 240
+	propertiesWidth = 300
+	mixerHeight     = 168
+	mixerStripHi    = 34
+	drawerWidth     = 300
 
-	// The sizes below which a pane folds itself away. They are thresholds for
-	// the whole window, not for the pane, because a pane cannot measure the
-	// room it was given in this layout engine.
-	inspectorAutoWidth = 1600
-	railAutoWidth      = 1600
-	dockAutoHeight     = 660
-	// Below this width the product name is dropped from the bar so the source
-	// count and the three layout switches keep their whole labels.
-	brandAutoWidth = 760
-	// Below this width the status line keeps the numbers and drops the word
-	// "ready" instead of letting the label truncate into "2 so…".
-	statusQuietWidth float32 = 1280
-	// compactButtonWidth is where the bar can afford the second watching word.
+	// Kept for the scale walk and the workspace memory: the folds they describe
+	// no longer decide the layout, but a saved pane name must still parse.
+	topBarHeight               = 48
+	statusHeight               = 26
+	dockHeight                 = 168
+	inspectorWidth             = 300
+	railWidth                  = 240
+	inspectorAutoWidth         = 1600
+	railAutoWidth              = 1600
+	dockAutoHeight             = 660
+	brandAutoWidth             = 760
+	statusQuietWidth   float32 = 1280
 	compactButtonWidth float32 = 1200
 )
 
@@ -75,224 +74,427 @@ func (m paneMode) toggled(open bool) paneMode {
 	return paneOpen
 }
 
-// topBar is the global bar: what session is open, what it is doing, and the
-// three layout switches. Open is drawn disabled because this build has no file
-// picker; its tooltip says so instead of leaving a button that does nothing.
-func (a *appState) topBar(c *ui.Context, width, height float32) {
-	a.frameWidth, a.frameHeight = width, height
-	ui.Row(c).Height(topBarHeight).WidthPercent(100).Padding(a.space(4, spaceSm), a.space(8, spaceLg)).
-		Gap(spaceSm).AlignItems(ui.Center).Background(colorBgSoft).Children(func() {
-		// The name is the first thing to go: below this width the switches and
-		// the source count matter more, and a squeezed "MuxS…" tells nobody
-		// anything.
-		if width >= brandAutoWidth {
-			// The bar is crowded once the panes are closed and every switch
-			// shares it, so the name gets a width of its own and never ends in
-			// an ellipsis.
-			ui.Box(c).Width(132).Children(func() {
-				ui.Text(c, "MuxShift").FontSize(textTitle).TextColor(colorText).SingleLine()
-			})
-		}
-		// Below the rail threshold the chips would wrap the bar, so only the
-		// source count stays: it is the one number the stage needs.
-		if width >= railAutoWidth {
-			pill(c, a.sceneLabel(), colorAccent, true)
-		}
-		pill(c, fmt.Sprintf("%d source%s", len(a.items), plural(len(a.items))), colorTextDim, false)
-		if a.lastErr != nil {
-			// A real notification: the pill opens the diagnostics page, which
-			// names the error; the status bar carries the Dismiss.
-			if ui.Button(c.Key("top-error"), "error: see diagnostics").Height(26).FontSize(textMicro).
-				TextColor(colorBad).Tooltip(a.lastErr.Error()).Clicked() {
-				a.workspace = workspaceDiagnostics
+// The shell's own sizes follow the type scale: a larger type gets taller rows
+// and buttons, not text squeezed into the same box.
+func (a *appState) barHeight() float32 {
+	switch currentScale.name {
+	case "compact":
+		return 36
+	case "large":
+		return 48
+	}
+	return 40
+}
+
+func (a *appState) statusBarHeight() float32 {
+	switch currentScale.name {
+	case "compact":
+		return 24
+	case "large":
+		return 28
+	}
+	return 26
+}
+
+// controlHeight is the height of an ordinary button or field.
+func (a *appState) controlHeight() float32 {
+	switch currentScale.name {
+	case "compact":
+		return 28
+	case "large":
+		return 36
+	}
+	return 32
+}
+
+// rowHeight is the height of one source row or one mixer channel.
+func (a *appState) rowHeight() float32 {
+	switch currentScale.name {
+	case "compact":
+		return 32
+	case "large":
+		return 40
+	}
+	return 36
+}
+
+// shell draws the whole window: bar, three columns, status, and whichever
+// overlay is open.
+func (a *appState) shell(c *ui.Context, width, height float32) {
+	narrow := width < 900
+	if !narrow {
+		a.drawerOpen = false
+	}
+	ui.Column(c).Fill().Background(colorBg).Children(func() {
+		a.topBar(c, width)
+		ui.Row(c).WidthPercent(100).Grow(1).AlignItems(ui.Stretch).Children(func() {
+			whole := a.workspace != workspaceStage
+			if !narrow && !a.leftCollapsed && !whole && a.editingShell {
+				a.sceneColumn(c)
 			}
-		}
-		ui.Box(c).Grow(1)
-		if width >= 1100 {
-			status := a.globalStatusFor(width)
-			ui.Box(c).MinWidth(labelWidth(status, textSmall)).Children(func() {
-				ui.Text(c, status).FontSize(textSmall).TextColor(colorTextDim).
-					FontFeatures("tnum").SingleLine()
-			})
-			if ui.Button(c.Key("top-open"), "Open…").Width(76).Height(28).
-				Tooltip("add a source: a file, a media address or a website").
-				Description("Add a source").
-				Clicked() {
-				a.openAddSource()
-			}
-			open := a.workspace == workspaceSettings
-			label := "Settings"
-			if open {
-				label = "Settings ✓"
-			}
-			if ui.Button(c.Key("top-settings"), label).Width(100).Height(28).Clicked() {
-				if open {
-					a.workspace = workspaceStage
-				} else {
-					a.settingsDraft = a.settings
-					a.settingsErr = ""
-					a.settingsNote = ""
-					a.workspace = workspaceSettings
+			ui.Column(c).Grow(1).MinWidth(0).Children(func() {
+				if a.workspace == workspaceStage {
+					a.preview(c, width, height)
+					return
 				}
+				// Another page keeps the picture mounted and hidden, so the
+				// media keeps running and the stage comes back current.
+				a.parkedStage(c)
+				a.pageBody(c, width, height)
+			})
+			if !narrow && !whole && a.editingShell {
+				a.propertiesColumn(c, height)
 			}
+			if narrow && a.drawerOpen {
+				a.drawer(c, height)
+			}
+		})
+		if narrow && a.workspace == workspaceStage && a.editingShell {
+			a.mixerStrip(c)
 		}
-		if width < railAutoWidth {
-			// The rail is where the pages live, and it folds below this width.
-			// Without this switch the only way to change page would be a
-			// keyboard shortcut nobody can see, so the bar names the page it is
-			// on and steps to the next one.
-			next := (a.workspace + 1) % workspaceCount
-			if ui.Button(c.Key("top-page"), a.workspace.title()+" ›").Width(104).Height(28).
-				Tooltip(fmt.Sprintf("page %s; press for %s (Ctrl+1..5 pick a page directly, unless a text field has the focus)", a.workspace.title(), next.title())).
-				Description("switch the workspace page").
-				Clicked() {
-				a.workspace = next
-			}
+		a.statusBar(c, width)
+		if a.errorOpen {
+			a.errorReport(c, width, height)
 		}
-		// P10: the two watching modes worth a permanent button. Full screen
-		// lives inside them (and on F11), so it is not a third one.
-		//
-		// A narrow workbench cannot afford both words, but it must still be
-		// able to start watching: at 747 DIP it keeps one button and the
-		// overlay inside cinema offers the small window instead.
-		if width >= 980 {
-			if ui.Button(c.Key("top-cinema"), "Cinema").Width(88).Height(28).
-				Tooltip("watch the scene across the whole window, keeping the window frame").
-				Description("Watch in cinema mode").
-				Clicked() {
-				a.enterViewing(viewCinema, a.windowRef())
-			}
-			// Below this width the bar has no room left for a second word, and a
-			// squeezed label ("Comp…") is worse than one button fewer: cinema's
-			// overlay carries the small window.
-			if width >= compactButtonWidth {
-				if ui.Button(c.Key("top-compact"), "Compact").Width(92).Height(28).
-					Tooltip("watch in a small window that can stay on top").
-					Description("Watch in compact mode").
-					Clicked() {
-					a.enterViewing(viewCompact, a.windowRef())
-				}
-			}
-		} else {
-			if ui.Button(c.Key("top-cinema"), "Watch").Width(72).Height(28).
-				Tooltip("watch the scene across the whole window; cinema offers the small window too").
-				Description("Watch in cinema mode").
-				Clicked() {
-				a.enterViewing(viewCinema, a.windowRef())
-			}
+		if a.pageMenu {
+			a.pageMenuPanel(c, width)
 		}
-		a.paneButton(c, paneRail, "Rail", a.rail.shown(width >= railAutoWidth))
-		a.paneButton(c, paneInspector, "Inspect", a.inspector.shown(width >= inspectorAutoWidth))
-		a.paneButton(c, paneDock, "Dock", a.dock.shown(a.settings.DockOpen && height >= dockAutoHeight))
+		if a.sceneMenu {
+			a.sceneMenuPanel(c, width)
+		}
+		if a.addOpen {
+			a.addSourceDialog(c)
+		}
 	})
 }
 
-// globalStatus is the one line the top bar keeps current: shared event time,
-// whether the group plays, and how many sources are ready.
-func (a *appState) globalStatus() string {
-	return a.globalStatusFor(10000)
+// pageBody draws a page in the middle column, with the padding the page's own
+// rows expect.
+func (a *appState) pageBody(c *ui.Context, width, height float32) {
+	ui.Box(c).Fill().Padding(spaceMd).Children(func() {
+		switch a.workspace {
+		case workspaceSources:
+			a.sourcesPage(c)
+		case workspaceDiagnostics:
+			a.diagnosticsPage(c)
+		case workspaceSettings:
+			a.settingsPage(c)
+		case workspaceMixer:
+			a.mixerPage(c)
+		}
+	})
 }
 
-// globalStatusFor drops the trailing word when the bar has no room for it: the
-// three numbers are the claim, "ready" is the explanation.
-func (a *appState) globalStatusFor(width float32) string {
+// topBar carries five things only: the name, the scene, what the session is
+// doing, adding a source, and the way into watching and pages. Every other
+// switch moved to the column it acts on.
+func (a *appState) topBar(c *ui.Context, width float32) {
+	a.frameWidth, a.frameHeight = width, a.lastHeight
+	ui.Row(c).Height(a.barHeight()).WidthPercent(100).Padding(0, spaceMd).
+		Gap(spaceSm).AlignItems(ui.Center).Background(colorBgSoft).Children(func() {
+		if width >= 620 {
+			ui.Text(c, "MuxShift").FontSize(textSubtitle).TextColor(colorText).SingleLine()
+			ui.Box(c).Width(4)
+		}
+		a.sceneChip(c)
+		if width >= 900 {
+			label := "‹"
+			tip := a.tr("hide the scene and source list", "收起场景与来源列表")
+			if a.leftCollapsed {
+				label, tip = "›", a.tr("show the scene and source list", "展开场景与来源列表")
+			}
+			if ui.Button(c.Key("top-left"), label).Width(32).Height(a.controlHeight()).
+				Tooltip(tip).Clicked() {
+				a.leftCollapsed = !a.leftCollapsed
+			}
+		}
+		ui.Box(c).Grow(1)
+		if a.lastErr != nil {
+			label := a.tr("Error", "错误")
+			ui.Button(c.Key("top-error"), label).Height(24).Padding(0, spaceSm).
+				Border(1, colorBad).TextColor(colorBad).
+				Tooltip(a.tr("what failed, and what to do about it", "哪里失败了，以及该怎么做")).
+				OnClick(func() { a.errorOpen = true })
+		}
+		if width >= 560 {
+			primary := ui.Button(c.Key("top-add"), a.tr("+ Source", "＋ 来源")).
+				Height(a.controlHeight()).Padding(0, spaceMd).
+				Background(colorAccent).TextColor(colorAccentText)
+			if primary.Clicked() {
+				a.openAddSource()
+			}
+			if ui.Button(c.Key("top-watch"), a.tr("Watch", "观看")).Height(a.controlHeight()).Padding(0, spaceMd).Clicked() {
+				a.enterViewing(viewCinema, a.windowRef())
+			}
+		}
+		if a.workspace != workspaceSettings {
+			if ui.Button(c.Key("top-settings"), a.tr("Settings", "设置")).Height(a.controlHeight()).Padding(0, spaceSm).
+				Tooltip(a.tr("appearance, language and the other settings", "外观、语言与其他设置")).Clicked() {
+				a.workspace = workspaceSettings
+			}
+		}
+		editLabel := a.tr("Edit", "编辑")
+		if a.editingShell {
+			editLabel = a.tr("Watch", "观看")
+		}
+		// This button is a mode switch, so it shows which mode is on: filled
+		// while the editing shell is mounted, plain while the stage has the
+		// window to itself. The label names the mode it will switch to.
+		editBackground := colorPanel
+		editText := colorText
+		if !a.editingShell {
+			editText = colorDim
+		}
+		if ui.Button(c.Key("top-edit"), editLabel).Height(a.controlHeight()).Padding(0, spaceMd).
+			Background(editBackground).TextColor(editText).Clicked() {
+			a.editingShell = !a.editingShell
+			if !a.editingShell {
+				a.workspace = workspaceStage
+			}
+			a.invalidate()
+		}
+		if ui.Button(c.Key("top-pages"), a.tr("Pages", "页面")).Height(a.controlHeight()).Padding(0, spaceSm).Clicked() {
+			a.pageMenu = !a.pageMenu
+		}
+	})
+	ui.Box(c).WidthPercent(100).Height(1).Background(colorLine)
+}
+
+// sceneChip names the scene the window shows. This build has one scene, and the
+// chip says so instead of pretending a menu of scenes exists.
+// sceneLabelText is the core's scene name in the window's language. The name is
+// a description, not data: "picture 1 · sound 1 at 0.30" reads as gibberish to a
+// Chinese user, so the three words are translated while the numbers stay.
+func (a *appState) sceneLabelText() string {
+	label := a.sceneLabel()
+	if !a.chinese() {
+		return label
+	}
+	label = strings.ReplaceAll(label, "picture", "画面")
+	label = strings.ReplaceAll(label, "sound", "声音")
+	return strings.ReplaceAll(label, " at ", " @ ")
+}
+
+func (a *appState) sceneChip(c *ui.Context) {
+	chip := ui.Button(c.Key("scene-chip"), a.sceneLabelText()).Height(28).Padding(0, spaceSm).
+		Tooltip(a.tr("the scene this window shows", "此窗口显示的场景"))
+	if chip.Clicked() {
+		a.sceneMenu = !a.sceneMenu
+	}
+}
+
+// stripStatus is the one-line account of the session in the bar and the status
+// bar: what is playing, the event time, and how many sources are ready.
+func (a *appState) stripStatus() string {
+	playing := a.tr("paused", "已暂停")
+	if a.playing() {
+		playing = a.tr("playing", "播放中")
+	}
 	ready := 0
 	for _, it := range a.items {
-		if it.player != nil && it.player.Ready() {
+		if it.player != nil && it.shown {
 			ready++
 		}
 	}
-	state := "paused"
-	if a.sync.playhead.Playing() {
-		state = "playing"
-	}
-	line := fmt.Sprintf("%s · %s · %d/%d", formatEvent(a.sync.playhead.Event()), state, ready, len(a.items))
-	if width >= statusQuietWidth {
-		line += " ready"
-	}
-	return line
+	snap := a.snapshot()
+	return fmt.Sprintf("%s · %s · %s", playing, formatEvent(snap.Event), itoa(len(a.items))+" "+a.tr("sources", "个来源"))
 }
 
-// paneButton draws a layout switch. It is a real command: pressing flips the
-// pane now, and that choice keeps whatever the window does next.
-func (a *appState) paneButton(c *ui.Context, which paneKind, label string, open bool) {
-	text := label
-	if open {
-		text += " ✓"
-	}
-	if ui.Button(c.Key(fmt.Sprintf("pane-%d", int(which))), text).Width(100).Height(28).Clicked() {
-		switch which {
-		case paneRail:
-			a.rail = a.rail.toggled(open)
-		case paneInspector:
-			a.inspector = a.inspector.toggled(open)
-		default:
-			a.dock = a.dock.toggled(open)
-		}
-	}
-}
-
-// paneKind names which pane a button controls; the three modes are separate
-// fields because they fold independently.
-type paneKind int
-
-const (
-	paneRail paneKind = iota
-	paneInspector
-	paneDock
-)
-
-// rail is the left navigation. Every page the build has is a button here. The
-// disabled DVR placeholder that used to sit under them said history playback
-// was unverified; P16 verified it, and what the replay buffer holds is now
-// reported where it can be acted on, on the diagnostics page (P18.3).
-func (a *appState) railPane(c *ui.Context, width, height float32) {
-	if !a.rail.shown(width >= railAutoWidth) {
+// sceneColumn is the left column: the scene list, the source list and the page
+// shortcuts at the bottom.
+// sourceEntry is the only place a source is drawn. It comes in two densities —
+// a row inside the scene column and a card on the Sources page — and the
+// callers never choose between two separate renderers, so a change to how a
+// source reports itself lands in both places at once.
+func (a *appState) sourceEntry(c *ui.Context, it *item, index int, compact bool) {
+	if compact {
+		a.sourceRow(c, it, index)
 		return
 	}
-	ui.Column(c).Width(railWidth).Gap(spaceXs).Padding(spaceSm).
-		Background(colorBgSoft).Children(func() {
-		ui.Text(c, "workspace").FontSize(textMicro).TextColor(colorDim)
-		for w := workspace(0); w < workspaceCount; w++ {
-			page := w
-			button := ui.Button(c.Key(fmt.Sprintf("rail-%d", int(page))), page.title()).
-				Width(railWidth - 2*spaceSm).Height(34)
-			if page == a.workspace {
-				button.Background(colorAccentSoft).TextColor(colorAccent)
-			}
-			if button.Clicked() {
-				a.workspace = page
-			}
-		}
+	a.sourceCard(c, it, index)
+}
 
+func (a *appState) sceneColumn(c *ui.Context) {
+	ui.Column(c).Width(sceneWidth).Background(colorBgSoft).Children(func() {
+		ui.Row(c).Padding(spaceSm, spaceMd).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, a.tr("Scene", "场景")).FontSize(textMicro).TextColor(colorDim)
+			ui.Box(c).Grow(1)
+		})
+		a.sceneRow(c)
+		ui.Box(c).WidthPercent(100).Height(1).Background(colorLine)
+		ui.Row(c).Padding(spaceSm, spaceMd).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, a.tr("Sources", "来源")).FontSize(textMicro).TextColor(colorDim)
+			ui.Box(c).Grow(1)
+			if ui.Button(c.Key("sources-add"), "＋").Width(24).Height(22).Tooltip(a.tr("add a source", "添加来源")).Clicked() {
+				a.openAddSource()
+			}
+		})
+		ui.Scroll(c).Grow(1).WidthPercent(100).Children(func() {
+			ui.Column(c).WidthPercent(100).Padding(0, spaceSm).Gap(1).Children(func() {
+				if len(a.items) == 0 {
+					ui.Text(c, a.tr("No sources yet. Add one above.", "还没有来源，点上面的 ＋ 添加。")).
+						FontSize(textCaption).TextColor(colorDim).Wrap().Padding(spaceSm, spaceSm)
+					return
+				}
+				for i, it := range a.items {
+					a.sourceEntry(c, it, i, true)
+				}
+			})
+		})
+		a.columnFooter(c)
+	})
+}
+
+// sceneRow draws the one scene. It is a row, not a button, because there is
+// nothing to switch to yet.
+func (a *appState) sceneRow(c *ui.Context) {
+	ui.Row(c).WidthPercent(100).Height(38).Padding(0, spaceMd).Gap(spaceXs).
+		AlignItems(ui.Center).Background(colorPanel2).Children(func() {
+		ui.Box(c).Width(6).Height(6).Radius(3).Background(colorAccent)
+		ui.Text(c, a.sceneLabelText()).FontSize(textBody).TextColor(colorText).SingleLine()
 		ui.Box(c).Grow(1)
-		if ui.Button(c.Key("rail-fold"), "Hide rail").Width(railWidth - 2*spaceSm).Height(30).Clicked() {
-			a.rail = paneClosed
+		ui.Text(c, itoa(len(a.items))).FontSize(textMicro).TextColor(colorDim)
+	})
+}
+
+// sourceRow is one line in the source list: what it is, whether it is on the
+// stage, and its state. The properties column carries everything else.
+func (a *appState) sourceRow(c *ui.Context, it *item, index int) {
+	active := a.selected == it.source.ID
+	row := ui.Row(c).WidthPercent(100).Height(a.rowHeight()).Padding(0, spaceSm).
+		Gap(spaceXs).AlignItems(ui.Center).Radius(6).
+		OnClick(func() { a.selected = it.source.ID })
+	if active {
+		row = row.Background(colorPanel2)
+	}
+	row.Children(func() {
+		dot := colorDim
+		switch {
+		case it.openErr != nil:
+			dot = colorBad
+		case it.player == nil:
+			dot = colorLine
+		case it.shown:
+			dot = colorGood
+		}
+		ui.Box(c).Width(6).Height(6).Radius(3).Background(dot)
+		ui.Column(c).Grow(1).Gap(0).Children(func() {
+			ui.Text(c, shortURI(it.uri)).FontSize(textCaption).TextColor(colorText).SingleLine()
+			ui.Text(c, a.sourceSub(it)).FontSize(textMicro).TextColor(colorDim).SingleLine()
+		})
+		// This build has no "take it off the stage" command: a source leaves the
+		// stage by being removed. The mark therefore shows the state, and only
+		// the off-stage state is a button.
+		if it.shown {
+			ui.Box(c).Width(24).Height(22).Center().Tooltip(a.tr("on the stage", "在舞台上")).
+				Children(func() { ui.Text(c, "◉").FontSize(textCaption).TextColor(colorGood) })
+		} else if ui.Button(c.Key("sc-eye-"+string(it.source.ID)), "○").Width(24).Height(22).
+			Tooltip(a.tr("put it on the stage", "放到舞台上")).Clicked() {
+			a.selected = it.source.ID
+			a.selectVideo(it)
 		}
 	})
 }
 
-// center is the stage page: the native picture, the transport under it, and
-// the P13.3 page only when a scenario asked for one.
-func (a *appState) center(c *ui.Context, width, height float32) {
-	available := width - 2*spaceMd
-	if a.rail.shown(width >= railAutoWidth) {
-		available -= railWidth + spaceMd
+// sourceSub is the second line of a source row: the shortest true account of
+// what the player is doing.
+func (a *appState) sourceSub(it *item) string {
+	switch {
+	case it.openErr != nil:
+		return a.tr("failed to open", "打开失败")
+	case it.player == nil:
+		return a.tr("not opened yet", "尚未打开")
+	case !it.player.Ready():
+		return a.tr("opening", "正在打开")
+	case it.player.Buffering():
+		return a.tr("buffering", "缓冲中")
+	case !it.shown:
+		return a.tr("off the stage", "不在舞台上")
 	}
-	if a.inspector.shown(width >= inspectorAutoWidth) {
-		available -= inspectorWidth + spaceMd
-	}
-	// The picture keeps 16:9 before anything else: cap its height at what the
-	// width allows instead of letting the stage fill a tall narrow column.
-	pictureCap := available * 9 / 16
-	if pictureCap < 200 {
-		pictureCap = 200
-	}
-	a.layoutBar(c)
-	ui.Box(c).WidthPercent(100).Grow(1).MaxHeight(pictureCap).Children(func() {
-		a.stage(c)
+	return clock(it.player.Position()) + " / " + clock(it.player.Duration())
+}
+
+// columnFooter is the page shortcut strip. The pages moved out of the top bar,
+// so this is where they stay one press away while the picture is visible.
+func (a *appState) columnFooter(c *ui.Context) {
+	ui.Row(c).WidthPercent(100).Padding(spaceSm, spaceSm).Gap(spaceXs).Wrap().Children(func() {
+		for _, page := range []workspace{workspaceSources, workspaceDiagnostics, workspaceSettings} {
+			p := page
+			button := ui.Button(c.Key("foot-"+itoa(int(p))), a.pageLabel(p)).Height(26).Padding(0, spaceSm)
+			if p == a.workspace {
+				button = button.Background(colorAccentSoft).TextColor(colorAccent)
+			}
+			if button.Clicked() {
+				a.workspace = p
+			}
+		}
+		if a.workspace != workspaceStage {
+			if ui.Button(c.Key("foot-stage"), a.tr("Stage", "舞台")).Height(26).Padding(0, spaceSm).Clicked() {
+				a.workspace = workspaceStage
+			}
+		}
 	})
-	a.transportRow(c)
+}
+
+// pageLabel names a page in the window's language.
+func (a *appState) pageLabel(page workspace) string {
+	switch page {
+	case workspaceStage:
+		return a.tr("Stage", "舞台")
+	case workspaceSources:
+		return a.tr("Sources", "来源")
+	case workspaceDiagnostics:
+		return a.tr("Diagnostics", "诊断")
+	case workspaceSettings:
+		return a.tr("Settings", "设置")
+	case workspaceMixer:
+		return a.tr("Mixer", "混音器")
+	}
+	return a.tr("Page", "页面")
+}
+
+// preview is the stage page in the middle column: the layout switches, the
+// picture, and the transport under it.
+func (a *appState) preview(c *ui.Context, width, height float32) {
+	if a.editingShell {
+		a.toolbar(c, width)
+	}
+	available := width
+	if width >= 900 {
+		available -= sceneWidth + propertiesWidth
+	}
+	if available < 320 {
+		available = 320
+	}
+	// The picture keeps 16:9 before anything else, and never grows taller than
+	// the room left after the bar, the transport and the status line.
+	pictureCap := available * 9 / 16
+	if !a.editingShell {
+		pictureCap = height
+	}
+	if room := height - a.barHeight() - a.statusBarHeight() - 44 - 12; room > 120 && pictureCap > room {
+		pictureCap = room
+	}
+	// The picture is 16:9, so the box that holds it is too. Without this the
+	// box takes the whole width and the video is letterboxed inside it, which
+	// reads as two dead columns rather than as a picture with room around it.
+	pictureWidth := pictureCap * 16 / 9
+	if pictureWidth > width {
+		pictureWidth = width
+		pictureCap = width * 9 / 16
+	}
+	ui.Column(c).WidthPercent(100).Grow(1).Children(func() {
+		ui.Box(c).Grow(1)
+		ui.Row(c).WidthPercent(100).AlignItems(ui.Center).Children(func() {
+			ui.Box(c).Grow(1)
+			ui.Box(c).Width(pictureWidth).Height(pictureCap).Children(func() {
+				a.stage(c)
+			})
+			ui.Box(c).Grow(1)
+		})
+		ui.Box(c).Grow(1)
+	})
+	a.transportBar(c)
 	if a.webView != nil {
 		ui.Column(c).Height(300).Children(func() {
 			ui.WebView(c, a.webView).Grow(1)
@@ -300,15 +502,14 @@ func (a *appState) center(c *ui.Context, width, height float32) {
 	}
 }
 
-// layoutBar picks how the stage arranges the pictures the scene shows. It is
-// workbench-only: a watching mode has no chrome, and the arrangement belongs to
-// the scene, not to the window.
-func (a *appState) layoutBar(c *ui.Context) {
-	ui.Row(c).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
-		// No leading word: the five names are the label, and the word itself
-		// was the only thing that ever got cut at the window's left edge.
+// toolbar is the stage's own strip: the five layouts, the edit switch, and the
+// note when a layout cannot show everything.
+func (a *appState) toolbar(c *ui.Context, width float32) {
+	ui.Row(c).WidthPercent(100).Height(36).Padding(0, spaceSm).Gap(spaceXs).
+		AlignItems(ui.Center).Children(func() {
 		for _, kind := range layoutKinds {
-			button := ui.Button(c.Key("layout-"+kind.String()), kind.label()).Width(76)
+			button := ui.Button(c.Key("layout-"+kind.String()), a.layoutLabel(kind)).
+				Height(28).Padding(0, spaceSm)
 			if kind == a.layout {
 				button = button.Border(1, colorAccent).Background(colorPanel2)
 			}
@@ -316,10 +517,43 @@ func (a *appState) layoutBar(c *ui.Context) {
 				a.setLayout(kind)
 			}
 		}
+		ui.Box(c).Grow(1)
 		if note := a.layoutNote(); note != "" {
-			ui.Text(c, note).FontSize(textMicro).TextColor(colorTextDim)
+			ui.Text(c, note).FontSize(textMicro).TextColor(colorDim).SingleLine()
+		}
+		edit := ui.Button(c.Key("stage-edit"), a.tr("Edit", "编辑")).Height(28).Padding(0, spaceSm)
+		if a.editMode {
+			edit = edit.Background(colorAccentSoft).TextColor(colorAccent)
+		}
+		if edit.Clicked() {
+			a.editMode = !a.editMode
+			if a.editMode && a.selected == "" && len(a.items) > 0 {
+				a.selected = a.items[0].source.ID
+			}
+		}
+		if width < 900 {
+			if ui.Button(c.Key("stage-props"), a.tr("Properties", "属性")).Height(28).Padding(0, spaceSm).Clicked() {
+				a.drawerOpen = !a.drawerOpen
+			}
 		}
 	})
+}
+
+// layoutLabel names an arrangement in the window's language.
+func (a *appState) layoutLabel(kind layoutKind) string {
+	switch kind {
+	case layoutFocus:
+		return a.tr("Focus", "聚焦")
+	case layoutSplit:
+		return a.tr("Split", "分屏")
+	case layoutPip:
+		return a.tr("PiP", "画中画")
+	case layoutGrid:
+		return a.tr("Grid", "网格")
+	case layoutHero:
+		return a.tr("Hero", "主次")
+	}
+	return kind.label()
 }
 
 // layoutNote explains what the arrangement cannot show, instead of leaving a
@@ -331,381 +565,552 @@ func (a *appState) layoutNote() string {
 			shown++
 		}
 	}
-	if shown == 0 {
-		return ""
+	if shown > a.layout.slots() {
+		return itoa(shown) + a.tr(" shown; this layout places ", " 路已显示；此布局最多 ") + itoa(a.layout.slots())
 	}
-	if max := a.layout.slots(); shown > max {
-		return itoa(shown) + " shown, " + a.layout.String() + " places " + itoa(max)
-	}
-	return a.layout.String()
+	return ""
 }
 
-// inspector is the right pane. Without a selection it shows the session, which
-// is true today; P15.2 adds selecting a source and shows its properties here.
-func (a *appState) inspectorPane(c *ui.Context, width, height float32) {
-	if !a.inspector.shown(width >= inspectorAutoWidth) {
+// transportBar is the row a person touches most often: play, mute, reload, then
+// where the picture is and how long it runs, and the way into the two watching
+// modes. The position is read back from the player rather than from the shared
+// clock: this row is about the picture in front of you.
+func (a *appState) transportBar(c *ui.Context) {
+	snap := a.snapshot()
+	first := a.firstShown()
+	ui.Row(c).WidthPercent(100).Height(44).Padding(0, spaceSm).Gap(spaceSm).
+		AlignItems(ui.Center).Children(func() {
+		playing := a.playing()
+		play := a.tr("Pause", "暂停")
+		if !playing {
+			play = a.tr("Play", "播放")
+		}
+		playButton := ui.Button(c.Key("transport-play"), play).Width(80).Height(32)
+		if len(a.items) == 0 {
+			playButton = playButton.Disabled(true)
+		}
+		if playButton.Clicked() {
+			if a.playing() {
+				a.runCommand(command{Kind: commandPause})
+			} else {
+				a.runCommand(command{Kind: commandPlay})
+			}
+		}
+		mute := a.tr("Mute", "静音")
+		if a.masterMute {
+			mute = a.tr("Unmute", "取消静音")
+		}
+		if ui.Button(c.Key("transport-mute"), mute).Width(88).Height(32).Clicked() {
+			a.runCommand(command{Kind: commandMasterMute})
+		}
+		if ui.Button(c.Key("transport-reload"), a.tr("Reload", "重载")).Width(72).Height(32).Clicked() {
+			a.runCommand(command{Kind: commandReload})
+		}
+		if first != nil {
+			ui.Text(c, a.name(first)).FontSize(textCaption).TextColor(colorTextDim).
+				MaxWidth(220).SingleLine().Padding(spaceSm, 0)
+		}
+		// The event clock only means something once the shared timeline
+		// has been started. A window opened straight onto a file has not
+		// started one, and printing 0.0s beside a player at 0:14 would
+		// read as a stuck clock rather than as "there is no timeline yet".
+		if snap.Event > 0 {
+			ui.Text(c, formatEvent(snap.Event)).FontSize(textBody).TextColor(colorText).
+				FontFeatures("tnum").Padding(spaceXs, 0)
+		}
+		if first != nil {
+			total := first.player.Duration()
+			ui.Text(c, clock(first.player.Position())+" / "+clock(total)).
+				FontSize(textBody).TextColor(colorTextDim).FontFeatures("tnum").
+				Padding(spaceSm, 0)
+		}
+		ui.Box(c).Grow(1)
+		// One way in to watching. Cinema is the windowed form; the
+		// overlay inside it already offers full screen, so the workbench
+		// does not need two buttons that both mean "stop editing".
+		if ui.Button(c.Key("transport-cinema"), a.tr("Watch", "沉浸观看")).Width(104).Height(32).Clicked() {
+			a.enterViewing(viewCinema, a.windowRef())
+		}
+	})
+}
+
+// propertiesColumn is the right column: the selected source's properties, then
+// the audio levels. The mixer keeps its place at the bottom so a level change is
+// one press from anything the properties show.
+func (a *appState) propertiesColumn(c *ui.Context, height float32) {
+	ui.Column(c).Width(propertiesWidth).Background(colorBgSoft).Children(func() {
+		ui.Column(c).Grow(1).MinWidth(0).Children(func() {
+			ui.Row(c).Padding(spaceSm, spaceMd).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, a.tr("Properties", "属性")).FontSize(textMicro).TextColor(colorDim)
+				ui.Box(c).Grow(1)
+				if it, index, ok := a.selectedSource(); ok {
+					ui.Text(c, itoa(index+1)+" · "+shortURI(it.uri)).FontSize(textMicro).
+						TextColor(colorDim).SingleLine()
+				}
+			})
+			a.propertiesTabs(c)
+			ui.Scroll(c).Grow(1).WidthPercent(100).Children(func() {
+				ui.Column(c).WidthPercent(100).Padding(0, spaceMd).Gap(spaceSm).Children(func() {
+					a.propertiesBody(c)
+				})
+			})
+		})
+		ui.Box(c).WidthPercent(100).Height(1).Background(colorLine)
+		a.mixerPanel(c, height)
+	})
+}
+
+// propertiesTabs are the three things a source has: a picture, a sound and a
+// place on the timeline.
+func (a *appState) propertiesTabs(c *ui.Context) {
+	labels := [3]string{a.tr("Picture", "画面"), a.tr("Sound", "音频"), a.tr("Time", "时间")}
+	ui.Row(c).WidthPercent(100).Padding(0, spaceSm).Gap(spaceXs).Children(func() {
+		for i, label := range labels {
+			tab := ui.Button(c.Key("props-tab-"+itoa(i)), label).Grow(1).Height(28).Padding(0, 4)
+			if a.propsTab == i {
+				tab = tab.Background(colorPanel2).Border(1, colorLine)
+			}
+			if tab.Clicked() {
+				a.propsTab = i
+			}
+		}
+	})
+}
+
+// propertiesBody switches on the tab. Without a selection it shows the session
+// summary, which is the honest answer to "what is this window doing".
+func (a *appState) propertiesBody(c *ui.Context) {
+	it, index, ok := a.selectedSource()
+	if !ok {
+		a.sessionSummary(c)
 		return
 	}
-	ui.Column(c).Width(inspectorWidth).Gap(spaceSm).Padding(spaceMd).
+	switch a.propsTab {
+	case 0:
+		a.pictureTab(c, it)
+	case 1:
+		a.soundTab(c, it, index)
+	case 2:
+		a.timeTab(c, it, index)
+	}
+}
+
+// sessionSummary answers "what is this window doing" when nothing is selected.
+func (a *appState) sessionSummary(c *ui.Context) {
+	ui.Text(c, a.tr("No source selected", "未选中来源")).FontSize(textBody).TextColor(colorText)
+	ui.Text(c, a.tr("Pick one in the list on the left to see its picture, sound and timing.",
+		"在左侧列表选一个来源，查看它的画面、音频与时间。")).
+		FontSize(textCaption).TextColor(colorDim).Wrap()
+	snap := a.snapshot()
+	a.detailRow(c, a.tr("Scene", "场景"), a.sceneLabelText())
+	a.detailRow(c, a.tr("Event", "时间轴"), formatEvent(snap.Event))
+	a.detailRow(c, a.tr("Playing", "播放"), boolLine(snap.Playing, a))
+	a.detailRow(c, a.tr("Sources", "来源"), itoa(len(a.items)))
+	a.detailRow(c, a.tr("Picture", "画面"), itoa(len(snap.Picture)))
+	a.detailRow(c, a.tr("Sound", "声音"), itoa(len(snap.Sound)))
+	if a.syncNote != "" {
+		ui.Text(c, a.syncNote).FontSize(textMicro).TextColor(colorWarn).Wrap()
+	}
+}
+
+// pictureTab is the source's place on the stage: the box fields, the layer and
+// the placement buttons.
+func (a *appState) pictureTab(c *ui.Context, it *item) {
+	if _, on := a.stageBoxOf(it); !on {
+		ui.Text(c, a.tr("This source is not on the stage.", "此来源不在舞台上。")).
+			FontSize(textCaption).TextColor(colorDim).Wrap()
+		if ui.Button(c.Key("pic-show"), a.tr("Put it on the stage", "放到舞台")).Height(30).Clicked() {
+			a.selectVideo(it)
+		}
+		return
+	}
+	a.editControls(c, it)
+}
+
+// soundTab is the per-source audio: level, mute, what the scene allows, and the
+// nudge buttons that move the source against the shared clock.
+func (a *appState) soundTab(c *ui.Context, it *item, index int) {
+	a.detailRow(c, a.tr("State", "状态"), a.soundState(a.entryOf(it)))
+	ui.Row(c).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, a.tr("Level", "音量")).FontSize(textMicro).TextColor(colorDim).Width(52)
+		if ui.Button(c.Key("snd-vol-down"), "−").Width(28).Height(26).Clicked() {
+			a.runCommand(command{Kind: commandVolume, Source: it.source.ID, Volume: clamp01(it.volume - 0.05)})
+		}
+		ui.Text(c, fmt.Sprintf("%.2f", it.volume)).Width(40).FontSize(textSmall).
+			TextColor(colorText).FontFeatures("tnum")
+		if ui.Button(c.Key("snd-vol-up"), "+").Width(28).Height(26).Clicked() {
+			a.runCommand(command{Kind: commandVolume, Source: it.source.ID, Volume: clamp01(it.volume + 0.05)})
+		}
+	})
+	ui.Row(c).Wrap().Gap(spaceXs).Children(func() {
+		if ui.Button(c.Key("snd-mute"), a.muteLabel(it)).Height(26).Clicked() {
+			a.runCommand(command{Kind: commandMute, Source: it.source.ID})
+		}
+		if it.audio != "" {
+			if ui.Button(c.Key("snd-allow"), a.shortAllowLabel(it)).Height(26).Clicked() {
+				a.runCommand(command{Kind: commandAllow, Source: it.source.ID})
+			}
+		}
+		if it.openErr != nil {
+			if ui.Button(c.Key("snd-retry"), a.tr("Retry", "重试")).Height(26).Clicked() {
+				a.runCommand(command{Kind: commandRetry, Source: it.source.ID})
+			}
+		}
+		if ui.Button(c.Key("snd-remove"), a.tr("Remove", "移除")).Height(26).Clicked() {
+			a.runCommand(command{Kind: commandRemove, Source: it.source.ID})
+		}
+	})
+	a.detailRow(c, a.tr("Align", "对齐"), a.alignedState(a.entryOf(it)))
+	ui.Row(c).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, a.tr("Offset", "偏移")).FontSize(textMicro).TextColor(colorDim).Width(52)
+		if ui.Button(c.Key("snd-back"), "−0.1s").Width(64).Height(26).Clicked() {
+			a.runCommand(command{Kind: commandNudge, Source: it.source.ID, Delta: -100 * time.Millisecond})
+		}
+		if ui.Button(c.Key("snd-fwd"), "+0.1s").Width(64).Height(26).Clicked() {
+			a.runCommand(command{Kind: commandNudge, Source: it.source.ID, Delta: 100 * time.Millisecond})
+		}
+	})
+	if it.audio != "" && a.hasCommonClock(it) {
+		if ui.Button(c.Key("snd-try-align"), a.tr("Try to align", "尝试对齐")).Height(26).Clicked() {
+			if index > 0 {
+				a.probeAsync(0, index)
+			}
+		}
+	}
+}
+
+// timeTab is the source's own clock and the replay seek.
+func (a *appState) timeTab(c *ui.Context, it *item, index int) {
+	a.detailRow(c, a.tr("Position", "位置"), a.positionLine(it))
+	a.detailRow(c, a.tr("Duration", "时长"), a.durationLine(it))
+	if it.openErr != nil {
+		ui.Text(c, it.openErr.Error()).FontSize(textMicro).TextColor(colorBad).Wrap()
+	}
+	a.inspectorSeek(c)
+	a.inspectorAccount(c)
+	a.inspectorAlign(c)
+}
+
+// mixerPanel is the right column's audio half: the master and one channel per
+// source, the way a mixer looks in a capture program.
+func (a *appState) mixerPanel(c *ui.Context, height float32) {
+	ui.Column(c).WidthPercent(100).Height(mixerHeight).Padding(spaceSm).Gap(spaceXs).
 		Background(colorBgSoft).Children(func() {
-		ui.Text(c, "inspector").FontSize(textMicro).TextColor(colorDim)
+		ui.Row(c).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, a.tr("Mixer", "混音器")).FontSize(textMicro).TextColor(colorDim)
+			ui.Box(c).Grow(1)
+			mute := a.tr("Mute all", "全部静音")
+			if a.masterMute {
+				mute = a.tr("Hear all", "全部有声")
+			}
+			if ui.Button(c.Key("mix-master"), mute).Height(22).Padding(0, 6).Clicked() {
+				a.runCommand(command{Kind: commandMasterMute})
+			}
+		})
 		ui.Scroll(c).Grow(1).WidthPercent(100).Children(func() {
-			ui.Column(c).WidthPercent(100).Gap(spaceXs).Children(func() {
-				if it, index, ok := a.selectedSource(); ok {
-					a.inspectorSource(c, it, index)
-				} else {
-					a.inspectorSession(c)
+			ui.Column(c).WidthPercent(100).Gap(2).Children(func() {
+				if len(a.items) == 0 {
+					ui.Text(c, a.tr("No sources are open.", "还没有打开来源。")).
+						FontSize(textCaption).TextColor(colorDim).Wrap()
+					return
 				}
-				a.inspectorSeek(c)
-				a.inspectorAccount(c)
-				a.inspectorAlign(c)
+				for _, it := range a.items {
+					a.mixerChannel(c, it)
+				}
+			})
+		})
+		ui.Text(c, a.tr("Output: system default", "输出：系统默认设备")).
+			FontSize(textMicro).TextColor(colorDim).SingleLine()
+	})
+}
+
+// mixerChannel is one strip in the mixer: name, mute, level.
+func (a *appState) mixerChannel(c *ui.Context, it *item) {
+	ui.Row(c).WidthPercent(100).Height(28).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
+		ui.Box(c).Width(6).Height(6).Radius(3).Background(colorSound)
+		ui.Text(c, shortURI(it.uri)).FontSize(textMicro).TextColor(colorText).Width(70).SingleLine()
+		mute := "M"
+		if a.sourceMuted(it) {
+			mute = "M·"
+		}
+		if ui.Button(c.Key("mix-mute-"+string(it.source.ID)), mute).Width(30).Height(20).Clicked() {
+			a.runCommand(command{Kind: commandMute, Source: it.source.ID})
+		}
+		if ui.Slider(c, &it.volume, 0, 1).Grow(1).Height(18).Changed() {
+			a.runCommand(command{Kind: commandVolume, Source: it.source.ID, Volume: it.volume})
+		}
+		ui.Text(c, fmt.Sprintf("%.0f%%", it.volume*100)).Width(34).FontSize(textMicro).
+			TextColor(colorDim).FontFeatures("tnum").SingleLine()
+	})
+}
+
+// mixerStrip is the narrow window's mixer: a bottom bar that can open into a few
+// channel rows, so a 747px window still has a level control.
+func (a *appState) mixerStrip(c *ui.Context) {
+	ui.Column(c).WidthPercent(100).Background(colorBgSoft).Children(func() {
+		ui.Box(c).WidthPercent(100).Height(1).Background(colorLine)
+		ui.Row(c).WidthPercent(100).Height(mixerStripHi).Padding(0, spaceMd).Gap(spaceSm).
+			AlignItems(ui.Center).Children(func() {
+			ui.Text(c, a.tr("Mixer", "混音器")).FontSize(textMicro).TextColor(colorDim)
+			mute := a.tr("Mute all", "全部静音")
+			if a.masterMute {
+				mute = a.tr("Hear all", "全部有声")
+			}
+			if ui.Button(c.Key("strip-master"), mute).Height(22).Padding(0, 6).Clicked() {
+				a.runCommand(command{Kind: commandMasterMute})
+			}
+			ui.Box(c).Grow(1)
+			toggle := a.tr("Open", "展开")
+			if a.mixerOpen {
+				toggle = a.tr("Fold", "收起")
+			}
+			if ui.Button(c.Key("strip-toggle"), toggle).Height(22).Padding(0, 6).Clicked() {
+				a.mixerOpen = !a.mixerOpen
+			}
+		})
+		if !a.mixerOpen {
+			return
+		}
+		ui.Column(c).WidthPercent(100).Padding(0, spaceMd).Gap(2).Children(func() {
+			for _, it := range a.items {
+				ui.Row(c).WidthPercent(100).Height(26).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, shortURI(it.uri)).FontSize(textMicro).TextColor(colorText).Width(90).SingleLine()
+					if ui.Slider(c, &it.volume, 0, 1).Grow(1).Height(16).Changed() {
+						a.runCommand(command{Kind: commandVolume, Source: it.source.ID, Volume: it.volume})
+					}
+					ui.Text(c, fmt.Sprintf("%.0f%%", it.volume*100)).Width(32).FontSize(textMicro).
+						TextColor(colorDim).FontFeatures("tnum")
+				})
+			}
+		})
+	})
+}
+
+// drawer is the properties column of a narrow window: it opens over the picture
+// from the right and closes with its own button.
+func (a *appState) drawer(c *ui.Context, height float32) {
+	ui.Column(c).Absolute().Top(0).Bottom(0).Width(drawerWidth).
+		LeftPercent(100).TranslatePercent(-100, 0).ZIndex(30).
+		Background(colorPanel).Border(1, colorLine).Children(func() {
+		ui.Row(c).Padding(spaceSm, spaceMd).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, a.tr("Properties", "属性")).FontSize(textMicro).TextColor(colorDim)
+			ui.Box(c).Grow(1)
+			if ui.Button(c.Key("drawer-close"), a.tr("Close", "关闭")).Height(24).Padding(0, spaceSm).Clicked() {
+				a.drawerOpen = false
+			}
+		})
+		a.propertiesTabs(c)
+		ui.Scroll(c).Grow(1).WidthPercent(100).Children(func() {
+			ui.Column(c).WidthPercent(100).Padding(0, spaceMd).Gap(spaceSm).Children(func() {
+				a.propertiesBody(c)
 			})
 		})
 	})
 }
 
-// inspectorSource follows the selected source: its Core identity, the player
-// behind it, and the actions too detailed for a row in the Sources list.
-func (a *appState) inspectorSource(c *ui.Context, it *item, index int) {
-	snapshot := a.snapshot()
-	var entry sourceSnapshot
-	for _, source := range snapshot.Sources {
-		if source.ID == it.source.ID {
-			entry = source
-			break
-		}
+// statusBar is the one line that must never disappear: what the session is
+// statusBar answers "is anything wrong" and nothing else when the transport
+// already reads out the clock: repeating 0.0s here was the third place the same
+// number appeared.
+func (a *appState) statusBar(c *ui.Context, width float32) {
+	line := a.stripStatus()
+	if a.firstShown() != nil {
+		line = a.tr("ready", "就绪") + " · " + itoa(len(a.items)) + " " + a.tr("sources", "个来源")
 	}
-	ui.Row(c).WidthPercent(100).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, fmt.Sprintf("source %d", index+1)).FontSize(textMicro).TextColor(colorAccent)
-		if ui.Button(c.Key("inspector-clear"), "clear").Width(64).Height(22).Clicked() {
-			a.selected = ""
-		}
-	})
-	// P13.4: the pane answers what a person came for — what this source is,
-	// whether it is on the stage, how far along it is and how it sits against
-	// the others. The Core ids, the generation counter and the player handle
-	// moved to Diagnostics, where a bug report can still read them.
-	a.detailRow(c, "address", shortURI(it.uri))
-	a.detailRow(c, "picture", pictureState(entry))
-	a.detailRow(c, "sound", soundState(entry))
-	a.detailRow(c, "position", formatEvent(entry.Position))
-	a.detailRow(c, "duration", formatEvent(entry.Duration))
-	a.detailRow(c, "volume", volumeState(entry))
-	if it.audio != "" {
-		a.detailRow(c, "offset", fmt.Sprintf("%+.1fs", entry.Offset.Seconds()))
-		a.detailRow(c, "aligned", alignedState(entry))
-	}
-	if entry.OpenErr != "" && entry.OpenErr != "nil" {
-		a.detailRow(c, "error", entry.OpenErr)
-	}
-	if it.video != "" && it.shown {
-		a.editControls(c, it)
-	}
-	ui.Row(c).Wrap().Gap(spaceXs).Padding(spaceSm, 0).Children(func() {
-		if it.video != "" && ui.Button(c.Key("inspector-show"), "Show").Width(72).Height(26).Clicked() {
-			a.report(a.runCommand(command{Kind: commandShow, Source: it.source.ID}))
-		}
-		if it.audio != "" {
-			if ui.Button(c.Key("inspector-hear"), "Hear").Width(72).Height(26).Clicked() {
-				a.report(a.runCommand(command{Kind: commandHear, Source: it.source.ID}))
-			}
-			if ui.Button(c.Key("inspector-allow"), shortAllowLabel(a, it)).Width(84).Height(26).Clicked() {
-				a.report(a.runCommand(command{Kind: commandAllow, Source: it.source.ID}))
-			}
-			if ui.Button(c.Key("inspector-vol-down"), "Vol -").Width(72).Height(26).Clicked() {
-				a.report(a.runCommand(command{Kind: commandVolume, Source: it.source.ID, Volume: max(0, it.volume-0.25)}))
-			}
-			if ui.Button(c.Key("inspector-vol-up"), "Vol +").Width(72).Height(26).Clicked() {
-				a.report(a.runCommand(command{Kind: commandVolume, Source: it.source.ID, Volume: min(1, it.volume+0.25)}))
+	ui.Row(c).WidthPercent(100).Height(a.statusBarHeight()).Padding(0, spaceMd).
+		Gap(spaceSm).AlignItems(ui.Center).Background(colorBg).Children(func() {
+		ui.Text(c, line).FontSize(textMicro).TextColor(colorDim).
+			FontFeatures("tnum").SingleLine().Grow(1)
+		if a.lastErr != nil {
+			if ui.Button(c.Key("status-error"), "!").Width(22).Height(18).
+				Border(1, colorBad).TextColor(colorBad).
+				Tooltip(a.tr("open the error report", "打开错误报告")).Clicked() {
+				a.errorOpen = true
 			}
 		}
-		if it.video != "" || it.audio != "" {
-			if ui.Button(c.Key("inspector-back"), "-0.1s").Width(64).Height(26).Clicked() {
-				a.report(a.runCommand(command{Kind: commandNudge, Source: it.source.ID, Delta: a.settingsNudge(-1)}))
-			}
-			if ui.Button(c.Key("inspector-fwd"), "+0.1s").Width(64).Height(26).Clicked() {
-				a.report(a.runCommand(command{Kind: commandNudge, Source: it.source.ID, Delta: a.settingsNudge(1)}))
-			}
-			if index > 0 && ui.Button(c.Key("inspector-probe"), "Try align").Width(92).Height(26).Clicked() {
-				a.probeAsync(0, index)
-			}
-		}
-		if entry.OpenErr != "" && entry.OpenErr != "nil" && ui.Button(c.Key("inspector-retry"), "Retry").Width(72).Height(26).Clicked() {
-			a.report(a.runCommand(command{Kind: commandRetry, Source: it.source.ID}))
-		}
-		if ui.Button(c.Key("inspector-remove"), "Remove").Width(84).Height(26).Clicked() {
-			a.report(a.runCommand(command{Kind: commandRemove, Source: it.source.ID}))
+		if a.importing != "" {
+			ui.Text(c, a.tr("reading ", "正在读取 ")+a.importing).FontSize(textMicro).
+				TextColor(colorWarn).SingleLine()
 		}
 	})
-	ui.Text(c, "no waveform is drawn: this build does not decode audio samples, so volume and mute come from the player itself.").
-		FontSize(textMicro).TextColor(colorDim).Padding(spaceSm, 0)
 }
 
-// inspectorSession is the read-only session summary.
-func (a *appState) inspectorSession(c *ui.Context) {
-	snapshot := a.snapshot()
-	a.detailRow(c, "session", snapshot.Name)
-	a.detailRow(c, "scene", string(snapshot.Scene))
-	a.detailRow(c, "picture", pictureLine(snapshot.Picture))
-	a.detailRow(c, "sound", soundLine(snapshot.Sound))
-	a.detailRow(c, "sources", fmt.Sprintf("%d", len(snapshot.Sources)))
-	a.detailRow(c, "event", formatEvent(snapshot.Event))
-	a.detailRow(c, "playing", fmt.Sprintf("%v", snapshot.Playing))
-	a.detailRow(c, "group", snapshot.Group)
-	if snapshot.SeekWindow != "" && snapshot.SeekWindow != "unknown" {
-		a.detailRow(c, "seek", snapshot.SeekWindow)
-	}
-	ui.Text(c, "click a source in the Sources page to follow it here").
-		FontSize(textMicro).TextColor(colorDim).Padding(spaceSm, 0)
-}
-
-// shortAllowLabel names the audio-hold action in the narrow inspector.
-func shortAllowLabel(a *appState, it *item) string {
-	if it.audio == "" {
-		return "No audio"
-	}
-	if a.audible[it.audio] {
-		return "Mute"
-	}
-	return "Allow"
-}
-
-// detailRow is one "name  value" line in the inspector.
-func (a *appState) detailRow(c *ui.Context, name, value string) {
-	if value == "" {
-		return
-	}
-	ui.Row(c).WidthPercent(100).Gap(spaceSm).Children(func() {
-		ui.Text(c, name).FontSize(textMicro).TextColor(colorDim).Width(64)
-		ui.Text(c, value).FontSize(textSmall).TextColor(colorText).Grow(1).FontFeatures("tnum")
+// errorReport is the one place a failure is spelled out: a short sentence, the
+// raw detail, and the two things a person can do about it.
+func (a *appState) errorReport(c *ui.Context, width, height float32) {
+	ui.Box(c).Absolute().Left(0).Top(0).Right(0).Bottom(0).Center().
+		Background(ui.RGBA(0, 0, 0, 0.55)).Children(func() {
+		ui.Column(c).Width(560).MaxWidth(width-40).Padding(spaceLg).Gap(spaceSm).
+			Radius(12).Background(colorPanel).Border(1, colorLine).Children(func() {
+			ui.Text(c, a.tr("Something went wrong", "出错了")).FontSize(textSubtitle).TextColor(colorText)
+			ui.Text(c, a.errorShort()).FontSize(textBody).TextColor(colorText).Wrap()
+			if a.lastErr != nil {
+				ui.Scroll(c).WidthPercent(100).MaxHeight(140).Children(func() {
+					ui.Text(c, a.lastErr.Error()).FontSize(textMicro).TextColor(colorDim).Wrap()
+				})
+			}
+			ui.Row(c).Gap(spaceSm).Children(func() {
+				if ui.Button(c.Key("err-diagnostics"), a.tr("Open diagnostics", "打开诊断")).Height(30).Clicked() {
+					a.workspace = workspaceDiagnostics
+					a.errorOpen = false
+				}
+				if a.importText != "" {
+					if ui.Button(c.Key("err-retry"), a.tr("Retry", "重试")).Height(30).Clicked() {
+						a.retryImport()
+						a.errorOpen = false
+					}
+				}
+				ui.Box(c).Grow(1)
+				if ui.Button(c.Key("err-close"), a.tr("Close", "关闭")).Height(30).Padding(0, spaceMd).Clicked() {
+					a.errorOpen = false
+				}
+			})
+		})
 	})
 }
 
-// pictureState says what the stage is doing with this source in words, not in
-// booleans.
-func pictureState(entry sourceSnapshot) string {
-	switch {
-	case !entry.Player:
-		return "no player yet"
-	case !entry.Ready:
-		return "opening"
-	case !entry.Playing:
-		return "held at " + formatEvent(entry.Position)
-	default:
-		return "playing"
-	}
-}
-
-// soundState is the same for the audio side.
-func soundState(entry sourceSnapshot) string {
-	switch {
-	case !entry.Player:
-		return "silent: no player"
-	case entry.Muted:
-		return "muted"
-	case entry.Volume <= 0:
-		return "silent: volume is zero"
-	default:
-		return "heard"
-	}
-}
-
-// volumeState shows the number only when the player reports one.
-func volumeState(entry sourceSnapshot) string {
-	if !entry.Player {
+// errorShort is the sentence a person reads first: what failed, in one line,
+// without the URL and without the Go error text.
+func (a *appState) errorShort() string {
+	if a.lastErr == nil {
 		return ""
 	}
-	return fmt.Sprintf("%.2f", entry.Volume)
-}
-
-// alignedState turns the alignment flag into the sentence a person needs.
-func alignedState(entry sourceSnapshot) string {
-	if entry.Aligned {
-		return "yes"
+	msg := a.tr("The last import did not finish.", "上一次导入没有完成。")
+	if a.importText != "" {
+		msg = a.tr("This address did not load: ", "这个地址没有加载成功：") + a.importText
 	}
-	return "not yet: no common clock found"
+	return msg
 }
 
-// dockPane is the timeline dock. It is read-only in this build: it shows the
-// shared event time and each source's offset. It never draws a clickable
-// buffer that it cannot honour.
-func (a *appState) dockPane(c *ui.Context) {
-	ui.Column(c).Height(dockHeight).WidthPercent(100).Padding(spaceSm, spaceLg).
-		Gap(spaceXs).Background(colorBgSoft).Children(func() {
-		ui.Row(c).WidthPercent(100).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "timeline · event time").FontSize(textMicro).TextColor(colorDim)
-			ui.Text(c, formatEvent(a.sync.playhead.Event())).FontSize(textSmall).
-				TextColor(colorText).FontFeatures("tnum")
-			ui.Box(c).Grow(1)
-			if ui.Button(c.Key("dock-fold"), "Hide dock").Width(104).Height(24).Clicked() {
-				a.dock = paneClosed
+// pageMenuPanel is the page list and the way out of the window, in one place.
+func (a *appState) pageMenuPanel(c *ui.Context, width float32) {
+	ui.Box(c).Absolute().Left(0).Top(0).Right(0).Bottom(0).ZIndex(19).
+		OnClick(func() { a.pageMenu = false })
+	ui.Column(c).Absolute().Top(a.barHeight()+4).Right(12).Width(220).Padding(6).Gap(2).
+		Radius(10).Background(colorPanel).Border(1, colorLine).ZIndex(20).Children(func() {
+		for _, page := range []workspace{workspaceStage, workspaceSources, workspaceDiagnostics, workspaceSettings, workspaceMixer} {
+			p := page
+			button := ui.Button(c.Key("menu-"+itoa(int(p))), a.pageLabel(p)).Height(30).Padding(0, spaceSm)
+			if p == a.workspace {
+				button = button.Background(colorAccentSoft).TextColor(colorAccent)
+			}
+			if button.Clicked() {
+				a.workspace = p
+				a.pageMenu = false
+			}
+		}
+		ui.Box(c).WidthPercent(100).Height(1).Background(colorLine)
+		if ui.Button(c.Key("menu-quit"), a.tr("Quit MuxShift", "退出 MuxShift")).Height(30).
+			Padding(0, spaceSm).TextColor(colorBad).Clicked() {
+			a.release()
+			a.closes++
+			mygo.App.Quit()
+		}
+	})
+}
+
+// sceneMenuPanel says what the scene chip can do: nothing yet, and why.
+func (a *appState) sceneMenuPanel(c *ui.Context, width float32) {
+	ui.Box(c).Absolute().Left(0).Top(0).Right(0).Bottom(0).ZIndex(19).
+		OnClick(func() { a.sceneMenu = false })
+	ui.Column(c).Absolute().Top(a.barHeight()+4).Left(sceneWidth+spaceMd).Width(220).
+		Padding(6).Gap(2).Radius(10).Background(colorPanel).Border(1, colorLine).ZIndex(20).Children(func() {
+		ui.Row(c).Height(30).Padding(0, spaceSm).Gap(spaceXs).AlignItems(ui.Center).Background(colorAccentSoft).Children(func() {
+			ui.Text(c, a.sceneLabelText()).FontSize(textBody).TextColor(colorAccent)
+		})
+		ui.Button(c.Key("scene-new"), a.tr("New scene…", "新建场景…")).Height(30).Padding(0, spaceSm).Disabled(true).
+			Tooltip(a.tr("this build has one scene", "此版本只有一个场景"))
+	})
+}
+
+// sourceCard is the Sources page's row: the whole width, the file, its state and
+// the actions that do not belong in the scene list.
+func (a *appState) sourceCard(c *ui.Context, it *item, index int) {
+	ui.Row(c).WidthPercent(100).Padding(spaceSm, spaceMd).Gap(spaceSm).Wrap().
+		AlignItems(ui.Center).Radius(10).Background(colorPanel).
+		Border(1, colorLine).Children(func() {
+		ui.Text(c, itoa(index+1)).FontSize(textMicro).TextColor(colorDim).Width(16).FontFeatures("tnum")
+		ui.Column(c).Grow(1).Gap(2).Children(func() {
+			ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, shortURI(it.uri)).FontSize(textBody).TextColor(colorText).SingleLine()
+				if it.openErr != nil {
+					pill(c, a.tr("error", "错误"), colorBad, false)
+				} else {
+					if it.video != "" {
+						pill(c, "PICTURE", colorAccent, false)
+					}
+					if it.audio != "" {
+						pill(c, "SOUND", colorSound, false)
+					}
+				}
+			})
+			ui.Text(c, a.sourceSub(it)).FontSize(textMicro).TextColor(colorDim).SingleLine()
+		})
+		ui.Row(c).Gap(spaceXs).Children(func() {
+			show := a.tr("Hide", "隐藏")
+			if !it.shown {
+				show = a.tr("Show", "显示")
+			}
+			if ui.Button(c.Key("card-show-"+string(it.source.ID)), show).Height(28).Clicked() {
+				a.selectVideo(it)
+			}
+			if ui.Button(c.Key("card-hear-"+string(it.source.ID)), a.tr("Hear", "试听")).Height(28).Clicked() {
+				a.selectAudio(it)
+			}
+			if it.audio != "" {
+				if ui.Button(c.Key("card-allow-"+string(it.source.ID)), a.shortAllowLabel(it)).Height(28).Clicked() {
+					a.runCommand(command{Kind: commandAllow, Source: it.source.ID})
+				}
+			}
+			if it.openErr != nil {
+				if ui.Button(c.Key("card-retry-"+string(it.source.ID)), a.tr("Retry", "重试")).Height(28).Clicked() {
+					a.runCommand(command{Kind: commandRetry, Source: it.source.ID})
+				}
+			}
+			if ui.Button(c.Key("card-remove-"+string(it.source.ID)), a.tr("Remove", "移除")).Height(28).Clicked() {
+				a.runCommand(command{Kind: commandRemove, Source: it.source.ID})
 			}
 		})
-		for _, line := range a.timelineLines() {
-			ui.Text(c, line).FontSize(textMicro).TextColor(colorTextDim).
-				FontFeatures("tnum").SingleLine()
-		}
-		if len(a.items) == 0 {
-			ui.Text(c, "no sources").FontSize(textMicro).TextColor(colorDim)
-		}
-
-		ui.Text(c, "read-only view: the real mapped offset, the media time the timeline asks for, and the clock the player itself reports; nudges live in the inspector").
-			FontSize(textMicro).TextColor(colorDim)
 	})
 }
 
-// dockWindow reports the known window a source reports, or says that it has
-// none. It never guesses a range.
-func dockWindow(it *item) string {
-	if it.player == nil {
-		return "no player"
+// pill is a small label in a source card. The fill is the colour at a low alpha
+// and the text is the colour itself, so the pair keeps its contrast in every
+// theme pack.
+func pill(c *ui.Context, label string, tint ui.Color, strong bool) {
+	background := colorPanel2
+	if strong {
+		background = colorAccentSoft
 	}
-	dur := it.player.Duration()
-	if dur <= 0 {
-		return "live · window unknown"
-	}
-	return "0:00–" + clock(dur)
-}
-
-// statusBar is the always-visible bottom line, separate from the panes so a
-// small window still shows errors and positions.
-func (a *appState) statusBar(c *ui.Context) {
-	ui.Row(c).Height(statusHeight).WidthPercent(100).Padding(spaceXs, spaceLg).
-		AlignItems(ui.Center).Children(func() {
-		ui.Text(c, a.status()).FontSize(textSmall).TextColor(colorTextDim).
-			FontFeatures("tnum").SingleLine()
-		if a.lastErr != nil {
-			ui.Box(c).Grow(1)
-			if ui.Button(c.Key("status-dismiss"), "Dismiss error").Width(120).Height(22).
-				FontSize(textSmall).Tooltip("clear the last error; the log keeps its record").Clicked() {
-				a.dismissError()
-			}
-		}
+	ui.Box(c).Padding(2, 6).Radius(4).Background(background).Children(func() {
+		ui.Text(c, label).FontSize(textMicro).TextColor(tint).SingleLine()
 	})
 }
 
-// plural is the suffix a count needs.
-func plural(n int) string {
-	if n == 1 {
-		return ""
-	}
-	return "s"
-}
-
-// formatEvent writes a shared event time as seconds with one decimal, the way
-// the seek reports do.
-func formatEvent(d time.Duration) string {
-	return fmt.Sprintf("%.1fs", d.Round(100*time.Millisecond).Seconds())
-}
-
-// layoutLine describes which panes the last frame drew, so a scenario's log can
-// be tied to its capture.
-func (a *appState) layoutLine(width, height float32) string {
-	return fmt.Sprintf("layout %.0fx%.0f rail=%t inspector=%t dock=%t",
-		width, height,
-		a.rail.shown(width >= railAutoWidth),
-		a.inspector.shown(width >= inspectorAutoWidth),
-		a.dock.shown(a.settings.DockOpen && height >= dockAutoHeight))
-}
-
-// seekWindowCaption labels the window the entry offers before a target is
-// chosen. It is the candidate intersection of the sources' buffers, not a range
-// PlanSeek has authorised: every target is still authorised per source.
-func seekWindowCaption(start, end time.Duration) string {
-	return "Candidate common replay window: " + formatEvent(start) + ".." + formatEvent(end)
-}
-
-// seekAuthorizationNote says what the candidate window does not promise. A
-// target inside it can still be refused for a source whose own anchor does not
-// explain it, so the panel never presents the whole window as authorised.
-//
-// P16.4g adds the second half: content correspondence between sources is not a
-// product capability. The closure states it where a user asks for a replay
-// position, instead of leaving them to infer it from refusals.
-const seekAuthorizationNote = "A target inside this window still requires per-source anchor authorization. Cross-source content correspondence is not authorized. Some targets may be refused."
-
-// inspectorSeek is the one place the window asks for a replay seek. It offers
-// only the intersection every buffering source can show, takes a number of
-// seconds into that window, and hands the request to startSeekTxn: the UI never
-// turns a window into a player position itself, and a transaction already
-// preparing disables the button instead of being silently replaced.
-func (a *appState) inspectorSeek(c *ui.Context) {
-	start, end, err := a.replayWindowForEntry()
-	if err != nil {
-		ui.Box(c).Height(1).WidthPercent(100).Background(colorLine)
-		ui.Text(c, "replay seek").FontSize(textMicro).TextColor(colorDim)
-		ui.Text(c, err.Error()).FontSize(textSmall).TextColor(colorDim).Wrap()
-		return
-	}
-	a.seekMu.Lock()
-	busy := a.seek != nil
-	a.seekMu.Unlock()
-	ui.Box(c).Height(1).WidthPercent(100).Background(colorLine)
-	ui.Text(c, "replay seek").FontSize(textMicro).TextColor(colorDim)
-	ui.Text(c, seekWindowCaption(start, end)).FontSize(textSmall).TextColor(colorDim).Wrap().SingleLine()
-	ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).WidthPercent(100).Children(func() {
-		c.Key("seek-seconds")
-		ui.TextInput(c, &a.seekText).Grow(1).Height(26).
-			Placeholder("seconds into this window")
-		label := "Seek"
-		if busy {
-			label = "Preparing…"
-		}
-		button := ui.Button(c.Key("seek-start"), label).Width(96).Height(26)
-		if busy {
-			button.Disabled(true).Tooltip("a replay seek is already being prepared")
-		}
-		if button.Clicked() {
-			a.seekNote = a.requestReplaySeek()
-		}
+// detailRow is one label/value line in the properties column.
+func (a *appState) detailRow(c *ui.Context, label, value string) {
+	ui.Row(c).WidthPercent(100).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, label).Width(76).FontSize(textMicro).TextColor(colorDim)
+		ui.Text(c, value).FontSize(textSmall).TextColor(colorText).FontFeatures("tnum").SingleLine().Grow(1)
 	})
-	if a.seekNote != "" {
-		ui.Text(c, a.seekNote).FontSize(textMicro).TextColor(colorDim).Wrap()
-	}
-	ui.Text(c, "this seeks a stage that is already replaying; entering replay from live is not offered.").
-		FontSize(textMicro).TextColor(colorDim).Wrap().Padding(spaceSm, 0)
-	ui.Text(c, seekAuthorizationNote).
-		FontSize(textMicro).TextColor(colorDim).Wrap().Padding(spaceSm, 0)
-	ui.Text(c, "a commit means the players report the position asked for; it does not confirm the frame.").
-		FontSize(textMicro).TextColor(colorDim).Wrap().Padding(spaceSm, 0)
 }
 
-// inspectorAccount shows the newest replay account, read-only. It reads
-// lastReport() alone: a transaction still preparing, or one that was refused,
-// is never shown as a replay that happened.
-func (a *appState) inspectorAccount(c *ui.Context) {
-	lines := a.noticeLines()
-	if len(lines) == 0 {
-		return
-	}
-	tone := noticeColor(a.lastPhase())
-	ui.Box(c).Height(1).WidthPercent(100).Background(colorLine)
-	ui.Text(c, "replay").FontSize(textMicro).TextColor(colorDim)
-	for index, line := range lines {
-		text := ui.Text(c, line).FontSize(textSmall).TextColor(tone).Wrap()
-		if index == 0 {
-			text.FontFeatures("tnum")
-		}
-	}
+// addSourceDialog replaces the stock modal, whose panel was drawn in the page's
+// own colour and whose scrim was a 40% black that a dark page swallows: here the
+// backdrop is deeper and the panel has a border, so the dialog reads as a layer.
+func (a *appState) addSourceDialog(c *ui.Context) {
+	ui.DialogBase(c, &a.addOpen, func(backdrop, panel ui.Element) {
+		backdrop.Background(ui.RGBA(0, 0, 0, 0.55))
+		panel = panel.Background(colorPanel).Border(1, colorLine).Radius(12).
+			Padding(spaceLg).Gap(spaceSm)
+		panel.Children(func() { a.addSourcePanel(c) })
+	})
 }
 
-// inspectorAlign shows the newest alignment comparison, read-only. It is the
-// same account the status bar summarises, with the fields that answer "why this
-// value": both sources, both windows, how much matched, how strong the peak is
-// against the next candidate, what it suggests against what the timeline holds,
-// and whether the session has moved since the probe started.
-func (a *appState) inspectorAlign(c *ui.Context) {
-	lines := a.alignLines()
-	if len(lines) == 0 {
-		return
+// boolLine spells a boolean for a detail row.
+func boolLine(v bool, a *appState) string {
+	if v {
+		return a.tr("yes", "是")
 	}
-	tone := alignTone(a.alignState())
-	ui.Box(c).Height(1).WidthPercent(100).Background(colorLine)
-	ui.Text(c, "align").FontSize(textMicro).TextColor(colorDim)
-	for index, line := range lines {
-		text := ui.Text(c, line).FontSize(textSmall).TextColor(tone).Wrap()
-		if index < 3 {
-			text.FontFeatures("tnum")
-		}
-	}
+	return a.tr("no", "否")
 }

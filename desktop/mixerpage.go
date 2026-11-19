@@ -17,16 +17,16 @@ import (
 func (a *appState) mixerPage(c *ui.Context) {
 	ui.Column(c).Fill().Grow(1).Gap(spaceSm).Padding(spaceMd).Children(func() {
 		ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "output").Width(70).FontSize(textSmall).TextColor(colorTextDim)
-			ui.Text(c, "system default (device switching unavailable)").
+			ui.Text(c, a.tr("Output", "输出")).Width(70).FontSize(textSmall).TextColor(colorTextDim)
+			ui.Text(c, a.tr("system default", "系统默认设备")).
 				FontSize(textSmall).SingleLine().TextColor(colorTextDim)
 		})
 		ui.Text(c, a.overlayLine()).FontSize(textSmall).TextColor(colorText).Wrap()
 
 		ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
-			label := "Mute everything"
+			label := a.tr("Mute everything", "全部静音")
 			if a.masterMute {
-				label = "Everything muted"
+				label = a.tr("Everything muted", "已全部静音")
 			}
 			if ui.Button(c.Key("mixer-master"), label).Width(150).Height(30).Clicked() {
 				a.report(a.runCommand(command{Kind: commandMasterMute}))
@@ -40,15 +40,14 @@ func (a *appState) mixerPage(c *ui.Context) {
 					a.mixerRow(c, i, it)
 				}
 				if len(a.items) == 0 {
-					ui.Text(c, "no sources are open; add one on the Sources page").
+					ui.Text(c, a.tr("No sources are open.", "还没有打开的来源。")).
 						FontSize(textSmall).TextColor(colorTextDim)
 				}
 			})
 		})
 
-		ui.Text(c, "not in this build: a shared PCM bus, ducking, panning, per-source EQ, "+
-			"choosing another output device, and a level meter. Each source is played by its own "+
-			"player into the default device.").
+		ui.Text(c, a.tr("Each source plays through its own player into the system default device.",
+			"每个来源用自己的播放器输出到系统默认设备。")).
 			FontSize(textMicro).TextColor(colorDim).Wrap()
 	})
 }

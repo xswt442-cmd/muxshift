@@ -442,86 +442,112 @@ func (a *appState) nudgeSelected(dx, dy float32) {
 	a.dragByIn(it, handleNone, dx, dy, a.stageW, a.stageH)
 }
 
-// editControls are the inspector's stage section: the four numbers, the
-// stacking buttons, the lock, fit and reset commands.
+// editControls is the picture tab's stage section: four numbers, the lock,
+// fit and reset commands, and the stacking order. A picture can also be moved
+// and resized by dragging it on the stage; the numbers are the precise path.
 func (a *appState) editControls(c *ui.Context, it *item) {
 	box, ok := a.stageBoxOf(it)
 	if !ok {
-		ui.Text(c, "this source is not on the stage").
-			FontSize(textMicro).TextColor(colorDim).Wrap()
+		ui.Text(c, a.tr("This source is off the stage.", "这个来源不在舞台上。")).
+			FontSize(textSmall).TextColor(colorDim).Wrap()
+		if ui.Button(c.Key("box-put"), a.tr("Put it on the stage", "放到舞台上")).
+			Height(a.controlHeight()).Clicked() {
+			a.selectVideo(it)
+		}
 		return
 	}
-	ui.Box(c).Height(1).WidthPercent(100).Background(colorLine)
-	ui.Text(c, "stage place").FontSize(textMicro).TextColor(colorDim)
-	a.detailRow(c, "box", fmt.Sprintf("x %.2f  y %.2f  w %.2f  h %.2f", box.X, box.Y, box.W, box.H))
 	if a.boxFields.forSource != it.source.ID {
 		a.boxFields = boxFields{forSource: it.source.ID, loaded: true,
 			x: fmt.Sprintf("%.2f", box.X), y: fmt.Sprintf("%.2f", box.Y),
 			w: fmt.Sprintf("%.2f", box.W), h: fmt.Sprintf("%.2f", box.H)}
 	}
+	dirty := a.boxFields.x != fmt.Sprintf("%.2f", box.X) ||
+		a.boxFields.y != fmt.Sprintf("%.2f", box.Y) ||
+		a.boxFields.w != fmt.Sprintf("%.2f", box.W) ||
+		a.boxFields.h != fmt.Sprintf("%.2f", box.H)
+	ui.Row(c).WidthPercent(100).AlignItems(ui.Center).Gap(spaceSm).Children(func() {
+		ui.Text(c, a.tr("Position", "位置与大小")).FontSize(textMicro).TextColor(colorDim)
+		ui.Box(c).Grow(1)
+		if dirty {
+			ui.Text(c, a.tr("not applied", "未应用")).FontSize(textMicro).TextColor(colorWarn)
+		}
+	})
 	fields := []struct {
 		key   string
 		label string
 		value *string
 	}{
-		{"box-x", "x", &a.boxFields.x},
-		{"box-y", "y", &a.boxFields.y},
-		{"box-w", "w", &a.boxFields.w},
-		{"box-h", "h", &a.boxFields.h},
+		{"box-x", "X", &a.boxFields.x},
+		{"box-y", "Y", &a.boxFields.y},
+		{"box-w", "W", &a.boxFields.w},
+		{"box-h", "H", &a.boxFields.h},
 	}
-	// Two rows of two: the pane is 292 wide, and four fields on one line made
-	// the fourth wrap under the first three on its own.
+	// Two rows of two. The label sits above the field, so a narrow column
+	// never squeezes the number into an ellipsis.
 	for row := 0; row < len(fields); row += 2 {
-		ui.Row(c).Gap(spaceXs).WidthPercent(100).Children(func() {
+		ui.Row(c).Gap(spaceSm).WidthPercent(100).Children(func() {
 			for _, field := range fields[row : row+2] {
-				ui.Column(c).Gap(0).Grow(1).Children(func() {
+				ui.Column(c).Gap(2).Grow(1).Children(func() {
 					ui.Text(c, field.label).FontSize(textMicro).TextColor(colorDim)
 					c.Key(field.key)
-					ui.TextInput(c, field.value).Height(24)
+					ui.TextInput(c, field.value).Height(a.controlHeight() - 6)
 				})
 			}
 		})
 	}
-	ui.Row(c).Wrap().Gap(spaceXs).Children(func() {
-		if ui.Button(c.Key("box-apply"), "Apply").Width(72).Height(24).Clicked() {
+	ui.Row(c).Gap(spaceXs).WidthPercent(100).Children(func() {
+		apply := ui.Button(c.Key("box-apply"), a.tr("Apply", "应用")).Height(a.controlHeight() - 6)
+		if !dirty {
+			apply.Disabled(true)
+		}
+		if apply.Clicked() {
 			a.applyBoxFields(it)
 		}
-		if ui.Button(c.Key("box-fit"), "Fit").Width(56).Height(24).Clicked() {
+		if ui.Button(c.Key("box-fit"), a.tr("Fit", "适应")).Height(a.controlHeight() - 6).Clicked() {
 			a.fitStage(it.source.ID)
 			a.reloadBoxFields(it)
 		}
-		if ui.Button(c.Key("box-reset"), "Reset").Width(64).Height(24).Clicked() {
+		if ui.Button(c.Key("box-reset"), a.tr("Reset", "重置")).Height(a.controlHeight() - 6).Clicked() {
 			a.forgetBox(it.source.ID)
 			a.reloadBoxFields(it)
 		}
-		if ui.Button(c.Key("box-ratio"), ratioLabel(!a.freeRatio)).Width(96).Height(24).Clicked() {
+	})
+	ui.Row(c).Wrap().Gap(spaceXs).Padding(spaceXs, 0).Children(func() {
+		ratio := a.tr("Keep ratio", "锁定比例")
+		if a.freeRatio {
+			ratio = a.tr("Any ratio", "自由比例")
+		}
+		if ui.Button(c.Key("box-ratio"), ratio).Height(24).Padding(0, spaceXs).
+			Tooltip(a.tr("drag a corner to resize", "拖角可以改大小")).Clicked() {
 			a.freeRatio = !a.freeRatio
 		}
-		if ui.Button(c.Key("box-lock"), lockLabel(a.stageLocked(it.source.ID))).Width(76).Height(24).Clicked() {
+		lock := a.tr("Lock", "锁定")
+		if a.stageLocked(it.source.ID) {
+			lock = a.tr("Unlock", "解锁")
+		}
+		if ui.Button(c.Key("box-lock"), lock).Height(24).Padding(0, spaceXs).Clicked() {
 			a.toggleStageLock(it.source.ID)
 		}
-	})
-	ui.Row(c).Wrap().Gap(spaceXs).Children(func() {
-		if ui.Button(c.Key("layer-front"), "Front").Width(64).Height(24).Clicked() {
+		front := a.tr("Front", "置顶")
+		forward := a.tr("Up", "上移")
+		backward := a.tr("Down", "下移")
+		back := a.tr("Back", "置底")
+		if ui.Button(c.Key("layer-front"), front).Height(24).Padding(0, spaceXs).Clicked() {
 			a.raiseStage(it.source.ID, true)
 		}
-		if ui.Button(c.Key("layer-forward"), "Up").Width(52).Height(24).Clicked() {
+		if ui.Button(c.Key("layer-forward"), forward).Height(24).Padding(0, spaceXs).Clicked() {
 			a.raiseStage(it.source.ID, false)
 		}
-		if ui.Button(c.Key("layer-backward"), "Down").Width(72).Height(24).Clicked() {
+		if ui.Button(c.Key("layer-backward"), backward).Height(24).Padding(0, spaceXs).Clicked() {
 			a.lowerStage(it.source.ID, false)
 		}
-		if ui.Button(c.Key("layer-back"), "Back").Width(60).Height(24).Clicked() {
+		if ui.Button(c.Key("layer-back"), back).Height(24).Padding(0, spaceXs).Clicked() {
 			a.lowerStage(it.source.ID, true)
 		}
 	})
 	if a.boxFields.note != "" {
 		ui.Text(c, a.boxFields.note).FontSize(textMicro).TextColor(colorBad).Wrap()
 	}
-	ui.Text(c, "drag a picture to move it, its corner or edge to resize; the numbers above are fractions of the stage.").
-		FontSize(textMicro).TextColor(colorDim).Wrap()
-	ui.Text(c, "a layout lives in this session only: a scene has no identity across restarts yet, so nothing is written to disk.").
-		FontSize(textMicro).TextColor(colorDim).Wrap()
 }
 
 // stageBoxOf is the box the inspector reports for a picture.

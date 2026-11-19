@@ -390,6 +390,8 @@ func (a *appState) view(c *ui.Context) {
 	if a.zoom > 0 {
 		c.SetZoom(a.zoom)
 	}
+	a.detectLocale(c.Locale())
+	a.syncAppearance()
 	c.SetTheme(muxshiftTheme())
 	// P10: a watching mode draws the picture and its overlay instead of the
 	// workbench. The keys stay available there, because a mode that can only be
@@ -443,42 +445,9 @@ func (a *appState) view(c *ui.Context) {
 	// so the picture is never covered.
 	width, height := c.Size()
 	a.lastWidth, a.lastHeight = width, height
-	ui.Column(c).Fill().Background(colorBg).Children(func() {
-		a.topBar(c, width, height)
-		ui.Row(c).WidthPercent(100).Grow(1).Gap(a.space(6, spaceMd)).Padding(a.space(6, spaceMd)).AlignItems(ui.Stretch).Children(func() {
-			a.railPane(c, width, height)
-			ui.Column(c).Grow(1).MinWidth(0).Gap(a.space(6, spaceMd)).AlignItems(ui.Start).Children(func() {
-				if a.workspace == workspaceStage {
-					a.center(c, width, height)
-					return
-				}
-				// P16.0: another page keeps the picture mounted and hidden, so
-				// the media keeps running and the stage comes back current.
-				a.parkedStage(c)
-				switch a.workspace {
-				case workspaceSources:
-					a.sourcesPage(c)
-				case workspaceDiagnostics:
-					a.diagnosticsPage(c)
-				case workspaceSettings:
-					a.settingsPage(c)
-				case workspaceMixer:
-					a.mixerPage(c)
-				}
-			})
-			a.inspectorPane(c, width, height)
-		})
-		if a.dock.shown(a.settings.DockOpen && height >= dockAutoHeight) {
-			a.dockPane(c)
-		}
-		a.statusBar(c)
-		// P1: the add-a-source chooser, one layer above the workbench. It is
-		// drawn here rather than inside a page so both entry points — the top
-		// bar's Open… and the Sources page's Add — show the same panel.
-		if a.addOpen {
-			ui.Modal(c, &a.addOpen, func() { a.addSourcePanel(c) })
-		}
-	})
+	a.detectLocale(c.Locale())
+	a.syncAppearance()
+	a.shell(c, width, height)
 }
 
 // stagePictures is the list of sources the stage draws in this frame: the ones
@@ -676,22 +645,33 @@ func (a *appState) stage(c *ui.Context) {
 			a.stageEditing(c, geometry, bounds.W, bounds.H)
 		}
 		if len(shown) == 0 {
-			// An empty stage says what to do and offers the two first steps,
-			// instead of naming a button that is not on this page.
+			// An empty stage asks for the one thing it needs. A file is the
+			// common case, so it is the primary button; an address is the
+			// second. The wording is the window's language, not the code's.
 			ui.Column(c).Fill().Center().Gap(spaceSm).Children(func() {
-				ui.Text(c, "no picture yet").FontSize(textTitle).TextColor(colorTextDim)
-				ui.Text(c, "a file, a media address or a website: any of the three lands here.").
+				ui.Text(c, a.tr("No picture yet", "还没有画面")).
+					FontSize(textTitle).TextColor(colorText)
+				ui.Text(c, a.tr("Drop in a file, or paste an address that plays.",
+					"打开一个文件，或粘贴一个能播放的地址。")).
 					FontSize(textSmall).TextColor(colorDim)
-				ui.Row(c).Gap(spaceSm).Children(func() {
-					if ui.Button(c.Key("empty-open"), "Open\u2026").Width(96).Height(30).Clicked() {
+				ui.Row(c).Gap(spaceSm).Padding(0, spaceSm).Children(func() {
+					if ui.Button(c.Key("empty-open"), a.tr("Open a file\u2026", "打开文件\u2026")).
+						Height(a.controlHeight()).Padding(0, spaceMd).
+						Background(colorAccent).TextColor(colorAccentText).Clicked() {
+						if path, err := a.chooseLocalFile(); err != nil || path != "" {
+							a.acceptPickedFile(path, err)
+						}
+					}
+					if ui.Button(c.Key("empty-address"), a.tr("Add an address\u2026", "添加地址\u2026")).
+						Height(a.controlHeight()).Padding(0, spaceMd).Clicked() {
 						a.openAddSource()
 					}
-					if ui.Button(c.Key("empty-sources"), "Sources").Width(96).Height(30).
-						Tooltip("list every source and show one").Clicked() {
-						a.workspace = workspaceSources
-						a.invalidate()
-					}
 				})
+				if ui.Button(c.Key("empty-sources"), a.tr("See every source", "查看全部来源")).
+					Height(24).Background(colorPanel).Clicked() {
+					a.workspace = workspaceSources
+					a.invalidate()
+				}
 			})
 		}
 	})
@@ -700,133 +680,6 @@ func (a *appState) stage(c *ui.Context) {
 	if stage.DoubleClicked() && a.viewing.editing() {
 		a.enterViewing(viewFullscreen, a.windowRef())
 	}
-}
-
-// transportRow is play/pause for the whole group plus the actions that act on
-// the first source, as the web page's control bar does.
-func (a *appState) transportRow(c *ui.Context) {
-	ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
-		label := "Pause all"
-		if !a.sync.playhead.Playing() {
-			label = "Play all"
-		}
-		if ui.Button(c.Key("pause-all"), label).Width(96).Clicked() {
-			kind := commandPlay
-			if a.sync.playhead.Playing() {
-				kind = commandPause
-			}
-			result := a.runCommand(command{Kind: kind})
-			a.report(result)
-			if result.Err != nil {
-				a.syncNote = "sync: group command reported: " + result.Err.Error()
-			} else {
-				members, _ := a.group()
-				a.syncNote = "sync: group command done for " + itoa(len(members)) + " source(s)"
-			}
-		}
-		if main := a.first(); main != nil && main.player != nil {
-			if ui.Button(c.Key("mute"), muteLabel(rawPlayer(main.player))).Width(88).Clicked() {
-				main.player.SetMuted(!main.player.Muted())
-			}
-		}
-		if ui.Button(c.Key("reload"), "Reload").Width(88).Clicked() {
-			if first := a.first(); first != nil {
-				a.report(a.runCommand(command{Kind: commandReload, Source: first.source.ID}))
-			}
-		}
-		if ui.Button(c.Key("quit"), "Close").Width(88).Clicked() {
-			a.release()
-			mygo.App.Quit()
-		}
-	})
-}
-
-// sourceCard is one source: its name, what the scene does with it, and the
-// controls that change that. The web page lists the same fields in the same
-// order, which is what keeps the two clients recognisable as one product.
-// sourceCard is one source in the Sources list. The row is the selection: a
-// click makes the inspector follow this source. A card carries only the quick
-// actions; the rest live in the inspector, so a source row does not turn into a
-// wall of buttons.
-func (a *appState) sourceCard(c *ui.Context, i int, it *item) {
-	item := it
-	selected := a.selected == item.source.ID
-	row := ui.Row(c).Gap(spaceSm).Padding(spaceSm, spaceMd).Radius(radiusMd).Wrap().
-		AlignItems(ui.Center).Background(colorPanel)
-	if selected {
-		row.Border(2, colorAccent).Background(colorPanel2)
-	} else {
-		row.Border(1, colorLine)
-	}
-	row.OnClick(func() { a.selected = item.source.ID }).Children(func() {
-		ui.Column(c).Gap(spaceXs).Grow(1).Children(func() {
-			ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, itoa(i+1)).FontSize(textMicro).TextColor(colorTextDim).FontFeatures("tnum")
-				ui.Text(c, shortURI(item.uri)).FontSize(textBody).TextColor(colorText)
-				if item.shown {
-					pill(c, "PICTURE", colorAccent, true)
-				}
-				heard := item.audio != "" && item.player != nil && !item.player.Muted()
-				if heard {
-					pill(c, "SOUND", colorSound, true)
-				}
-				if item.openErr != nil {
-					pill(c, "error", colorBad, true)
-				}
-			})
-			ui.Text(c, status(item)).FontSize(textMicro).TextColor(colorTextDim).FontFeatures("tnum")
-		})
-		if item.video != "" {
-			label := "Show"
-			tip := "put this source's picture on the stage (Ctrl+S)"
-			if item.shown {
-				label = "Hide"
-				tip = "take this source's picture off the stage (Ctrl+S)"
-			}
-			if ui.Button(c.Key("show-"+itoa(i)), label).Width(72).KeyShortcuts(ui.Ctrl, ui.KeyS).
-				Tooltip(tip).Clicked() {
-				a.selectVideo(item)
-			}
-			if item.shown && a.layout != layoutFocus {
-				if ui.Button(c.Key("main-"+itoa(i)), "Main").Width(64).
-					Tooltip("put this picture in the layout's largest slot").Clicked() {
-					a.setPrimary(item.source.ID)
-				}
-			}
-			// P13.3: the stacking order a picture gets here is the order the
-			// stage draws, the same one the inspector's four buttons set.
-			if item.shown && len(a.shownIDs()) > 1 {
-				if ui.Button(c.Key("front-"+itoa(i)), "Front").Width(58).Height(26).
-					Tooltip("draw this picture above the other shown sources").Clicked() {
-					a.raiseStage(item.source.ID, true)
-				}
-				if ui.Button(c.Key("back-"+itoa(i)), "Back").Width(54).Height(26).
-					Tooltip("draw this picture below the other shown sources").Clicked() {
-					a.lowerStage(item.source.ID, true)
-				}
-			}
-		}
-		if item.audio != "" {
-			if ui.Button(c.Key("hear-"+itoa(i)), "Hear").Width(72).KeyShortcuts(ui.Ctrl, ui.KeyH).
-				Tooltip("hear this source's audio (Ctrl+H)").Clicked() {
-				a.selectAudio(item)
-			}
-		}
-		if item.openErr != nil {
-			if ui.Button(c.Key("retry-"+itoa(i)), "Retry").Width(72).KeyShortcuts(ui.Ctrl, ui.KeyR).
-				Tooltip("open a new player for this source (Ctrl+R)").Clicked() {
-				a.report(a.runCommand(command{Kind: commandRetry, Source: item.source.ID}))
-			}
-		}
-		// Peek would need a second player for the same source: one video element
-		// cannot draw a player twice. The button stays visible so the feature is
-		// findable, and says why it is not available instead of pretending.
-		ui.Button(c.Key("peek-"+itoa(i)), "Peek").Width(64).Disabled(true).
-			Tooltip("Peek needs a second player for the same source; not implemented yet")
-		if ui.Button(c.Key("remove-"+itoa(i)), "Remove").Width(80).Clicked() {
-			a.report(a.runCommand(command{Kind: commandRemove, Source: item.source.ID}))
-		}
-	})
 }
 
 // selectVideo shows a source's picture and makes the inspector follow it.
@@ -839,22 +692,6 @@ func (a *appState) selectVideo(it *item) {
 func (a *appState) selectAudio(it *item) {
 	a.selected = it.source.ID
 	a.report(a.runCommand(command{Kind: commandHear, Source: it.source.ID}))
-}
-
-// pill draws a short label, the desktop equivalent of the web page's .chip and
-// .badge elements. MyGo boxes do not size themselves around their children, so
-// the label is drawn as coloured text between two thin rules instead.
-func pill(c *ui.Context, label string, tint ui.Color, on bool) {
-	textColor := colorTextDim
-	if on {
-		textColor = tint
-	}
-	// SingleLine: in a narrow window a wrapping label turned "1 source" into a
-	// two line column and made the bar taller than its buttons. The box keeps
-	// the label from being squeezed into "2 sour…" when the switches need room.
-	ui.Box(c).MinWidth(labelWidth(label, textMicro)).Children(func() {
-		ui.Text(c, label).FontSize(textMicro).TextColor(textColor).SingleLine()
-	})
 }
 
 // labelWidth estimates the width a one-line label needs. It is deliberately a
@@ -1025,9 +862,8 @@ func main() {
 		media = append(media, *replay)
 		replayMode = true
 	}
-	if len(media) == 0 {
-		log.Fatal("muxshift-desktop: -media or -replay is required")
-	}
+	// No media is a real state: first run shows the empty stage with one way
+	// in, instead of refusing to open a window.
 	for _, uri := range media {
 		if !isNetworkAddress(uri) {
 			if _, err := os.Stat(uri); err != nil {

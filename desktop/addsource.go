@@ -8,6 +8,7 @@ package main
 // be a stream.
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -40,28 +41,30 @@ func (c addChoice) key() string {
 	return "none"
 }
 
-func (c addChoice) label() string {
+func (a *appState) addChoiceLabel(c addChoice) string {
 	switch c {
 	case addChoiceFile:
-		return "Local file"
+		return a.tr("Local file", "本地文件")
 	case addChoiceMedia:
-		return "Media link"
+		return a.tr("Media link", "媒体地址")
 	case addChoiceSite:
-		return "Website address"
+		return a.tr("Website address", "网页地址")
 	}
-	return "Nothing chosen"
+	return a.tr("Nothing chosen", "还没选")
 }
 
-func (c addChoice) explanation() string {
+// addChoiceExplanation is one short line, not a paragraph: the chooser's three
+// buttons already say what they do.
+func (a *appState) addChoiceExplanation(c addChoice) string {
 	switch c {
 	case addChoiceFile:
-		return "A video on this machine. It opens the desktop's own file picker, and what you pick joins this session like any other source."
+		return a.tr("a video on this machine; the system picker chooses it", "本机上的视频，由系统文件选择器挑选")
 	case addChoiceMedia:
-		return "An http(s) address to a playlist or a single file. It is read away from the drawing thread and joins this session when the first picture is ready."
+		return a.tr("an http(s) playlist or file, read in the background", "一个 http(s) 播放列表或文件，在后台读取")
 	case addChoiceSite:
-		return "A page in your browser. The system browser opens it, and the MuxShift extension there hands one media address back; the page itself never becomes a source. A browser without the extension can only be used through Media link."
+		return a.tr("opens the page in your browser; the extension hands the media back", "在浏览器里打开页面，由扩展把媒体交回来")
 	}
-	return "Say which of the three you have. The app does not guess from what is typed in the address field."
+	return ""
 }
 
 // openAddSource opens the chooser from either entry point and forgets what the
@@ -98,7 +101,7 @@ func (a *appState) submitAddSource() (commandResult, bool) {
 		a.closeAddSource()
 		return result, true
 	case addChoiceSite:
-		if err := siteAddressProblem(a.addSiteText); err != nil {
+		if err := a.siteAddressProblem(a.addSiteText); err != nil {
 			a.addNote, a.addNoteBad = err.Error(), true
 			return commandResult{}, false
 		}
@@ -237,7 +240,7 @@ func (a *appState) openSiteAddress(text string) (commandResult, bool) {
 // the chooser's Add and Enter in the Sources address field go through it, so a
 // person who types an address sees one set of rules.
 func (a *appState) addMediaAddress(text string) (commandResult, bool) {
-	if err := mediaAddressProblem(text); err != nil {
+	if err := a.mediaAddressProblem(text); err != nil {
 		return commandResult{
 			Command: command{Kind: commandAdd, URI: text},
 			At:      time.Now(),
@@ -252,24 +255,23 @@ func (a *appState) addMediaAddress(text string) (commandResult, bool) {
 // the browser can only be opened again, and saying so keeps the two states apart.
 func (a *appState) addSubmitLabel() string {
 	if a.addChoice == addChoiceSite && a.siteOpened {
-		return "Open again"
+		return a.tr("Open again", "再次打开")
 	}
-	return "Add"
+	return a.tr("Add", "添加")
 }
 
-// addSourcePanel draws the chooser inside the modal's panel.
+// addSourcePanel draws the chooser inside the dialog's panel. Three buttons,
+// one line under them, one field: the panel explains itself by being short.
 func (a *appState) addSourcePanel(c *ui.Context) {
 	// The website choice needs a browser, and the frame's context owns the only
 	// way to ask for one. Handing it over here keeps the choice usable from the
 	// panel alone, while a test can still put its own opener in place instead.
 	a.contextOpenURL = c.OpenURLThen
-	ui.Column(c).Gap(spaceSm).MinWidth(520).MaxWidth(560).Children(func() {
-		ui.Text(c, "Add a source").FontSize(textTitle).TextColor(colorText)
-		ui.Text(c, "Three things can be added. Pick the one you have; the app does not guess from the address text.").
-			FontSize(textSmall).TextColor(colorTextDim).Wrap()
+	ui.Column(c).Gap(spaceSm).MinWidth(400).MaxWidth(480).Children(func() {
+		ui.Text(c, a.tr("Add a source", "添加来源")).FontSize(textSubtitle).TextColor(colorText)
 		ui.Row(c).Gap(spaceSm).WidthPercent(100).Children(func() {
 			for _, choice := range []addChoice{addChoiceFile, addChoiceMedia, addChoiceSite} {
-				label := choice.label()
+				label := a.addChoiceLabel(choice)
 				if a.addChoice == choice {
 					label += " ✓"
 				}
@@ -283,16 +285,19 @@ func (a *appState) addSourcePanel(c *ui.Context) {
 				}
 			}
 		})
-		ui.Text(c, a.addChoice.explanation()).FontSize(textSmall).TextColor(colorTextDim).Wrap()
+		if a.addChoice != addChoiceNone {
+			ui.Text(c, a.addChoiceExplanation(a.addChoice)).FontSize(textSmall).
+				TextColor(colorTextDim).Wrap()
+		}
 		switch a.addChoice {
 		case addChoiceMedia:
-			ui.TextInput(c, &a.importText).WidthPercent(100).Height(34).
-				Placeholder("https://… .m3u8  or  C:\\path\\file.mp4").
-				Description("the media address or file path to read")
+			ui.TextInput(c, &a.importText).WidthPercent(100).Height(a.controlHeight()).
+				Placeholder(`https://… .m3u8  or  C:\path\file.mp4`).
+				Description(a.tr("the media address or file path to read", "要读取的媒体地址或文件路径"))
 		case addChoiceSite:
-			ui.TextInput(c, &a.addSiteText).WidthPercent(100).Height(34).
+			ui.TextInput(c, &a.addSiteText).WidthPercent(100).Height(a.controlHeight()).
 				Placeholder("https://example.com/watch?v=…").
-				Description("the page to open in the system browser")
+				Description(a.tr("the page to open in your browser", "要在浏览器里打开的页面"))
 		}
 		if a.addNote != "" {
 			tone := colorTextDim
@@ -303,19 +308,21 @@ func (a *appState) addSourcePanel(c *ui.Context) {
 		}
 		ui.Row(c).Gap(spaceSm).WidthPercent(100).AlignItems(ui.Center).Children(func() {
 			ui.Box(c).Grow(1)
-			if ui.Button(c.Key("add-cancel"), "Cancel").Width(88).Height(34).Clicked() {
+			if ui.Button(c.Key("add-cancel"), a.tr("Cancel", "取消")).Width(88).
+				Height(a.controlHeight()).Clicked() {
 				a.closeAddSource()
 			}
-			submit := ui.Button(c.Key("add-submit"), a.addSubmitLabel()).Width(116).Height(34)
+			submit := ui.Button(c.Key("add-submit"), a.addSubmitLabel()).Width(116).
+				Height(a.controlHeight())
 			switch a.addChoice {
 			case addChoiceMedia:
-				submit.Tooltip("read this address and add it to the session")
+				submit.Tooltip(a.tr("read this address and add it to the session", "读取这个地址并加入本次会话"))
 			case addChoiceSite:
-				submit.Tooltip("open this page in your default browser; the media still has to be handed back")
+				submit.Tooltip(a.tr("open the page; the extension hands the media back", "打开页面，由扩展把媒体交回来"))
 			case addChoiceFile:
-				submit.Tooltip("open the desktop file picker")
+				submit.Tooltip(a.tr("open the desktop file picker", "打开系统文件选择器"))
 			default:
-				submit.Disabled(true).Tooltip("choose what you want to add first")
+				submit.Disabled(true).Tooltip(a.tr("choose one of the three first", "先选这三者之一"))
 			}
 			if submit.Clicked() {
 				a.submitAddSource()
@@ -327,28 +334,28 @@ func (a *appState) addSourcePanel(c *ui.Context) {
 // siteAddressProblem says why an address cannot be opened as a website. A
 // browser follows almost anything, so the checks are explicit: an http(s) page
 // with a host, no space, and no credentials in the address.
-func siteAddressProblem(raw string) error {
+func (a *appState) siteAddressProblem(raw string) error {
 	text := strings.TrimSpace(raw)
 	if text == "" {
-		return fmt.Errorf("type the address of the page to open")
+		return errors.New(a.tr("type the address of the page to open", "先填要打开的网页地址"))
 	}
 	if strings.ContainsAny(text, " \t\r\n") {
-		return fmt.Errorf("the address contains a space; a space in a URL is written %%20")
+		return errors.New(a.tr("the address contains a space; a space in a URL is written %20", "地址里有空格；URL 里的空格要写成 %20"))
 	}
 	u, err := url.Parse(text)
 	if err != nil {
-		return fmt.Errorf("%q is not an address a browser can open: %v", text, err)
+		return errors.New(a.tr("the address is not one a browser can open: ", "浏览器打不开这个地址：") + shortURI(text))
 	}
 	switch u.Scheme {
 	case "http", "https":
 	default:
-		return fmt.Errorf("%q is not an http or https address, so it is not opened", text)
+		return errors.New(a.tr("only http and https addresses can be opened", "只能打开 http 或 https 地址"))
 	}
 	if u.Host == "" {
-		return fmt.Errorf("%q names no host, so it is not opened", text)
+		return errors.New(a.tr("the address names no host", "地址里没有主机名"))
 	}
 	if u.User != nil {
-		return fmt.Errorf("%q carries a user name; this app does not open addresses with credentials", u.Redacted())
+		return errors.New(a.tr("addresses with credentials are not opened", "带用户名的地址不会被打开"))
 	}
 	return nil
 }
@@ -356,32 +363,40 @@ func siteAddressProblem(raw string) error {
 // mediaAddressProblem says why an address cannot be handed to the importer: an
 // absolute local path, or an http(s) URL without credentials. The file's
 // existence is the player's question, not this check's.
-func mediaAddressProblem(raw string) error {
+func (a *appState) mediaAddressProblem(raw string) error {
 	text := strings.TrimSpace(raw)
 	if text == "" {
-		return fmt.Errorf("type a media address or a file path first")
+		return errors.New(a.tr("type a media address or a file path first", "先填媒体地址或文件路径"))
 	}
 	if strings.ContainsAny(text, "\r\n\t") {
-		return fmt.Errorf("the address contains a control character")
+		return errors.New(a.tr("the address contains a control character", "地址里有控制字符"))
 	}
 	if filepath.IsAbs(text) {
 		return nil
 	}
 	u, err := url.Parse(text)
 	if err != nil {
-		return fmt.Errorf("%q is neither an absolute path nor an http(s) address", text)
+		return errors.New(a.tr("this is neither an absolute path nor an http(s) address", "既不是绝对路径，也不是 http(s) 地址"))
 	}
 	if u.Scheme == "http" || u.Scheme == "https" {
 		if u.Host == "" {
-			return fmt.Errorf("%q names no host, so there is nothing to read", text)
+			return errors.New(a.tr("the address names no host, so there is nothing to read", "地址里没有主机名，读不到东西"))
 		}
 		if u.User != nil {
-			return fmt.Errorf("%q carries a user name; this app reads addresses without credentials", u.Redacted())
+			return errors.New(a.tr("addresses with credentials are not read", "带用户名的地址不会被读取"))
 		}
 		return nil
 	}
 	if u.Scheme != "" {
-		return fmt.Errorf("%q uses the %q scheme; only http and https addresses can be read", text, u.Scheme)
+		return errors.New(a.tr("only http and https addresses can be read", "只能读取 http 或 https 地址"))
 	}
-	return fmt.Errorf("%q is a relative path; only an absolute path or an http(s) address can be read", text)
+	return errors.New(a.tr("a relative path cannot be read; use an absolute path or an http(s) address", "相对路径读不了；用绝对路径或 http(s) 地址"))
 }
+
+// siteAddressProblem and mediaAddressProblem keep the package-level entry points
+// the handoff server and the address tests use. They ask the same questions as
+// the methods above; a zero state has no language yet, so their messages stay
+// English and are not shown to a person.
+func siteAddressProblem(raw string) error { return (&appState{}).siteAddressProblem(raw) }
+
+func mediaAddressProblem(raw string) error { return (&appState{}).mediaAddressProblem(raw) }

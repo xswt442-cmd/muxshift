@@ -230,6 +230,33 @@ type appState struct {
 	// first thing checked so a second Add cannot start a second read.
 	importing string
 
+	// The shell's own state. systemLang is the window's locale, resolved once on
+	// the first frame, and is what "follow the system" means. applied* remember
+	// which appearance the token vars were last rebuilt from, so a settings
+	// change is noticed once instead of every frame.
+	systemLang   string
+	appliedTheme string
+	appliedScale string
+
+	// The panels the shell can show without a page change: the error report, the
+	// page menu, the scene menu and the narrow window's properties drawer.
+	errorOpen     bool
+	pageMenu      bool
+	sceneMenu     bool
+	drawerOpen    bool
+	leftCollapsed bool
+	// editingShell mounts the editing columns. It is false by default: the
+	// window is a player first, the workbench is something you open.
+	editingShell bool
+	// propsTab is the properties panel's tab: 0 picture, 1 sound, 2 time.
+	propsTab int
+
+	// editMode is the stage's editing switch: handles and the properties
+	// form are live while it is on.
+	editMode bool
+	// mixerOpen folds the mixer panel in the right column.
+	mixerOpen bool
+
 	// closed is set by the window's close handler. A landing that arrives after
 	// it has nothing to write into: the session and the players were released.
 	closed bool

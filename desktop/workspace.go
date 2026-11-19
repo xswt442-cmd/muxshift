@@ -56,55 +56,59 @@ func (w workspace) title() string {
 func (a *appState) sourcesPage(c *ui.Context) {
 	ui.Column(c).Fill().Grow(1).Gap(spaceSm).Children(func() {
 		a.importRow(c)
-		ui.Text(c, fmt.Sprintf("%d source(s); click a row to inspect it", len(a.items))).
-			FontSize(textSmall).TextColor(colorTextDim)
+		ui.Text(c, a.tr("Sources", "来源")).FontSize(textSubtitle).TextColor(colorText)
 		ui.Scroll(c).Grow(1).WidthPercent(100).Children(func() {
-			ui.Column(c).WidthPercent(100).Gap(spaceSm).Children(func() {
+			ui.Column(c).WidthPercent(100).Gap(spaceXs).Children(func() {
 				for i, it := range a.items {
-					a.sourceCard(c, i, it)
+					a.sourceEntry(c, it, i, false)
 				}
 				if len(a.items) == 0 {
-					ui.Text(c, "no sources yet: press Add to pick a file, a media address or a website").
-						FontSize(textBody).TextColor(colorTextDim).Padding(spaceMd, 0)
+					ui.Column(c).Padding(spaceXl, 0).Gap(spaceSm).Children(func() {
+						ui.Text(c, a.tr("No sources yet", "还没有来源")).
+							FontSize(textSubtitle).TextColor(colorTextDim)
+						if ui.Button(c.Key("empty-add"), a.tr("Add a source", "添加来源")).
+							Width(140).Height(a.controlHeight()).Clicked() {
+							a.openAddSource()
+						}
+					})
 				}
 			})
 		})
 	})
 }
 
-// importRow is the address field and the Add button. P1 routes Add into the
-// same three-way chooser the top bar's Open… opens; Enter in the field still
-// reads the address it holds, because the field says what it is for. A failed
-// read keeps the address here with a Retry, because the source it never added
-// has no card to retry from.
+// importRow is the address field and the Add button. Enter reads the address it
+// holds; the button opens the three-way chooser, because a person who has not
+// typed anything yet is choosing what kind of thing they have. A failed read
+// keeps the address here with a Retry: the source it never added has no card to
+// retry from.
 func (a *appState) importRow(c *ui.Context) {
 	ui.Column(c).WidthPercent(100).Gap(spaceXs).Children(func() {
 		ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).WidthPercent(100).Children(func() {
 			c.Key("import-url")
-			field := ui.TextInput(c, &a.importText).Grow(1).Height(34).
-				Placeholder("https://… .m3u8  or  C:\\path\\file.mp4").
-				Description("a media address or an absolute file path")
+			field := ui.TextInput(c, &a.importText).Grow(1).Height(a.controlHeight()).
+				Placeholder(`https://… .m3u8  or  C:\path\file.mp4`).
+				Description(a.tr("a media address or an absolute file path", "媒体地址或绝对文件路径"))
 			if field.Submitted() && a.importing == "" {
 				result, _ := a.addMediaAddress(a.importText)
 				a.report(result)
 			}
-			label := "Add…"
+			label := a.tr("Add…", "添加…")
 			if a.importing != "" {
-				// Loading feedback with a real clock, not an animation: the
-				// seconds come from importSince and the ticker repaints.
-				label = fmt.Sprintf("Reading… %.0fs", time.Since(a.importSince).Seconds())
+				label = fmt.Sprintf(a.tr("Reading… %.0fs", "读取中… %.0f 秒"), time.Since(a.importSince).Seconds())
 			}
-			add := ui.Button(c.Key("import-add"), label).Width(96).Height(34).
-				Tooltip("add a source: a file, a media address or a website")
+			add := ui.Button(c.Key("import-add"), label).Width(96).Height(a.controlHeight()).
+				Tooltip(a.tr("add a file, a media address or a website", "添加文件、媒体地址或网页"))
 			if a.importing != "" {
-				add.Disabled(true).Tooltip("the read is in flight; Cancel stops it")
+				add.Disabled(true).Tooltip(a.tr("the read is in flight; Cancel stops it", "正在读取；按取消可以停下"))
 			}
 			if add.Clicked() {
 				a.openAddSource()
 			}
 			if a.importing != "" {
-				if ui.Button(c.Key("import-cancel"), "Cancel").Width(76).Height(34).
-					Tooltip("stop reading " + shortURI(a.importing) + "; nothing is added").
+				if ui.Button(c.Key("import-cancel"), a.tr("Cancel", "取消")).Width(76).
+					Height(a.controlHeight()).
+					Tooltip(a.tr("stop reading; nothing is added", "停止读取，不会添加") + " " + shortURI(a.importing)).
 					Clicked() {
 					a.report(a.runCommand(command{Kind: commandCancelImport}))
 				}
@@ -113,15 +117,15 @@ func (a *appState) importRow(c *ui.Context) {
 		failed := a.lastCommand.Command.Kind == commandAdd && a.lastCommand.Err != nil
 		if failed {
 			ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).WidthPercent(100).Children(func() {
-				// One line, with the whole error on the tooltip: wrapped over
-				// three lines in a narrow window it pushed Retry onto its own
-				// row, and a failure message must not move the button that
-				// retries it.
-				message := fmt.Sprintf("last import failed: %v", a.lastCommand.Err)
-				ui.Text(c, message).FontSize(textMicro).TextColor(colorBad).
-					Grow(1).SingleLine().Tooltip(message)
-				if ui.Button(c.Key("import-retry"), "Retry").Width(76).Height(26).Clicked() {
+				ui.Text(c, a.errorShort()).FontSize(textMicro).TextColor(colorBad).
+					Grow(1).SingleLine().Tooltip(a.lastCommand.Err.Error())
+				if ui.Button(c.Key("import-retry"), a.tr("Retry", "重试")).Width(76).
+					Height(26).Clicked() {
 					a.report(a.runCommand(command{Kind: commandAdd, URI: a.lastCommand.Command.URI}))
+				}
+				if ui.Button(c.Key("import-error-open"), a.tr("Details", "详情")).Width(76).
+					Height(26).Clicked() {
+					a.errorOpen = true
 				}
 			})
 		}
@@ -168,15 +172,15 @@ func (a *appState) diagnosticsPage(c *ui.Context) {
 		}
 		// P5: the browser's way in. The code is short-lived on purpose; making a
 		// new one never closes the listener a paired browser already uses.
-		ui.Text(c, "browser handoff").FontSize(textMicro).TextColor(colorTextDim)
+		ui.Text(c, a.tr("browser handoff", "浏览器接入")).FontSize(textMicro).TextColor(colorTextDim)
 		switch {
 		case a.handoffErr != "":
 			ui.Text(c, a.handoffErr).FontSize(textSmall).TextColor(colorBad).SingleLine()
 		default:
 			ui.Row(c).Gap(spaceXs).Children(func() {
 				ui.Text(c, a.handoff.codeLine()).FontSize(textSmall).TextColor(colorText).FontFeatures("tnum")
-				ui.Button(c.Key("handoff-new-code"), "New code").Height(28).Width(104).
-					Tooltip("the browser pairs with this code instead of the expired one").
+				ui.Button(c.Key("handoff-new-code"), a.tr("New code", "换一个码")).Height(28).Width(104).
+					Tooltip(a.tr("the browser pairs with this code instead of the expired one", "浏览器用这个新码配对，旧码随即失效")).
 					OnClick(func() {
 						if a.handoff != nil {
 							a.handoff.rotate()
@@ -184,22 +188,22 @@ func (a *appState) diagnosticsPage(c *ui.Context) {
 						}
 					})
 			})
-			ui.Text(c, "load extension/ unpacked in Edge or Chrome, open its popup and pair once with the code above").
+			ui.Text(c, a.tr("load the unpacked extension in Edge or Chrome, open its popup and pair once with the code above", "在 Edge 或 Chrome 里加载解包扩展，打开弹窗，用上面的码配对一次")).
 				FontSize(textMicro).TextColor(colorTextDim)
 		}
 		if rows := a.dvrRows(); len(rows) > 0 {
-			ui.Text(c, "replay buffers (live)").FontSize(textMicro).TextColor(colorTextDim)
+			ui.Text(c, a.tr("replay buffers (live)", "回放缓存（实时）")).FontSize(textMicro).TextColor(colorTextDim)
 			for _, row := range rows {
 				ui.Text(c, row).FontSize(textSmall).TextColor(colorText).FontFeatures("tnum")
 			}
 			ui.Text(c, a.budgetLine()).FontSize(textMicro).TextColor(colorTextDim)
-			ui.Button(c.Key("dvr-cleanup"), "Forget recordings nothing plays").Height(28).Width(268).
+			ui.Button(c.Key("dvr-cleanup"), a.tr("Forget recordings nothing plays", "清掉没有在播放的录制")).Height(28).Width(268).
 				OnClick(func() { a.cleanupDVR() })
 			if a.dvrNote != "" {
-				ui.Text(c, "last cleanup: "+a.dvrNote).FontSize(textMicro).TextColor(colorTextDim)
+				ui.Text(c, a.tr("last cleanup: ", "上次清理：")+a.dvrNote).FontSize(textMicro).TextColor(colorTextDim)
 			}
 		}
-		ui.Text(c, "background work").FontSize(textMicro).TextColor(colorTextDim)
+		ui.Text(c, a.tr("background work", "后台任务")).FontSize(textMicro).TextColor(colorTextDim)
 		{
 			count, last := a.backgroundFailures()
 			line := fmt.Sprintf("%d failure(s) this run · %s", count, last.line())
@@ -207,10 +211,10 @@ func (a *appState) diagnosticsPage(c *ui.Context) {
 				line = last.line()
 			}
 			ui.Text(c, line).FontSize(textSmall).TextColor(colorText).Wrap()
-			ui.Text(c, "Dismissing the notification in the status bar hides the message; this count keeps the record.").
+			ui.Text(c, a.tr("the status bar notice can be dismissed; this count keeps the record", "状态条上的提示可以关掉，这里的计数会保留")).
 				FontSize(textMicro).TextColor(colorTextDim)
 		}
-		ui.Text(c, "session events").FontSize(textMicro).TextColor(colorTextDim)
+		ui.Text(c, a.tr("session events", "会话事件")).FontSize(textMicro).TextColor(colorTextDim)
 		events := a.session.Events()
 		start := 0
 		if len(events) > 12 {

@@ -302,16 +302,123 @@ func (a *appState) stripStatus() string {
 
 // sceneColumn is the left column: the scene list, the source list and the page
 // shortcuts at the bottom.
+// sourceDot is the colour of the state mark: red for a source that failed,
+// pale for one that has no player yet, green once it is on the stage.
+func (a *appState) sourceDot(it *item) ui.Color {
+	switch {
+	case it.openErr != nil:
+		return colorBad
+	case it.player == nil:
+		return colorLine
+	case it.shown:
+		return colorGood
+	}
+	return colorDim
+}
+
 // sourceEntry is the only place a source is drawn. It comes in two densities —
-// a row inside the scene column and a card on the Sources page — and the
-// callers never choose between two separate renderers, so a change to how a
-// source reports itself lands in both places at once.
+// a row inside the scene column and a card on the Sources page — but the state
+// mark, the name and the second line are the same code in both, so the two
+// views cannot drift apart.
 func (a *appState) sourceEntry(c *ui.Context, it *item, index int, compact bool) {
+	active := a.selected == it.source.ID
+	row := ui.Row(c).WidthPercent(100).Gap(spaceXs).AlignItems(ui.Center)
 	if compact {
-		a.sourceRow(c, it, index)
+		row = row.Height(a.rowHeight()).Padding(0, spaceSm).Radius(6).
+			OnClick(func() { a.selected = it.source.ID })
+		if active {
+			row = row.Background(colorPanel2)
+		}
+	} else {
+		row = row.Wrap().Gap(spaceSm).Padding(spaceSm, spaceMd).Radius(10).
+			Background(colorPanel).Border(1, colorLine)
+	}
+	nameSize := textBody
+	subSize := textMicro
+	if compact {
+		nameSize = textCaption
+		subSize = textMicro
+	}
+	row.Children(func() {
+		if !compact {
+			ui.Text(c, itoa(index+1)).FontSize(textMicro).TextColor(colorDim).
+				Width(16).FontFeatures("tnum")
+		}
+		ui.Box(c).Width(6).Height(6).Radius(3).Background(a.sourceDot(it))
+		ui.Column(c).Grow(1).Gap(0).Children(func() {
+			ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, shortURI(it.uri)).FontSize(nameSize).TextColor(colorText).SingleLine()
+				if !compact {
+					a.sourceMarks(c, it)
+				}
+			})
+			ui.Text(c, a.sourceSub(it)).FontSize(subSize).TextColor(colorDim).SingleLine()
+		})
+		if compact {
+			a.sourceEye(c, it)
+			return
+		}
+		a.sourceActions(c, it)
+	})
+}
+
+// sourceMarks says, in a card, what the source contributes to the scene.
+func (a *appState) sourceMarks(c *ui.Context, it *item) {
+	if it.openErr != nil {
+		pill(c, a.tr("error", "错误"), colorBad, false)
 		return
 	}
-	a.sourceCard(c, it, index)
+	if it.video != "" {
+		pill(c, "PICTURE", colorAccent, false)
+	}
+	if it.audio != "" {
+		pill(c, "SOUND", colorSound, false)
+	}
+}
+
+// sourceEye is the compact density's one control: the mark is a state, and only
+// the off-stage state is a button, because this build has no "take it off the
+// stage" command — a source leaves the stage by being removed.
+func (a *appState) sourceEye(c *ui.Context, it *item) {
+	if it.shown {
+		ui.Box(c).Width(24).Height(22).Center().Tooltip(a.tr("on the stage", "在舞台上")).
+			Children(func() { ui.Text(c, "◉").FontSize(textCaption).TextColor(colorGood) })
+		return
+	}
+	if ui.Button(c.Key("sc-eye-"+string(it.source.ID)), "○").Width(24).Height(22).
+		Tooltip(a.tr("put it on the stage", "放到舞台上")).Clicked() {
+		a.selected = it.source.ID
+		a.selectVideo(it)
+	}
+}
+
+// sourceActions is the card density's control row.
+func (a *appState) sourceActions(c *ui.Context, it *item) {
+	ui.Row(c).Gap(spaceXs).Children(func() {
+		show := a.tr("Hide", "隐藏")
+		if !it.shown {
+			show = a.tr("Show", "显示")
+		}
+		if ui.Button(c.Key("card-show-"+string(it.source.ID)), show).Height(28).Clicked() {
+			a.selectVideo(it)
+		}
+		if ui.Button(c.Key("card-hear-"+string(it.source.ID)), a.tr("Hear", "试听")).Height(28).Clicked() {
+			a.selectAudio(it)
+		}
+		if it.audio != "" {
+			if ui.Button(c.Key("card-allow-"+string(it.source.ID)), a.shortAllowLabel(it)).Height(28).Clicked() {
+				a.runCommand(command{Kind: commandAllow, Source: it.source.ID})
+			}
+		}
+		if it.openErr != nil {
+			if ui.Button(c.Key("card-retry-"+string(it.source.ID)), a.tr("Retry", "重试")).Height(28).Clicked() {
+				a.runCommand(command{Kind: commandRetry, Source: it.source.ID})
+			}
+		}
+		if ui.Button(c.Key("card-remove-"+string(it.source.ID)), a.tr("Remove", "移除")).Height(28).Clicked() {
+			a.runCommand(command{Kind: commandRemove, Source: it.source.ID})
+		}
+	})
 }
 
 func (a *appState) sceneColumn(c *ui.Context) {
@@ -354,45 +461,6 @@ func (a *appState) sceneRow(c *ui.Context) {
 		ui.Text(c, a.sceneLabelText()).FontSize(textBody).TextColor(colorText).SingleLine()
 		ui.Box(c).Grow(1)
 		ui.Text(c, itoa(len(a.items))).FontSize(textMicro).TextColor(colorDim)
-	})
-}
-
-// sourceRow is one line in the source list: what it is, whether it is on the
-// stage, and its state. The properties column carries everything else.
-func (a *appState) sourceRow(c *ui.Context, it *item, index int) {
-	active := a.selected == it.source.ID
-	row := ui.Row(c).WidthPercent(100).Height(a.rowHeight()).Padding(0, spaceSm).
-		Gap(spaceXs).AlignItems(ui.Center).Radius(6).
-		OnClick(func() { a.selected = it.source.ID })
-	if active {
-		row = row.Background(colorPanel2)
-	}
-	row.Children(func() {
-		dot := colorDim
-		switch {
-		case it.openErr != nil:
-			dot = colorBad
-		case it.player == nil:
-			dot = colorLine
-		case it.shown:
-			dot = colorGood
-		}
-		ui.Box(c).Width(6).Height(6).Radius(3).Background(dot)
-		ui.Column(c).Grow(1).Gap(0).Children(func() {
-			ui.Text(c, shortURI(it.uri)).FontSize(textCaption).TextColor(colorText).SingleLine()
-			ui.Text(c, a.sourceSub(it)).FontSize(textMicro).TextColor(colorDim).SingleLine()
-		})
-		// This build has no "take it off the stage" command: a source leaves the
-		// stage by being removed. The mark therefore shows the state, and only
-		// the off-stage state is a button.
-		if it.shown {
-			ui.Box(c).Width(24).Height(22).Center().Tooltip(a.tr("on the stage", "在舞台上")).
-				Children(func() { ui.Text(c, "◉").FontSize(textCaption).TextColor(colorGood) })
-		} else if ui.Button(c.Key("sc-eye-"+string(it.source.ID)), "○").Width(24).Height(22).
-			Tooltip(a.tr("put it on the stage", "放到舞台上")).Clicked() {
-			a.selected = it.source.ID
-			a.selectVideo(it)
-		}
 	})
 }
 
@@ -1025,55 +1093,6 @@ func (a *appState) sceneMenuPanel(c *ui.Context, width float32) {
 
 // sourceCard is the Sources page's row: the whole width, the file, its state and
 // the actions that do not belong in the scene list.
-func (a *appState) sourceCard(c *ui.Context, it *item, index int) {
-	ui.Row(c).WidthPercent(100).Padding(spaceSm, spaceMd).Gap(spaceSm).Wrap().
-		AlignItems(ui.Center).Radius(10).Background(colorPanel).
-		Border(1, colorLine).Children(func() {
-		ui.Text(c, itoa(index+1)).FontSize(textMicro).TextColor(colorDim).Width(16).FontFeatures("tnum")
-		ui.Column(c).Grow(1).Gap(2).Children(func() {
-			ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, shortURI(it.uri)).FontSize(textBody).TextColor(colorText).SingleLine()
-				if it.openErr != nil {
-					pill(c, a.tr("error", "错误"), colorBad, false)
-				} else {
-					if it.video != "" {
-						pill(c, "PICTURE", colorAccent, false)
-					}
-					if it.audio != "" {
-						pill(c, "SOUND", colorSound, false)
-					}
-				}
-			})
-			ui.Text(c, a.sourceSub(it)).FontSize(textMicro).TextColor(colorDim).SingleLine()
-		})
-		ui.Row(c).Gap(spaceXs).Children(func() {
-			show := a.tr("Hide", "隐藏")
-			if !it.shown {
-				show = a.tr("Show", "显示")
-			}
-			if ui.Button(c.Key("card-show-"+string(it.source.ID)), show).Height(28).Clicked() {
-				a.selectVideo(it)
-			}
-			if ui.Button(c.Key("card-hear-"+string(it.source.ID)), a.tr("Hear", "试听")).Height(28).Clicked() {
-				a.selectAudio(it)
-			}
-			if it.audio != "" {
-				if ui.Button(c.Key("card-allow-"+string(it.source.ID)), a.shortAllowLabel(it)).Height(28).Clicked() {
-					a.runCommand(command{Kind: commandAllow, Source: it.source.ID})
-				}
-			}
-			if it.openErr != nil {
-				if ui.Button(c.Key("card-retry-"+string(it.source.ID)), a.tr("Retry", "重试")).Height(28).Clicked() {
-					a.runCommand(command{Kind: commandRetry, Source: it.source.ID})
-				}
-			}
-			if ui.Button(c.Key("card-remove-"+string(it.source.ID)), a.tr("Remove", "移除")).Height(28).Clicked() {
-				a.runCommand(command{Kind: commandRemove, Source: it.source.ID})
-			}
-		})
-	})
-}
-
 // pill is a small label in a source card. The fill is the colour at a low alpha
 // and the text is the colour itself, so the pair keeps its contrast in every
 // theme pack.

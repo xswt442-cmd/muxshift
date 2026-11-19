@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -42,6 +43,17 @@ type settings struct {
 
 	// Compact tightens the spacing of the workbench.
 	Compact bool `json:"compact"`
+
+	// Language is the window's language: "auto" follows the system, "zh" and
+	// "en" are explicit choices a person made.
+	Language string `json:"language"`
+
+	// Theme names one of the palette packs in tokens.go; TypeScale names one of
+	// the three text scales; FontFamily is a family the window can ask for, or
+	// "auto" to follow the language.
+	Theme      string `json:"theme"`
+	TextScale  string `json:"textScale"`
+	FontFamily string `json:"fontFamily"`
 
 	// Workspace is the remembered shape of the window: its frame, the page it
 	// was on and the panes a person left open or closed (P18.1).
@@ -159,6 +171,10 @@ func defaultSettings() settings {
 		MasterVolume:  1,
 		DockOpen:      false,
 		Compact:       false,
+		Language:      languageAuto,
+		Theme:         "midnight",
+		TextScale:     "standard",
+		FontFamily:    "auto",
 		DVR:           builtinDVRBudget(),
 		// Source memory starts off in both senses: nothing is applied and
 		// nothing new is recorded until a person asks for it.
@@ -182,6 +198,7 @@ func sameSettings(a, b settings) bool {
 	if a.StartPage != b.StartPage || a.DefaultVolume != b.DefaultVolume || a.NudgeStep != b.NudgeStep ||
 		a.MuteUnaligned != b.MuteUnaligned || a.MasterVolume != b.MasterVolume ||
 		a.DockOpen != b.DockOpen || a.Compact != b.Compact ||
+		a.Language != b.Language || a.Theme != b.Theme || a.TextScale != b.TextScale || a.FontFamily != b.FontFamily ||
 		a.Workspace != b.Workspace || a.DVR != b.DVR {
 		return false
 	}
@@ -203,9 +220,10 @@ func sameSettings(a, b settings) bool {
 // remembered addresses: a log line is copied into evidence, bug reports and
 // terminal scrollback, and an address can carry a private path or a host name.
 func settingsSummary(st settings) string {
-	return fmt.Sprintf("start page %q, nudge %.2fs, default volume %.2f, master %.2f, mute unaligned %v, dock %v, compact %v, dvr %s, source memory %d entr(ies) on=%v remember=%v set=%s",
+	return fmt.Sprintf("start page %q, nudge %.2fs, default volume %.2f, master %.2f, mute unaligned %v, dock %v, compact %v, language %q, theme %q, text scale %q, font %q, dvr %s, source memory %d entr(ies) on=%v remember=%v set=%s",
 		st.StartPage, st.NudgeStep, st.DefaultVolume, st.MasterVolume, st.MuteUnaligned,
-		st.DockOpen, st.Compact, st.DVR.line(), len(st.SourceMemory.Entries),
+		st.DockOpen, st.Compact, st.Language, st.Theme, st.TextScale, st.FontFamily,
+		st.DVR.line(), len(st.SourceMemory.Entries),
 		st.SourceMemory.On, st.SourceMemory.Remember, memoryDigest(st.SourceMemory))
 }
 
@@ -236,14 +254,65 @@ func validateSourceMemory(m sourceMemory) error {
 	return nil
 }
 
+// fontSettings are the font settings the Appearance page offers. "auto" follows
+// the language; the rest are families the build can rely on being installed.
+var fontSettings = []string{"auto", "segoe", "yahei", "cascadia", "inter"}
+
+func validFontChoice(name string) bool {
+	for _, choice := range fontSettings {
+		if choice == name {
+			return true
+		}
+	}
+	return false
+}
+
+func validScaleName(name string) bool {
+	for _, scale := range typeScales {
+		if scale.name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func validThemeName(name string) bool {
+	for _, pack := range themePacks {
+		if pack.name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // validateSettings rejects values the rest of the code cannot honour. A file
 // that fails this check is not used at all: half-applied settings would be
 // worse than the defaults, which are always valid.
 func validateSettings(s settings) error {
+	// Appearance arrived after the first settings files were written. An empty
+	// value means "this file predates the field", which is not a mistake: the
+	// reader fills it with the default. Rejecting the whole file over it would
+	// throw away settings the user did choose.
+	if s.Language != "" {
+		switch normalizeLanguage(s.Language) {
+		case languageAuto, languageZH, languageEN:
+		default:
+			return fmt.Errorf("language %q is not auto, zh or en", s.Language)
+		}
+	}
 	switch s.StartPage {
 	case "stage", "sources":
 	default:
 		return fmt.Errorf("startPage %q is not a page, want stage or sources", s.StartPage)
+	}
+	if s.Theme != "" && !validThemeName(s.Theme) {
+		return fmt.Errorf("theme %q is not one of the packs this build carries", s.Theme)
+	}
+	if s.TextScale != "" && !validScaleName(s.TextScale) {
+		return fmt.Errorf("textScale %q is not compact, standard or large", s.TextScale)
+	}
+	if s.FontFamily != "" && !validFontChoice(s.FontFamily) {
+		return fmt.Errorf("fontFamily %q is not a family the Appearance page offers", s.FontFamily)
 	}
 	if s.DefaultVolume < 0 || s.DefaultVolume > 1 {
 		return fmt.Errorf("defaultVolume %.3f is not a level between 0 and 1", s.DefaultVolume)
@@ -444,17 +513,48 @@ func (a *appState) volumeFor(level float64) float64 {
 }
 
 // settingsSections names the page's sections in the order the page shows them.
-var settingsSections = []string{"General", "Playback", "Sources", "Audio", "DVR", "Appearance", "Shortcuts", "Diagnostics"}
+// Six, not eight: the master volume belongs with the other playback levels, and
+// the shortcut list is reference material for the same page that explains the
+// keys, not a destination of its own.
+var settingsSections = []string{"General", "Playback", "Appearance", "Sources", "DVR", "Diagnostics"}
+
+// settingsSectionLabel is the section's name in the window's language. The key
+// in settingsSections stays English so a settings file or a log line never
+// depends on the language the window happens to be in.
+func (a *appState) settingsSectionLabel(name string) string {
+	switch name {
+	case "General":
+		return a.tr("General", "通用")
+	case "Playback":
+		return a.tr("Playback", "播放")
+	case "Appearance":
+		return a.tr("Appearance", "外观")
+	case "Sources":
+		return a.tr("Sources", "来源")
+	case "DVR":
+		return a.tr("DVR", "回放缓存")
+	case "Diagnostics":
+		return a.tr("Diagnostics", "诊断")
+	}
+	return name
+}
+
+// choiceOption is one button in a segmented choice: the value stored in the
+// settings and the text drawn for it.
+type choiceOption struct {
+	value string
+	label string
+}
 
 // settingsPage draws the Global Settings page. The page edits a draft; nothing
 // reaches the session until Apply, and Cancel puts the draft back.
 func (a *appState) settingsPage(c *ui.Context) {
 	ui.Row(c).Fill().AlignItems(ui.Start).Gap(spaceLg).Padding(spaceMd).Children(func() {
 		ui.Column(c).Width(190).Gap(spaceXs).Padding(spaceSm).Children(func() {
-			ui.Text(c, "settings").FontSize(textMicro).TextColor(colorDim)
+			ui.Text(c, a.tr("settings", "设置")).FontSize(textMicro).TextColor(colorDim)
 			for _, section := range settingsSections {
 				name := section
-				button := ui.Button(c.Key("settings-tab-"+name), name).Width(170).Height(32)
+				button := ui.Button(c.Key("settings-tab-"+name), a.settingsSectionLabel(name)).Width(170).Height(32)
 				if name == a.settingsSection {
 					button = button.Background(colorAccentSoft).Border(1, colorAccent)
 				}
@@ -468,7 +568,7 @@ func (a *appState) settingsPage(c *ui.Context) {
 			ui.Text(c, a.settingsBoundary()).FontSize(textMicro).TextColor(colorDim).Wrap()
 		})
 		ui.Column(c).Grow(1).Gap(spaceSm).Padding(spaceMd).Children(func() {
-			ui.Text(c, a.settingsSection).FontSize(textTitle)
+			ui.Text(c, a.settingsSectionLabel(a.settingsSection)).FontSize(textTitle)
 			a.settingsForm(c)
 			if a.settingsErr != "" {
 				ui.Text(c, a.settingsErr).TextColor(colorBad).Wrap()
@@ -478,18 +578,25 @@ func (a *appState) settingsPage(c *ui.Context) {
 			}
 			dirty := !sameSettings(a.settingsDraft, a.settings)
 			ui.Row(c).Gap(spaceSm).Padding(0, spaceSm).Children(func() {
-				if ui.Button(c.Key("settings-apply"), "Apply").Width(100).Disabled(!dirty).Clicked() {
+				apply := ui.Button(c.Key("settings-apply"), a.tr("Apply", "应用")).Width(100).Disabled(!dirty)
+				if dirty {
+					apply = apply.Border(1, colorAccent)
+				}
+				if apply.Clicked() {
 					a.applySettingsCommand()
 				}
-				if ui.Button(c.Key("settings-cancel"), "Cancel").Width(100).Disabled(!dirty).Clicked() {
+				if ui.Button(c.Key("settings-cancel"), a.tr("Cancel", "取消")).Width(100).Disabled(!dirty).Clicked() {
 					a.beginDraft(a.settings)
 					a.settingsErr = ""
-					a.settingsNote = "cancelled: the draft is back to what is applied"
+					a.settingsNote = a.tr("cancelled: the draft is back to what is applied", "已取消：草稿恢复为当前生效的设置")
 				}
-				if ui.Button(c.Key("settings-reset"), "Reset to defaults").Width(160).Clicked() {
+				if ui.Button(c.Key("settings-reset"), a.tr("Reset to defaults", "恢复默认")).Width(160).Clicked() {
 					a.beginDraft(defaultSettings())
 					a.settingsErr = ""
-					a.settingsNote = "the draft is back to the defaults; Apply writes them (remembered addresses stay until you forget them)"
+					a.settingsNote = a.tr("defaults are in the draft; Apply writes them", "默认值已填入草稿，点击“应用”写入")
+				}
+				if dirty {
+					ui.Text(c, a.tr("unsaved changes", "有未应用的更改")).FontSize(textMicro).TextColor(colorWarn)
 				}
 			})
 		})
@@ -500,11 +607,11 @@ func (a *appState) settingsPage(c *ui.Context) {
 func (a *appState) settingsBoundary() string {
 	switch {
 	case a.settingsPath == "":
-		return "nothing is saved: this start has no configuration directory"
+		return a.tr("nothing is saved: this start has no configuration directory", "不会保存：本次启动没有配置目录")
 	case a.settingsSaved.Load():
-		return "applied settings are saved to " + a.settingsPath
+		return a.tr("saved to ", "已保存到 ") + a.settingsPath
 	default:
-		return "applied settings are saved to " + a.settingsPath + " (this start has not written it yet)"
+		return a.tr("will be saved to ", "将保存到 ") + a.settingsPath
 	}
 }
 
@@ -512,115 +619,157 @@ func (a *appState) settingsBoundary() string {
 func (a *appState) settingsForm(c *ui.Context) {
 	switch a.settingsSection {
 	case "General":
-		a.settingsRow(c, "Open on", func() { ui.Select(c, &a.settingsDraft.StartPage, []string{"stage", "sources"}).Width(220) })
-		a.settingsHint(c, "the start page is read when the window opens, so it takes effect on the next start")
-		ui.Checkbox(c, &a.settingsDraft.Workspace.On, "Come back to the window I left: its frame, page and panes")
-		a.settingsHint(c, "written when the window closes; a frame no display can show falls back to the primary display, and a page or pane name this build does not know is refused")
+		a.choiceRow(c, a.tr("Language", "语言"), "settings-language", &a.settingsDraft.Language, []choiceOption{
+			{"auto", a.tr("System", "跟随系统")},
+			{"zh", "中文"},
+			{"en", "English"},
+		})
+		a.settingsHint(c, a.tr("follows the Windows display language until you choose one", "默认跟随 Windows 显示语言，选择后以你的选择为准"))
+		a.choiceRow(c, a.tr("Open on", "启动页"), "settings-start", &a.settingsDraft.StartPage, []choiceOption{
+			{"stage", a.tr("Stage", "舞台")},
+			{"sources", a.tr("Sources", "来源")},
+		})
+		a.settingsSlider(c, a.tr("Nudge step", "微调步长"), &a.settingsDraft.NudgeStep, 0.02, 1)
+		ui.Checkbox(c, &a.settingsDraft.Workspace.On, a.tr("Reopen the window where I left it", "记住窗口位置与页面"))
+		a.settingsHint(c, a.tr("written when the window closes; an unknown page or frame falls back", "关窗时保存；页面或窗口位置无效时回到默认"))
+		ui.Text(c, a.tr("Keys", "快捷键")).FontSize(textMicro).TextColor(colorDim).Padding(spaceSm, 0)
+		a.shortcutLine(c, "Ctrl+S", a.tr("show or hide the selected source", "显示/隐藏选中来源"))
+		a.shortcutLine(c, "Ctrl+H", a.tr("hear the selected source", "试听选中来源"))
+		a.shortcutLine(c, "Ctrl+R", a.tr("retry the selected player", "重试选中来源的播放器"))
+		a.shortcutLine(c, "Ctrl+1 … 5", a.tr("stage, sources, diagnostics, settings, mixer", "舞台、来源、诊断、设置、混音"))
+		a.shortcutLine(c, "F11 / Esc", a.tr("window full screen, back to editing", "窗口全屏、返回编辑"))
+		a.settingsHint(c, a.tr("a text field keeps the keys to itself while it has the focus", "文本框获得焦点时这些键不生效"))
 	case "Playback":
-		a.settingsSlider(c, "Default volume for new sources", &a.settingsDraft.DefaultVolume, 0, 1)
-		ui.Checkbox(c, &a.settingsDraft.MuteUnaligned, "Mute a source until its place on the shared timeline is known")
-		a.settingsHint(c, "with this off, an unaligned source can be heard before anyone allows it; the per-source Allow button still overrides the mute")
+		a.settingsSlider(c, a.tr("Default volume for new sources", "新来源的默认音量"), &a.settingsDraft.DefaultVolume, 0, 1)
+		a.settingsSlider(c, a.tr("Master volume", "总音量"), &a.settingsDraft.MasterVolume, 0, 1)
+		a.settingsHint(c, a.tr("the master multiplies every source; per-source levels live in the mixer", "总音量作用于所有来源；单个来源的音量在混音器里"))
+		ui.Checkbox(c, &a.settingsDraft.MuteUnaligned, a.tr("Keep an unplaced source silent until it is allowed", "共同时间轴未确定的来源先静音"))
+		a.settingsHint(c, a.tr("with this off, sound can play before a person allows it", "关闭后，未对齐的来源可能提前出声"))
+		a.settingsHint(c, a.tr("a source's own Allow button still overrides the mute", "来源自己的“允许”按钮仍然优先"))
 	case "Sources":
-		ui.Checkbox(c, &a.settingsDraft.SourceMemory.On, "Use the level and mute I set for a source when its address comes back")
-		ui.Checkbox(c, &a.settingsDraft.SourceMemory.Remember, "Remember the level and mute of sources I add from now on").Disabled(!a.settingsDraft.SourceMemory.On).
-			Tooltip("memory is off, so nothing new is remembered")
-		a.settingsHint(c, "remembered: the level and the mute of an http(s) address or an absolute file path. Not remembered: where playback stopped, timeline offsets, whether an unaligned source was allowed, or the session itself. It is a preference, not an authorisation: a remembered address is not opened again, and a remembered level does not allow an unaligned source to be heard.")
+		ui.Checkbox(c, &a.settingsDraft.SourceMemory.On, a.tr("Reuse the level and mute I set for a source", "来源再次出现时沿用音量和静音"))
+		ui.Checkbox(c, &a.settingsDraft.SourceMemory.Remember, a.tr("Remember new sources' level and mute", "记住新来源的音量与静音")).Disabled(!a.settingsDraft.SourceMemory.On).
+			Tooltip(a.tr("memory is off, so nothing new is remembered", "记忆已关闭，不会记录新来源"))
+		a.settingsHint(c, a.tr("remembers level and mute only; never reopens an address and never allows a source", "只记住音量与静音；不会重新打开地址，也不会授权任何来源"))
 		if !a.settingsDraft.SourceMemory.On && a.settingsDraft.SourceMemory.Remember {
-			ui.Text(c, "Remember is on while memory is off, so nothing is written; Apply keeps both switches as they stand.").
+			ui.Text(c, a.tr("Remember is on while memory is off, so nothing is written", "记忆关闭时“记住”不起作用，不会写入")).
 				FontSize(textMicro).TextColor(colorWarn).Wrap()
 		}
-		// The draft's switches only take effect on Apply, so say so rather than
-		// letting somebody believe they just stopped the writing.
 		if a.settingsDraft.SourceMemory.On != a.settings.SourceMemory.On || a.settingsDraft.SourceMemory.Remember != a.settings.SourceMemory.Remember {
-			ui.Text(c, "this is a draft: the switches above take effect when Apply is pressed").
+			ui.Text(c, a.tr("draft: these switches take effect on Apply", "草稿：点击“应用”后生效")).
 				FontSize(textMicro).TextColor(colorWarn).Wrap()
 		}
 		entries := a.settingsDraft.SourceMemory.Entries
 		if len(entries) == 0 {
-			ui.Text(c, "no address is remembered").FontSize(textMicro).TextColor(colorDim)
+			ui.Text(c, a.tr("no remembered address", "没有记住的地址")).FontSize(textMicro).TextColor(colorDim)
 		} else {
-			ui.Text(c, fmt.Sprintf("%d remembered address(es), most recently saved first", len(entries))).
+			ui.Text(c, strconv.Itoa(len(entries))+a.tr(" remembered address(es), newest first", " 个地址已记住，最近的在前")).
 				FontSize(textMicro).TextColor(colorDim)
 			for i, entry := range entries {
 				if i >= 4 {
-					ui.Text(c, fmt.Sprintf("… and %d more", len(entries)-4)).FontSize(textMicro).TextColor(colorDim)
+					ui.Text(c, "… "+strconv.Itoa(len(entries)-4)+a.tr(" more", " 个")).FontSize(textMicro).TextColor(colorDim)
 					break
 				}
-				// The page never prints a remembered address: a digest names it
-				// well enough to tell two entries apart in a screenshot.
 				muted := ""
 				if entry.Muted {
-					muted = ", muted"
+					muted = a.tr(", muted", "，已静音")
 				}
 				ui.Text(c, fmt.Sprintf("%s  %.0f%%%s", identityDigest(entry.Address), entry.Volume*100, muted)).
 					FontSize(textMicro).TextColor(colorTextDim)
 			}
 			if !a.settingsDraft.SourceMemory.On {
-				ui.Text(c, fmt.Sprintf("%d remembered sources are currently inactive; Clear them to delete their saved preferences.", len(entries))).
+				ui.Text(c, strconv.Itoa(len(entries))+a.tr(" remembered sources are inactive while memory is off", " 个已记住的来源在记忆关闭期间不生效")).
 					FontSize(textMicro).TextColor(colorWarn).Wrap()
 			}
-			if ui.Button(c.Key("settings-memory-clear"), "Forget every remembered address").Width(280).Clicked() {
+			if ui.Button(c.Key("settings-memory-clear"), a.tr("Forget every remembered address", "清除所有记住的地址")).Width(280).Clicked() {
 				forgotten := a.settingsDraft.SourceMemory.clear()
 				a.draftCleared = true
-				a.settingsNote = fmt.Sprintf("forgot %d remembered source(s); Apply writes the empty list", forgotten)
+				a.settingsNote = a.tr("forgot ", "已清除 ") + strconv.Itoa(forgotten) + a.tr(" remembered source(s); Apply writes the empty list", " 个记住的来源；应用后写入空列表")
 			}
 		}
-	case "Audio":
-		a.settingsSlider(c, "Master volume", &a.settingsDraft.MasterVolume, 0, 1)
-		a.settingsHint(c, "the master multiplies every source's scene level at its player; per-source levels stay in the inspector")
+	case "Appearance":
+		a.choiceRow(c, a.tr("Colour theme", "配色"), "settings-theme", &a.settingsDraft.Theme, a.themeChoices())
+		a.settingsHint(c, a.tr("applies at once; the stage itself is never tinted", "立即生效；画布本身不着色"))
+		a.choiceRow(c, a.tr("Text size", "字号"), "settings-scale", &a.settingsDraft.TextScale, []choiceOption{
+			{"compact", a.tr("Compact", "紧凑")},
+			{"standard", a.tr("Standard", "标准")},
+			{"large", a.tr("Large", "大")},
+		})
+		a.choiceRow(c, a.tr("Font", "字体"), "settings-font", &a.settingsDraft.FontFamily, a.fontChoices())
+		a.settingsHint(c, a.tr("system picks a family that covers the window's language", "“跟随系统”会按界面语言选择字体"))
+		ui.Checkbox(c, &a.settingsDraft.Compact, a.tr("Tighter spacing", "更紧凑的间距"))
+		ui.Checkbox(c, &a.settingsDraft.DockOpen, a.tr("Show the timeline under the stage", "在画布下方显示时间线"))
+		a.settingsHint(c, a.tr("spacing and the timeline apply when applied; both are remembered", "间距与时间线在应用后生效并记住"))
 	case "DVR":
-		ui.Text(c, "what a new replay buffer may use; the marker shows what a buffer opened now would get").Wrap()
-		// The three numbers a buffer runs with. They are steppers rather than
-		// sliders because a budget is a number a person reads back and a slider
-		// cannot be read from a screenshot.
-		a.dvrStepper(c, "Keep this much history", "dvr-ret-less", "-1 min", "dvr-ret-more", "+1 min",
-			fmt.Sprintf("%d s", a.settingsDraft.DVR.RetentionSeconds), func(delta int) {
+		ui.Text(c, a.tr("what a new replay buffer may use; the marker shows a buffer opened now", "新回放缓存的上限；下方数值为当前生效值")).Wrap()
+		a.dvrStepper(c, a.tr("Keep this much history", "保留时长"), "dvr-ret-less", a.tr("-1 min", "-1 分"), "dvr-ret-more", a.tr("+1 min", "+1 分"),
+			strconv.Itoa(a.settingsDraft.DVR.RetentionSeconds)+a.tr(" s", " 秒"), func(delta int) {
 				next := a.settingsDraft.DVR.RetentionSeconds + 60*delta
 				a.settingsDraft.DVR.RetentionSeconds = min(maxRetentionSeconds, max(minRetentionSeconds, next))
 			})
-		a.dvrStepper(c, "Segment cache limit", "dvr-max-less", "-64 MiB", "dvr-max-more", "+64 MiB",
+		a.dvrStepper(c, a.tr("Segment cache limit", "分片缓存上限"), "dvr-max-less", "-64 MiB", "dvr-max-more", "+64 MiB",
 			bytesLine(a.settingsDraft.DVR.MaxBytes), func(delta int) {
 				next := a.settingsDraft.DVR.MaxBytes + int64(delta)*64<<20
 				a.settingsDraft.DVR.MaxBytes = min(maxBudgetBytes, max(0, next))
 			})
-		a.dvrStepper(c, "Recording limit", "dvr-rec-less", "-64 MiB", "dvr-rec-more", "+64 MiB",
+		a.dvrStepper(c, a.tr("Recording limit", "录制上限"), "dvr-rec-less", "-64 MiB", "dvr-rec-more", "+64 MiB",
 			bytesLine(a.settingsDraft.DVR.RecordingBytes), func(delta int) {
 				next := a.settingsDraft.DVR.RecordingBytes + int64(delta)*64<<20
 				a.settingsDraft.DVR.RecordingBytes = min(maxBudgetBytes, max(0, next))
 			})
-		a.settingsHint(c, "in force for a buffer opened now: "+a.budget.line()+" from "+a.budgetFrom)
+		a.settingsHint(c, a.tr("in force for a buffer opened now: ", "当前生效：")+a.budget.line()+a.tr(" from ", "，来自 ")+a.budgetFrom)
 		if a.settingsDraft.DVR.MaxBytes == 0 || a.settingsDraft.DVR.RecordingBytes == 0 {
-			ui.Text(c, "a zero byte limit is not a small budget: it removes that limit, so only the retention and the disk stop the buffer").
+			ui.Text(c, a.tr("a zero byte limit removes that limit, not shrinks it", "字节上限为 0 表示不限制，而不是更小")).
 				FontSize(textMicro).TextColor(colorWarn).Wrap()
 		}
-		a.settingsHint(c, "command line flags given explicitly win over these numbers; the line above says which rule is in force")
-	case "Appearance":
-		ui.Checkbox(c, &a.settingsDraft.DockOpen, "Open the timeline dock by default")
-		ui.Checkbox(c, &a.settingsDraft.Compact, "Tighter spacing")
-		a.settingsHint(c, "the spacing switch is read on the next start; the dock switch applies as soon as it is applied")
-	case "Shortcuts":
-		a.settingsSlider(c, "Nudge step", &a.settingsDraft.NudgeStep, 0.02, 1)
-		// P18.1: the list is what the window actually binds, read-only. The
-		// transport keys are still unbound, and the list says so instead of
-		// offering a switch that would not do anything.
-		a.shortcutLine(c, "Ctrl+S", "show the selected source")
-		a.shortcutLine(c, "Ctrl+H", "hear the selected source")
-		a.shortcutLine(c, "Ctrl+R", "retry the selected source's player")
-		a.shortcutLine(c, "Ctrl+1 … Ctrl+5", "stage, sources, diagnostics, settings, mixer")
-		a.settingsHint(c, "these keys pause while a text field has the focus, so typing never shows or moves anything")
-		ui.Button(c.Key("shortcut-space"), "Space: play or pause").Width(300).Disabled(true).
-			Tooltip("not bound: the transport buttons are the only play control")
-		ui.Button(c.Key("shortcut-nudge"), "Left/Right: nudge the selected source").Width(300).Disabled(true).
-			Tooltip("not bound: the inspector's -/+ buttons move a source")
-		a.settingsHint(c, "the nudge step above is real: it is the distance the inspector's -/+ buttons move a source")
+		a.settingsHint(c, a.tr("an explicit command line flag wins over these numbers", "命令行显式给出的参数优先"))
 	case "Diagnostics":
-		ui.Text(c, fmt.Sprintf("%d event(s) in the session, %d source(s)", a.eventCount(), len(a.items)))
-		ui.Text(c, "settings file: "+a.settingsPath).Wrap()
-		if ui.Button(c.Key("diag-log-state"), "Write the current state to the log").Width(260).Clicked() {
+		ui.Text(c, strconv.Itoa(a.eventCount())+a.tr(" event(s) in the session, ", " 个事件，")+strconv.Itoa(len(a.items))+a.tr(" source(s)", " 个来源"))
+		ui.Text(c, a.tr("settings file: ", "设置文件：")+a.settingsPath).Wrap()
+		if ui.Button(c.Key("diag-log-state"), a.tr("Write the current state to the log", "把当前状态写入日志")).Width(260).Clicked() {
 			a.logState()
 		}
-		ui.Button(c.Key("diag-capture"), "Capture a page on the next failure").Width(260).Disabled(true).
-			Tooltip("there is no page capture on failure yet")
+		ui.Button(c.Key("diag-capture"), a.tr("Capture a page on the next failure", "下次失败时抓取页面")).Width(260).Disabled(true).
+			Tooltip(a.tr("there is no page capture on failure yet", "尚未实现失败时抓取页面"))
+	}
+}
+
+// choiceRow is a labelled segmented control: every option visible at once, so a
+// five-pack theme list needs no dropdown and no explanation.
+func (a *appState) choiceRow(c *ui.Context, label, key string, current *string, options []choiceOption) {
+	ui.Column(c).Gap(spaceXs).WidthPercent(100).Children(func() {
+		ui.Text(c, label).FontSize(textMicro).TextColor(colorDim)
+		ui.Row(c).Wrap().Gap(spaceXs).Children(func() {
+			for _, option := range options {
+				button := ui.Button(c.Key(key+"-"+option.value), option.label).Height(30).Padding(0, spaceMd)
+				if *current == option.value {
+					button = button.Background(colorAccentSoft).Border(1, colorAccent)
+				}
+				if button.Clicked() {
+					*current = option.value
+				}
+			}
+		})
+	})
+}
+
+// themeChoices names the packs in the window's language.
+func (a *appState) themeChoices() []choiceOption {
+	out := make([]choiceOption, 0, len(themePacks))
+	for _, pack := range themePacks {
+		out = append(out, choiceOption{pack.name, a.tr(pack.label, pack.labelZH)})
+	}
+	return out
+}
+
+// fontChoices labels the font setting.
+func (a *appState) fontChoices() []choiceOption {
+	return []choiceOption{
+		{"auto", a.tr("System", "跟随系统")},
+		{"yahei", a.tr("YaHei (CJK)", "微软雅黑")},
+		{"segoe", "Segoe UI"},
+		{"inter", "Inter"},
+		{"cascadia", a.tr("Cascadia Mono", "Cascadia 等宽")},
 	}
 }
 
@@ -629,7 +778,7 @@ func (a *appState) settingsForm(c *ui.Context) {
 // dvrStepper instead.
 func (a *appState) settingsRow(c *ui.Context, label string, control func()) {
 	ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, label).Width(260)
+		ui.Text(c, label).Width(260).FontSize(textBody).TextColor(colorText)
 		control()
 	})
 }
@@ -656,10 +805,10 @@ func (a *appState) dvrStepper(c *ui.Context, name, lessKey, lessLabel, moreKey, 
 // settingsSlider is a slider with the value spelled out beside it, because a
 // slider alone cannot be read back from a screenshot.
 func (a *appState) settingsSlider(c *ui.Context, label string, value *float64, lo, hi float64) {
-	ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, label)
+	ui.Row(c).Gap(spaceSm).Padding(0, spaceSm).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, label).FontSize(textBody).TextColor(colorText)
 		ui.Box(c).Grow(1)
-		ui.Text(c, fmt.Sprintf("%.2f", *value)).Width(50)
+		ui.Text(c, fmt.Sprintf("%.2f", *value)).Width(64)
 	})
 	ui.Slider(c, value, lo, hi).WidthPercent(100)
 }
@@ -673,8 +822,8 @@ func (a *appState) settingsHint(c *ui.Context, text string) {
 // from the bindings in main.go's view; a key that is not bound is not listed.
 func (a *appState) shortcutLine(c *ui.Context, keys, what string) {
 	ui.Row(c).Gap(12).WidthPercent(100).Children(func() {
-		ui.Text(c, keys).Width(150).FontSize(textMicro).TextColor(colorText)
-		ui.Text(c, what).FontSize(textMicro).TextColor(colorDim)
+		ui.Text(c, keys).Width(150).FontSize(textCaption).TextColor(colorText)
+		ui.Text(c, what).FontSize(textCaption).TextColor(colorTextDim)
 	})
 }
 

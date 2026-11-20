@@ -49,7 +49,7 @@ try {
     $previousCgo = $env:CGO_ENABLED
     $env:CGO_ENABLED = "0"
     try {
-        & go build -trimpath -ldflags "-X main.buildVersion=$stamp -X main.buildCommit=$commit" -o (Join-Path $out "muxshift.exe") .
+        & go build -trimpath -ldflags "-X github.com/xswt442-cmd/muxshift/desktop/internal/version.BuildVersion=$stamp -X github.com/xswt442-cmd/muxshift/desktop/internal/version.BuildCommit=$commit" -o (Join-Path $out "muxshift.exe") .
         if ($LASTEXITCODE -ne 0) { throw "go build failed" }
     }
     finally {

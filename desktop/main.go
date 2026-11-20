@@ -33,6 +33,7 @@ import (
 	"github.com/egoist/mygo/ui/video"
 	"github.com/xswt442-cmd/muxshift/core"
 	"github.com/xswt442-cmd/muxshift/core/dvr"
+	"github.com/xswt442-cmd/muxshift/desktop/internal/version"
 	"github.com/xswt442-cmd/muxshift/desktop/internal/win"
 )
 
@@ -844,7 +845,7 @@ func main() {
 	if *showVersion {
 		// Before every other check: asking a binary what it is must not need a
 		// media address, a window, or a display.
-		fmt.Println(buildLine())
+		fmt.Println(version.BuildLine())
 		return
 	}
 	// Before the first request: the streams a browser can open are the ones this

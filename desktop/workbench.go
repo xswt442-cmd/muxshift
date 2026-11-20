@@ -191,7 +191,9 @@ func (a *appState) pageBody(c *ui.Context, width, height float32) {
 	ui.Box(c).Fill().Padding(spaceMd).Children(func() {
 		switch a.workspace {
 		case workspaceDiagnostics:
-			a.diagnosticsPage(c)
+			ui.Scroll(c).Fill().WidthPercent(100).Children(func() {
+				a.diagnosticsPage(c)
+			})
 		case workspaceSettings:
 			ui.Scroll(c).Fill().WidthPercent(100).Children(func() {
 				a.settingsPage(c)

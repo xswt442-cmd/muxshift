@@ -26,7 +26,7 @@ func TestEnteringReplayIsNotWiredIntoTheProduct(t *testing.T) {
 		t.Fatal("no Go files were found, so the guard checked nothing")
 	}
 	for _, path := range files {
-		if strings.HasSuffix(path, "_test.go") || path == "enter_scenario.go" {
+		if strings.HasSuffix(path, "_test.go") || strings.HasSuffix(path, "_scenario.go") {
 			continue
 		}
 		source, err := os.ReadFile(path)

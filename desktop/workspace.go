@@ -171,43 +171,44 @@ func (a *appState) sourceFacts(it *item) string {
 
 func (a *appState) diagnosticsPage(c *ui.Context) {
 	snapshot := a.snapshot()
-	ui.Column(c).WidthPercent(100).Gap(spaceSm).Children(func() {
-		a.diagCard(c, a.tr("Session", "会话"), func() {
+	ui.Column(c).WidthPercent(100).Padding(spaceSm, spaceMd).Radius(radiusCard).
+		Background(colorPanel).Border(1, colorLineSoft).Gap(0).Children(func() {
+		a.diagSection(c, a.tr("Session", "会话"), func() {
 			ui.Text(c, fmt.Sprintf("session %s · scene %s · video %s · %s",
 				snapshot.Name, snapshot.Scene, pictureLine(snapshot.Picture), soundLine(snapshot.Sound))).
 				FontSize(textSmall).TextColor(colorText).FontFeatures("tnum").Wrap()
 			ui.Text(c, fmt.Sprintf("event %s · playing %v · last %s",
 				snapshot.Event.Round(100*1e6), snapshot.Playing, snapshot.LastCommand)).
-				FontSize(textMicro).TextColor(colorTextDim)
+				FontSize(textSmall).TextColor(colorTextDim)
 		})
 		for i, source := range snapshot.Sources {
-			a.diagCard(c, fmt.Sprintf("%d · %s", i+1, shortURI(source.URI)), func() {
+			a.diagSection(c, fmt.Sprintf("%d · %s", i+1, shortURI(source.URI)), func() {
 				ui.Text(c, fmt.Sprintf("%s · gen %d · %s · ready %v · player %v · playing %v · %s / %s · offset %s",
 					source.ID, source.Generation,
 					tracksLine([]core.TrackID{source.Video, source.Audio}), source.Ready,
 					source.Player, source.Playing,
 					source.Position.Round(100*1e6), source.Duration.Round(100*1e6), source.Offset)).
-					FontSize(textMicro).TextColor(colorTextDim).FontFeatures("tnum").Wrap()
+					FontSize(textSmall).TextColor(colorTextDim).FontFeatures("tnum").Wrap()
 				ui.Text(c, a.sourceFacts(a.find(source.ID))).FontSize(textMicro).
 					TextColor(colorTextDim).FontFeatures("tnum")
 			})
 		}
 		if snapshot.SeekWallClock != "" {
-			a.diagCard(c, a.tr("Seek", "定位"), func() {
+			a.diagSection(c, a.tr("Seek", "定位"), func() {
 				ui.Text(c, fmt.Sprintf("seek %s · requested %s · actual %s · residual %s · window %s · at %s (wall clock)",
 					snapshot.SeekSource, snapshot.SeekRequested.Round(100*1e6), snapshot.SeekActual.Round(100*1e6),
 					snapshot.SeekResidual.Round(100*1e6), snapshot.SeekWindow, snapshot.SeekWallClock)).
-					FontSize(textMicro).TextColor(colorTextDim).FontFeatures("tnum").Wrap()
+					FontSize(textSmall).TextColor(colorTextDim).FontFeatures("tnum").Wrap()
 			})
 		}
 		if a.syncNote != "" {
-			a.diagCard(c, a.tr("Sync", "同步"), func() {
-				ui.Text(c, a.syncNote).FontSize(textMicro).TextColor(colorTextDim).Wrap()
+			a.diagSection(c, a.tr("Sync", "同步"), func() {
+				ui.Text(c, a.syncNote).FontSize(textSmall).TextColor(colorTextDim).Wrap()
 			})
 		}
 		// P5: the browser's way in. The code is short-lived on purpose; making a
 		// new one never closes the listener a paired browser already uses.
-		a.diagCard(c, a.tr("Browser handoff", "浏览器接入"), func() {
+		a.diagSection(c, a.tr("Browser handoff", "浏览器接入"), func() {
 			switch {
 			case a.handoffErr != "":
 				ui.Text(c, a.handoffErr).FontSize(textSmall).TextColor(colorBad).SingleLine()
@@ -229,7 +230,7 @@ func (a *appState) diagnosticsPage(c *ui.Context) {
 			}
 		})
 		if rows := a.dvrRows(); len(rows) > 0 {
-			a.diagCard(c, a.tr("Replay buffers (live)", "回放缓存（实时）"), func() {
+			a.diagSection(c, a.tr("Replay buffers (live)", "回放缓存（实时）"), func() {
 				for _, row := range rows {
 					ui.Text(c, row).FontSize(textSmall).TextColor(colorText).FontFeatures("tnum")
 				}
@@ -241,7 +242,7 @@ func (a *appState) diagnosticsPage(c *ui.Context) {
 				}
 			})
 		}
-		a.diagCard(c, a.tr("Background work", "后台任务"), func() {
+		a.diagSection(c, a.tr("Background work", "后台任务"), func() {
 			count, last := a.backgroundFailures()
 			line := fmt.Sprintf("%d failure(s) this run · %s", count, last.line())
 			if count == 0 {
@@ -251,29 +252,32 @@ func (a *appState) diagnosticsPage(c *ui.Context) {
 			ui.Text(c, a.tr("the status bar notice can be dismissed; this count keeps the record", "状态条上的提示可以关掉，这里的计数会保留")).
 				FontSize(textMicro).TextColor(colorTextDim).Wrap()
 		})
-		a.diagCard(c, a.tr("Session events", "会话事件"), func() {
+		a.diagSection(c, a.tr("Session events", "会话事件"), func() {
 			events := a.session.Events()
 			start := 0
 			if len(events) > 12 {
 				start = len(events) - 12
 			}
-			for _, event := range events[start:] {
-				ui.Text(c, fmt.Sprintf("%3d · %s · %s", event.Seq, event.Kind, event.Object)).
-					FontSize(textMicro).TextColor(colorTextDim).FontFeatures("tnum")
-			}
+			ui.Column(c).WidthPercent(100).Padding(spaceSm, spaceMd).Radius(radiusSm).
+				Background(colorBg).Children(func() {
+				for _, event := range events[start:] {
+					ui.Text(c, fmt.Sprintf("%3d · %s · %s", event.Seq, event.Kind, event.Object)).
+						FontSize(textMicro).TextColor(colorTextDim).FontFeatures("tnum")
+				}
+			})
 		})
 	})
 }
 
-// diagCard is the diagnostics page's section: a quiet card so a dense report
-// reads as a set of named facts rather than a wall of floating lines.
-func (a *appState) diagCard(c *ui.Context, title string, body func()) {
-	ui.Column(c).WidthPercent(100).Gap(spaceXs).Padding(spaceSm, spaceMd).
-		Radius(radiusCard).Background(colorPanel).Border(1, colorLineSoft).
-		Children(func() {
-			ui.Text(c, title).FontSize(textMicro).FontWeight(500).TextColor(colorTextDim).SingleLine()
-			body()
-		})
+// diagSection is one named block inside the diagnostics surface. The page is
+// one continuous Inspector, not a stack of cards: a title, its facts and a
+// single quiet rule.
+func (a *appState) diagSection(c *ui.Context, title string, body func()) {
+	ui.Column(c).WidthPercent(100).Gap(spaceXs).Padding(spaceSm, 0).Children(func() {
+		ui.Text(c, title).FontSize(textBody).FontWeight(600).TextColor(colorText).SingleLine()
+		body()
+	})
+	ui.Box(c).WidthPercent(100).Height(1).Background(colorLineSoft)
 }
 
 // pictureLine renders the scene's video tracks for the diagnostics page.

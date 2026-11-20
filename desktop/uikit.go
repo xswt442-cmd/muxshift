@@ -99,19 +99,17 @@ func (a *appState) ghostIconButton(c *ui.Context, key, label string, icon *ui.SV
 	return button
 }
 
-// rowSurface is the shared inset row: a source, a mixer channel and a sync
-// block sit on the page instead of floating as bare text. The border is the
-// quiet one, so a list of rows reads as one group rather than as a grid.
+// rowSurface is the shared inset row. A list row carries its grouping in the
+// background and its hover/selected state, not in a permanent outline: the
+// outline is reserved for an operation block such as one source's sync card.
 func (a *appState) rowSurface(c *ui.Context) ui.Element {
-	return ui.Row(c).WidthPercent(100).Background(colorBg).Border(1, colorLineSoft).
-		Radius(radiusMd)
+	return ui.Row(c).WidthPercent(100).Background(colorRow).Radius(radiusMd)
 }
 
 // columnSurface is rowSurface for a block with two lines, as one source's
 // sync control is.
 func (a *appState) columnSurface(c *ui.Context) ui.Element {
-	return ui.Column(c).WidthPercent(100).Background(colorBg).
-		Border(1, colorLineSoft).Radius(radiusMd)
+	return ui.Column(c).WidthPercent(100).Background(colorRow).Radius(radiusMd)
 }
 
 // quietIconButton is an operation that carries its state in the icon's ink and

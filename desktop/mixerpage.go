@@ -16,23 +16,28 @@ import (
 // the same action.
 func (a *appState) mixerPage(c *ui.Context) {
 	ui.Column(c).Fill().Grow(1).Gap(spaceSm).Padding(spaceMd).Children(func() {
-		ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, a.tr("Output", "输出")).Width(70).FontSize(textSmall).TextColor(colorTextDim)
-			ui.Text(c, a.tr("system default", "系统默认设备")).
-				FontSize(textSmall).SingleLine().TextColor(colorTextDim)
-		})
-		ui.Text(c, a.overlayLine()).FontSize(textSmall).TextColor(colorText).Wrap()
+		ui.Column(c).WidthPercent(100).Padding(spaceSm, spaceMd).Gap(spaceXs).
+			Radius(radiusCard).Background(colorPanel).Border(1, colorLineSoft).
+			Children(func() {
+				ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, a.tr("Output", "输出")).Width(70).FontSize(textSmall).TextColor(colorTextDim)
+					ui.Text(c, a.tr("system default", "系统默认设备")).
+						FontSize(textSmall).SingleLine().TextColor(colorTextDim)
+				})
+				ui.Text(c, a.overlayLine()).FontSize(textSmall).TextColor(colorText).Wrap()
 
-		ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
-			label := a.tr("Mute everything", "全部静音")
-			if a.masterMute {
-				label = a.tr("Everything muted", "已全部静音")
-			}
-			if ui.Button(c.Key("mixer-master"), label).Width(150).Height(30).Clicked() {
-				a.report(a.runCommand(command{Kind: commandMasterMute}))
-			}
-			ui.Text(c, a.masterNote()).FontSize(textSmall).TextColor(colorTextDim).Wrap()
-		})
+				ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
+					label := a.tr("Mute everything", "全部静音")
+					if a.masterMute {
+						label = a.tr("Everything muted", "已全部静音")
+					}
+					a.mixerAction(c, "mixer-master", label, 150, 30, a.masterMute,
+						ui.RGBA(228, 182, 109, 0.14), colorWarn, func() {
+							a.report(a.runCommand(command{Kind: commandMasterMute}))
+						})
+					ui.Text(c, a.masterNote()).FontSize(textSmall).TextColor(colorTextDim).Wrap()
+				})
+			})
 
 		ui.Scroll(c).Grow(1).WidthPercent(100).Children(func() {
 			ui.Column(c).WidthPercent(100).Gap(spaceSm).Children(func() {
@@ -50,6 +55,33 @@ func (a *appState) mixerPage(c *ui.Context) {
 			"每个来源用自己的播放器输出到系统默认设备。")).
 			FontSize(textMicro).TextColor(colorDim).Wrap()
 	})
+}
+
+// mixerAction is the overlay's one button shape: quiet until hover, a soft
+// state while it applies, and the same pressed step as every other control.
+func (a *appState) mixerAction(c *ui.Context, key, label string, width, height float32, active bool, activeFill, activeInk ui.Color, onClick func()) ui.Element {
+	button := ui.ButtonBase(c.Key(key)).Width(width).Height(height).
+		Padding(0, spaceSm).Radius(radiusSm).AlignItems(ui.Center)
+	fill, ink := ui.Transparent, colorTextDim
+	if active {
+		fill, ink = activeFill, activeInk
+	}
+	if button.Pressed() {
+		fill, ink = colorPressed, colorText
+	} else if button.Hovered() {
+		ink = colorText
+		if !active {
+			fill = colorHover
+		}
+	}
+	button = button.Background(fill).TextColor(ink)
+	button.Children(func() {
+		ui.Text(c, label).FontSize(textMicro).FontWeight(500).TextColor(ink).SingleLine()
+	})
+	if button.Clicked() && onClick != nil {
+		onClick()
+	}
+	return button
 }
 
 // mixerRow is one source: what the scene says, and the overlay's two controls.
@@ -72,24 +104,19 @@ func (a *appState) mixerRow(c *ui.Context, index int, it *item) {
 			if it.muted {
 				muteLabel = "Muted"
 			}
-			if ui.Button(c.Key(fmt.Sprintf("mixer-mute-%d", index)), muteLabel).
-				Width(76).Height(26).FontSize(textMicro).Clicked() {
-				a.report(a.runCommand(command{Kind: commandMute, Source: it.source.ID}))
-			}
-			soloLabel := "Solo"
-			if soloed {
-				soloLabel = "Solo ✓"
-			}
-			if ui.Button(c.Key(fmt.Sprintf("mixer-solo-%d", index)), soloLabel).
-				Width(76).Height(26).FontSize(textMicro).Clicked() {
-				a.report(a.runCommand(command{Kind: commandSolo, Source: it.source.ID}))
-			}
-			if ui.Button(c.Key(fmt.Sprintf("mixer-hear-%d", index)), "Hear").
-				Width(70).Height(26).FontSize(textMicro).
-				Tooltip("routes this source's sound and takes the other sources out of the scene's audio, as the Sources page does").
-				Clicked() {
-				a.report(a.runCommand(command{Kind: commandHear, Source: it.source.ID}))
-			}
+			a.mixerAction(c, fmt.Sprintf("mixer-mute-%d", index), muteLabel, 76, 26,
+				it.muted, ui.RGBA(228, 182, 109, 0.14), colorWarn, func() {
+					a.report(a.runCommand(command{Kind: commandMute, Source: it.source.ID}))
+				})
+			a.mixerAction(c, fmt.Sprintf("mixer-solo-%d", index), "Solo", 76, 26,
+				soloed, colorAccentSoft, colorAccent, func() {
+					a.report(a.runCommand(command{Kind: commandSolo, Source: it.source.ID}))
+				})
+			hear := a.mixerAction(c, fmt.Sprintf("mixer-hear-%d", index), "Hear", 70, 26,
+				false, ui.Transparent, colorTextDim, func() {
+					a.report(a.runCommand(command{Kind: commandHear, Source: it.source.ID}))
+				})
+			hear.Tooltip("routes this source's sound and takes the other sources out of the scene's audio, as the Sources page does")
 		})
 		ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
 			// Show the level the scene actually holds, so a slider and its label

@@ -338,7 +338,7 @@ func (a *appState) sourceEntry(c *ui.Context, it *item, index int, compact bool)
 	if compact {
 		row = row.Height(a.rowHeight()).Padding(0, 10).Radius(radiusMd).
 			OnClick(func() { a.selected = it.source.ID })
-		fill := colorBg
+		fill := colorRow
 		if row.Pressed() {
 			fill = colorPressed
 		} else if active {
@@ -346,7 +346,7 @@ func (a *appState) sourceEntry(c *ui.Context, it *item, index int, compact bool)
 		} else if row.Hovered() {
 			fill = colorHover
 		}
-		row = row.Background(fill).Border(1, colorLineSoft)
+		row = row.Background(fill)
 	} else {
 		row = row.Wrap().Gap(spaceSm).Padding(spaceSm, spaceMd).Radius(radiusCard).
 			Background(colorPanel).Border(1, colorLineSoft)

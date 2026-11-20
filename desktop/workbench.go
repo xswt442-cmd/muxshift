@@ -334,9 +334,17 @@ func (a *appState) sourceEntry(c *ui.Context, it *item, index int, compact bool)
 	active := a.selected == it.source.ID
 	row := ui.Row(c).WidthPercent(100).Gap(spaceXs).AlignItems(ui.Center)
 	if compact {
-		row = row.Height(a.rowHeight()).Padding(0, spaceMd).Radius(radiusMd).
+		row = row.Height(a.rowHeight()).Padding(0, 10).Radius(radiusMd).
 			OnClick(func() { a.selected = it.source.ID })
-		row = row.Background(stateFill(row.Hovered(), row.Pressed(), active))
+		fill := colorBg
+		if row.Pressed() {
+			fill = colorPressed
+		} else if active {
+			fill = colorSelected
+		} else if row.Hovered() {
+			fill = colorHover
+		}
+		row = row.Background(fill).Border(1, colorLineSoft)
 	} else {
 		row = row.Wrap().Gap(spaceSm).Padding(spaceSm, spaceMd).Radius(radiusCard).
 			Background(colorPanel).Border(1, colorLineSoft)
@@ -1145,9 +1153,11 @@ func (a *appState) mixerPanel(c *ui.Context, height float32) {
 
 // mixerChannel is one strip in the mixer: name, mute, level.
 func (a *appState) mixerChannel(c *ui.Context, it *item) {
-	ui.Row(c).WidthPercent(100).Height(32).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
+	row := a.rowSurface(c).Height(40).Padding(0, spaceSm).Gap(spaceXs).
+		AlignItems(ui.Center)
+	row.Children(func() {
 		ui.Box(c).Width(6).Height(6).Radius(3).Background(colorSound)
-		ui.Text(c, shortURI(it.uri)).FontSize(textBody).FontWeight(400).TextColor(colorText).
+		ui.Text(c, shortURI(it.uri)).FontSize(textSmall).FontWeight(400).TextColor(colorText).
 			Grow(1).MinWidth(0).SingleLine()
 		muted := a.sourceMuted(it)
 		icon := lucide.Volume2()

@@ -316,7 +316,7 @@ func (a *appState) dockPanel(c *ui.Context, id string) {
 				})
 				ui.Box(c).WidthPercent(100).Height(1).Background(colorLineSoft)
 				ui.Scroll(c).WidthPercent(100).Grow(1).Children(func() {
-					ui.Column(c).WidthPercent(100).Gap(2).Children(func() {
+					ui.Column(c).WidthPercent(100).Gap(spaceXs).Children(func() {
 						switch id {
 						case dockSources:
 							a.dockSourcesBody(c)
@@ -468,7 +468,7 @@ func (a *appState) dockRowsBody(c *ui.Context) {
 		for i, it := range a.items {
 			row, index := it, i
 			ui.Box(c).WidthPercent(100).Height(48).Radius(radiusCard).Background(colorPanel).
-				Padding(spaceXs, spaceSm).Children(func() {
+				Border(1, colorLineSoft).Padding(spaceXs, spaceSm).Children(func() {
 				ui.Row(c).WidthPercent(100).HeightPercent(100).Gap(spaceXs).
 					AlignItems(ui.Center).Children(func() {
 					ui.Box(c).Width(6).Height(6).Radius(3).Background(a.sourceDot(row))
@@ -587,7 +587,8 @@ func (a *appState) dockSyncBody(c *ui.Context) {
 		return
 	}
 	reference := a.syncReference()
-	ui.Row(c).WidthPercent(100).Height(22).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
+	a.rowSurface(c).Height(28).Padding(0, spaceSm).Gap(spaceXs).
+		AlignItems(ui.Center).Children(func() {
 		label := a.tr("Reference: none", "参考：无")
 		if reference != nil {
 			label = a.tr("Reference: ", "参考：") + a.name(reference)
@@ -603,7 +604,8 @@ func (a *appState) dockSyncBody(c *ui.Context) {
 	for i, it := range a.items {
 		isRef := reference != nil && it.source.ID == reference.source.ID
 		row := it
-		ui.Column(c).WidthPercent(100).Gap(0).Padding(spaceXs, 0).Children(func() {
+		ui.Column(c).WidthPercent(100).Gap(0).Padding(spaceXs, spaceSm).
+			Background(colorBg).Border(1, colorLineSoft).Radius(radiusMd).Children(func() {
 			// The reference is one line: it has no offset to step, and the
 			// second line would only repeat the same word.
 			lineHeight := float32(20)

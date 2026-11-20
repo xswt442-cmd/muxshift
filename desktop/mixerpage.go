@@ -56,7 +56,7 @@ func (a *appState) mixerPage(c *ui.Context) {
 func (a *appState) mixerRow(c *ui.Context, index int, it *item) {
 	soloed := a.solo == it.source.ID
 	ui.Column(c).WidthPercent(100).Gap(spaceXs).Padding(spaceSm).
-		Background(colorPanel).Radius(4).Children(func() {
+		Background(colorPanel).Border(1, colorLineSoft).Radius(radiusMd).Children(func() {
 		ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
 			name := string(it.source.ID)
 			if len(it.source.URI) > 0 {

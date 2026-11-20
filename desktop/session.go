@@ -534,7 +534,7 @@ func newAppStateWithSettings(uris []string, loaded settings) (*appState, error) 
 	app.navWidth = 236
 	app.navUp = true
 	app.editingShell = true
-	app.dockHeight = 208
+	app.dockHeight = 240
 	app.dockUp = true
 	app.dockHidden = make(map[string]bool)
 	for _, uri := range uris {

@@ -193,7 +193,9 @@ func (a *appState) pageBody(c *ui.Context, width, height float32) {
 		case workspaceDiagnostics:
 			a.diagnosticsPage(c)
 		case workspaceSettings:
-			a.settingsPage(c)
+			ui.Scroll(c).Fill().WidthPercent(100).Children(func() {
+				a.settingsPage(c)
+			})
 		case workspaceMixer:
 			a.mixerPage(c)
 		}
@@ -332,12 +334,12 @@ func (a *appState) sourceEntry(c *ui.Context, it *item, index int, compact bool)
 	active := a.selected == it.source.ID
 	row := ui.Row(c).WidthPercent(100).Gap(spaceXs).AlignItems(ui.Center)
 	if compact {
-		row = row.Height(a.rowHeight()).Padding(0, spaceMd).Radius(radiusSm).
+		row = row.Height(a.rowHeight()).Padding(0, spaceMd).Radius(radiusMd).
 			OnClick(func() { a.selected = it.source.ID })
 		row = row.Background(stateFill(row.Hovered(), row.Pressed(), active))
 	} else {
-		row = row.Wrap().Gap(spaceSm).Padding(spaceSm, spaceMd).Radius(10).
-			Background(colorPanel).Border(1, colorLine)
+		row = row.Wrap().Gap(spaceSm).Padding(spaceSm, spaceMd).Radius(radiusCard).
+			Background(colorPanel).Border(1, colorLineSoft)
 	}
 	nameSize := textBody
 	subSize := textMicro
@@ -507,13 +509,13 @@ func (a *appState) sceneList(c *ui.Context) {
 			sc := scene
 			current := sc.ID == a.scene
 			row := ui.Row(c).WidthPercent(100).Height(36).Padding(0, 10).Gap(spaceSm).
-				AlignItems(ui.Center).Radius(radiusSm).
+				AlignItems(ui.Center).Radius(radiusMd).
 				OnClick(func() { a.selectScene(sc.ID) })
 			row = row.Background(stateFill(row.Hovered(), row.Pressed(), current))
 			row.Children(func() {
-				dot := ui.Box(c).Width(6).Height(6).Radius(3).Background(colorDim)
+				bar := ui.Box(c).Width(2).Height(14).Radius(1).Background(ui.Transparent)
 				if current {
-					dot = dot.Background(colorSelectedText)
+					bar = bar.Background(colorSelectedText)
 				}
 				label := ui.Text(c, a.tr("Scene ", "场景 ")+itoa(i+1)).FontSize(textBody).
 					FontWeight(500)
@@ -536,7 +538,7 @@ func (a *appState) sceneList(c *ui.Context) {
 		// A new scene is a row like the others, not a filled button under
 		// them: it is the same kind of thing, so it looks the same.
 		add := ui.ButtonBase(c.Key("scene-add")).WidthPercent(100).Height(36).
-			Padding(0, 10).Gap(spaceSm).Justify(ui.Start).Radius(radiusSm)
+			Padding(0, 10).Gap(spaceSm).Justify(ui.Start).Radius(radiusMd)
 		add = add.Background(stateFill(add.Hovered(), add.Pressed(), false))
 		ink := colorTextDim
 		if add.Hovered() {
@@ -729,7 +731,8 @@ func (a *appState) preview(c *ui.Context, width, height float32) {
 		ui.Box(c).Grow(1)
 		ui.Row(c).WidthPercent(100).AlignItems(ui.Center).Children(func() {
 			ui.Box(c).Grow(1)
-			ui.Box(c).Width(pictureWidth).Height(pictureCap).MaxHeight(pictureCap).Children(func() {
+			ui.Box(c).Width(pictureWidth).Height(pictureCap).MaxHeight(pictureCap).
+				Border(1, colorLineSoft).Children(func() {
 				a.stage(c)
 				a.stageCorner(c)
 			})
@@ -750,29 +753,30 @@ func (a *appState) preview(c *ui.Context, width, height float32) {
 // five words over a picture is what this window is trying not to be, and the
 // tooltip carries the name for anyone who needs it.
 func (a *appState) stageCorner(c *ui.Context) {
-	ui.Row(c).Absolute().Top(spaceSm).Right(spaceSm).Gap(spaceXs).
-		Padding(spaceXs, spaceXs).Radius(radiusMd).Background(colorPanel2).
-		Border(1, colorLine).Children(func() {
+	ui.Row(c).Absolute().Top(spaceSm).Right(spaceSm).Gap(2).AlignItems(ui.Center).
+		Padding(spaceXs, spaceXs).Radius(radiusLg).Background(colorPanel2).
+		Border(1, colorLineSoft).Shadow(0, 8, 24, 0, shadowFloat).Children(func() {
 		next := a.layout.next()
 		a.iconButtonSized(c, "corner-layout", lucide.Grid2x2(),
 			a.tr("layout: ", "布局：")+a.layoutLabel(a.layout)+a.tr(" → next ", "，下一个：")+a.layoutLabel(next),
-			32, colorText, false, func() { a.setLayout(next) })
+			30, colorText, false, func() { a.setLayout(next) })
 		editInk := colorText
 		if a.editMode {
 			editInk = colorAccent
 		}
 		a.iconButtonSized(c, "corner-edit", lucide.Move(),
-			a.tr("edit the picture's place", "编辑画面位置"), 32, editInk, a.editMode, func() {
+			a.tr("edit the picture's place", "编辑画面位置"), 30, editInk, a.editMode, func() {
 				a.editMode = !a.editMode
 				a.invalidate()
 			})
+		ui.Box(c).Width(1).Height(18).Background(colorLineSoft)
 		a.iconButtonSized(c, "corner-cinema", lucide.MonitorPlay(),
-			a.tr("watch in cinema", "沉浸观看"), 32, colorText, false, func() {
+			a.tr("watch in cinema", "沉浸观看"), 30, colorText, false, func() {
 				a.enterViewing(viewCinema, a.windowRef())
 				a.invalidate()
 			})
 		a.iconButtonSized(c, "corner-full", lucide.Maximize(),
-			a.tr("window full screen", "窗口全屏"), 32, colorText, false, func() {
+			a.tr("window full screen", "窗口全屏"), 30, colorText, false, func() {
 				a.enterViewing(viewFullscreen, a.windowRef())
 				a.invalidate()
 			})
@@ -875,7 +879,7 @@ func (a *appState) transportBar(c *ui.Context) {
 					play = a.tr("Play", "播放")
 				}
 				playButton := ui.ButtonBase(c.Key("transport-play")).Width(88).Height(32).
-					Padding(0, spaceMd).Radius(radiusSm).AlignItems(ui.Center).Shrink(0).AlignSelf(ui.Center)
+					Padding(0, spaceMd).Radius(radiusMd).AlignItems(ui.Center).Shrink(0).AlignSelf(ui.Center)
 				fill, ink := colorEnabled, colorSelectedText
 				if len(a.items) == 0 {
 					fill, ink = colorPanel2, colorDim
@@ -886,8 +890,15 @@ func (a *appState) transportBar(c *ui.Context) {
 					fill, ink = colorEnabledHover, colorText
 				}
 				playButton = playButton.Background(fill).TextColor(ink)
+				playIcon := lucide.Play()
+				if playing {
+					playIcon = lucide.Pause()
+				}
 				playButton.Children(func() {
-					ui.Text(c, play).FontSize(textSmall).FontWeight(500).TextColor(ink).SingleLine()
+					ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+						ui.Icon(c, playIcon).Size(14, 14).TextColor(ink)
+						ui.Text(c, play).FontSize(textSmall).FontWeight(500).TextColor(ink).SingleLine()
+					})
 				})
 				if playButton.Clicked() {
 					if a.playing() {
@@ -897,15 +908,18 @@ func (a *appState) transportBar(c *ui.Context) {
 					}
 				}
 				mute := a.tr("Mute", "静音")
+				muteIcon := lucide.VolumeX()
 				if a.masterMute {
 					mute = a.tr("Unmute", "取消静音")
+					muteIcon = lucide.Volume2()
 				}
-				a.ghostButton(c, "transport-mute", mute, 0, func() {
+				a.ghostIconButton(c, "transport-mute", mute, muteIcon, 0, func() {
 					a.runCommand(command{Kind: commandMasterMute})
 				})
-				a.ghostButton(c, "transport-reload", a.tr("Reload", "重载"), 0, func() {
+				a.ghostIconButton(c, "transport-reload", a.tr("Reload", "重载"), lucide.RotateCcw(), 0, func() {
 					a.runCommand(command{Kind: commandReload})
 				})
+				ui.Box(c).Width(1).Height(20).Background(colorLineSoft)
 				if first != nil {
 					ui.Text(c, a.name(first)).FontSize(textCaption).TextColor(colorTextDim).
 						MaxWidth(220).SingleLine().Padding(spaceSm, 0)
@@ -928,8 +942,11 @@ func (a *appState) transportBar(c *ui.Context) {
 			// One way in to watching. Cinema is the windowed form; the
 			// overlay inside it already offers full screen, so the workbench
 			// does not need two buttons that both mean "stop editing".
-			a.ghostButton(c, "transport-cinema", a.tr("Watch", "沉浸观看"), 104, func() {
-				a.enterViewing(viewCinema, a.windowRef())
+			ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
+				ui.Box(c).Width(1).Height(20).Background(colorLineSoft)
+				a.ghostIconButton(c, "transport-cinema", a.tr("Watch", "沉浸观看"), lucide.MonitorPlay(), 104, func() {
+					a.enterViewing(viewCinema, a.windowRef())
+				})
 			})
 		})
 	})
@@ -1249,7 +1266,8 @@ func (a *appState) errorReport(c *ui.Context, width, height float32) {
 	ui.Box(c).Absolute().Left(0).Top(0).Right(0).Bottom(0).Center().
 		Background(ui.RGBA(0, 0, 0, 0.55)).Children(func() {
 		ui.Column(c).Width(560).MaxWidth(width-40).Padding(spaceXl).Gap(spaceMd).
-			Radius(radiusLg).Background(colorPanel2).Border(1, colorLine).Children(func() {
+			Radius(radiusLg).Background(colorPanel2).Border(1, colorLineSoft).
+			Shadow(0, 20, 48, 0, shadowDialog).Children(func() {
 			ui.Text(c, a.tr("Something went wrong", "出错了")).FontSize(textTitle).
 				FontWeight(600).TextColor(colorText)
 			ui.Text(c, a.errorShort()).FontSize(textBody).TextColor(colorText).Wrap()
@@ -1297,7 +1315,8 @@ func (a *appState) pageMenuPanel(c *ui.Context, width float32) {
 	ui.Box(c).Absolute().Left(0).Top(0).Right(0).Bottom(0).ZIndex(19).
 		OnClick(func() { a.pageMenu = false })
 	ui.Column(c).Absolute().Top(a.barHeight()+4).Right(12).Width(220).Padding(4).Gap(2).
-		Radius(radiusMd).Background(colorPanel2).Border(1, colorLine).ZIndex(20).Children(func() {
+		Radius(radiusCard).Background(colorPanel2).Border(1, colorLineSoft).ZIndex(20).
+		Shadow(0, 8, 24, 0, shadowFloat).Children(func() {
 		for _, page := range []workspace{workspaceStage, workspaceSources, workspaceDiagnostics, workspaceSettings, workspaceMixer} {
 			p := page
 			button := ui.Button(c.Key("menu-"+itoa(int(p))), a.pageLabel(p)).Height(32).Padding(0, spaceSm)
@@ -1324,7 +1343,8 @@ func (a *appState) sceneMenuPanel(c *ui.Context, width float32) {
 	ui.Box(c).Absolute().Left(0).Top(0).Right(0).Bottom(0).ZIndex(19).
 		OnClick(func() { a.sceneMenu = false })
 	ui.Column(c).Absolute().Top(a.barHeight()+4).Left(sceneWidth+spaceMd).Width(220).
-		Padding(4).Gap(2).Radius(radiusMd).Background(colorPanel2).Border(1, colorLine).ZIndex(20).Children(func() {
+		Padding(4).Gap(2).Radius(radiusCard).Background(colorPanel2).Border(1, colorLineSoft).
+		ZIndex(20).Shadow(0, 8, 24, 0, shadowFloat).Children(func() {
 		ui.Row(c).Height(32).Padding(0, spaceSm).Gap(spaceXs).AlignItems(ui.Center).
 			Background(colorSelected).Children(func() {
 			ui.Text(c, a.sceneLabelText()).FontSize(textBody).TextColor(colorSelectedText)
@@ -1364,7 +1384,7 @@ func (a *appState) addSourceDialog(c *ui.Context) {
 	ui.DialogBase(c, &a.addOpen, func(backdrop, panel ui.Element) {
 		backdrop.Background(ui.RGBA(0, 0, 0, 0.55))
 		panel = panel.Background(colorPanel2).Border(1, colorLine).Radius(radiusLg).
-			Padding(spaceXl).Gap(spaceMd)
+			Padding(spaceXl).Gap(spaceMd).Shadow(0, 20, 48, 0, shadowDialog)
 		panel.Children(func() { a.addSourcePanel(c) })
 	})
 }

@@ -305,14 +305,14 @@ func (a *appState) windowRef() viewingWindow {
 // cannot see the failure cannot decide whether to keep watching.
 func (a *appState) viewingError(c *ui.Context) {
 	ui.Row(c).Absolute().Top(a.space(10, 10)).LeftPercent(2).RightPercent(2).
-		Padding(a.space(8, 12)).Radius(radiusSm).
+		Padding(a.space(8, 12)).Radius(radiusMd).
 		Background(colorPanel2).AlignItems(ui.Center).Gap(spaceSm).
 		Children(func() {
 			ui.Icon(c, lucide.AlertTriangle()).Size(16, 16).TextColor(colorBad)
 			ui.Text(c, a.errorShort()).FontSize(textSmall).
 				TextColor(colorText).SingleLine().Grow(1)
 			dismiss := ui.ButtonBase(c.Key("view-dismiss")).Height(24).
-				Padding(0, spaceSm).Radius(radiusSm).AlignItems(ui.Center)
+				Padding(0, spaceSm).Radius(radiusMd).AlignItems(ui.Center)
 			fill, ink := ui.Transparent, colorTextDim
 			if dismiss.Pressed() {
 				fill, ink = colorPressed, colorText

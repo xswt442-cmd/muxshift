@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/lucide"
 )
 
 // settings is what the Global Settings page edits. Every field is applied to
@@ -562,14 +563,14 @@ type choiceOption struct {
 // settingsPage draws the Global Settings page. The page edits a draft; nothing
 // reaches the session until Apply, and Cancel puts the draft back.
 func (a *appState) settingsPage(c *ui.Context) {
-	ui.Row(c).Fill().AlignItems(ui.Start).Gap(spaceLg).Padding(spaceMd).Children(func() {
+	ui.Row(c).WidthPercent(100).AlignItems(ui.Start).Gap(spaceLg).Padding(spaceMd).Children(func() {
 		ui.Column(c).Width(190).Gap(spaceXs).Padding(spaceSm).Children(func() {
 			ui.Text(c, a.tr("settings", "设置")).FontSize(textCaption).FontWeight(600).TextColor(colorTextDim)
 			for _, section := range settingsSections {
 				name := section
 				selected := name == a.settingsSection
 				row := ui.ButtonBase(c.Key("settings-tab-"+name)).Width(170).Height(34).
-					Padding(0, spaceSm).Gap(spaceSm).Radius(radiusSm).Justify(ui.Start)
+					Padding(0, spaceSm).Gap(spaceSm).Radius(radiusMd).Justify(ui.Start)
 				row = row.Background(stateFill(row.Hovered(), row.Pressed(), selected))
 				ink := colorTextDim
 				if selected {
@@ -588,7 +589,9 @@ func (a *appState) settingsPage(c *ui.Context) {
 			ui.Box(c).Grow(1)
 			ui.Text(c, a.settingsBoundary()).FontSize(textMicro).TextColor(colorDim).Wrap()
 		})
-		ui.Column(c).Grow(1).Gap(spaceSm).Padding(spaceMd).Children(func() {
+		ui.Column(c).Grow(1).Gap(spaceSm).Padding(spaceXl).Radius(radiusLg).
+			Background(colorPanel).Border(1, colorLineSoft).
+			Shadow(0, 2, 8, 0, shadowCard).Children(func() {
 			ui.Text(c, a.settingsSectionLabel(a.settingsSection)).FontSize(textTitle).FontWeight(600)
 			a.settingsForm(c)
 			if a.settingsErr != "" {
@@ -600,7 +603,7 @@ func (a *appState) settingsPage(c *ui.Context) {
 			dirty := !sameSettings(a.settingsDraft, a.settings)
 			ui.Row(c).Gap(spaceSm).Padding(0, spaceSm).Children(func() {
 				apply := ui.ButtonBase(c.Key("settings-apply")).Width(100).Height(32).
-					Padding(0, spaceMd).Radius(radiusSm).AlignItems(ui.Center)
+					Padding(0, spaceMd).Radius(radiusMd).AlignItems(ui.Center)
 				applyFill, applyInk := ui.Transparent, colorDim
 				if dirty {
 					applyFill, applyInk = colorAccent, colorAccentText
@@ -621,7 +624,7 @@ func (a *appState) settingsPage(c *ui.Context) {
 					a.applySettingsCommand()
 				}
 				cancel := ui.ButtonBase(c.Key("settings-cancel")).Width(100).Height(32).
-					Padding(0, spaceMd).Radius(radiusSm).AlignItems(ui.Center)
+					Padding(0, spaceMd).Radius(radiusMd).AlignItems(ui.Center)
 				cancelFill, cancelInk := ui.Transparent, colorDim
 				if dirty {
 					cancelFill, cancelInk = colorPanel2, colorText
@@ -683,7 +686,7 @@ func (a *appState) settingsForm(c *ui.Context) {
 			{"sources", a.tr("Sources", "来源")},
 		})
 		a.settingsSlider(c, a.tr("Nudge step", "微调步长"), &a.settingsDraft.NudgeStep, 0.02, 1)
-		ui.Checkbox(c, &a.settingsDraft.Workspace.On, a.tr("Reopen the window where I left it", "记住窗口位置与页面"))
+		a.checkboxRow(c, &a.settingsDraft.Workspace.On, a.tr("Reopen the window where I left it", "记住窗口位置与页面"), false, "")
 		a.settingsHint(c, a.tr("written when the window closes; an unknown page or frame falls back", "关窗时保存；页面或窗口位置无效时回到默认"))
 		ui.Text(c, a.tr("Keys", "快捷键")).FontSize(textMicro).TextColor(colorDim).Padding(spaceSm, 0)
 		a.shortcutLine(c, "Ctrl+S", a.tr("show or hide the selected source", "显示/隐藏选中来源"))
@@ -696,13 +699,13 @@ func (a *appState) settingsForm(c *ui.Context) {
 		a.settingsSlider(c, a.tr("Default volume for new sources", "新来源的默认音量"), &a.settingsDraft.DefaultVolume, 0, 1)
 		a.settingsSlider(c, a.tr("Master volume", "总音量"), &a.settingsDraft.MasterVolume, 0, 1)
 		a.settingsHint(c, a.tr("the master multiplies every source; per-source levels live in the mixer", "总音量作用于所有来源；单个来源的音量在混音器里"))
-		ui.Checkbox(c, &a.settingsDraft.MuteUnaligned, a.tr("Keep an unplaced source silent until it is allowed", "共同时间轴未确定的来源先静音"))
+		a.checkboxRow(c, &a.settingsDraft.MuteUnaligned, a.tr("Keep an unplaced source silent until it is allowed", "共同时间轴未确定的来源先静音"), false, "")
 		a.settingsHint(c, a.tr("with this off, sound can play before a person allows it", "关闭后，未对齐的来源可能提前出声"))
 		a.settingsHint(c, a.tr("a source's own Allow button still overrides the mute", "来源自己的“允许”按钮仍然优先"))
 	case "Sources":
-		ui.Checkbox(c, &a.settingsDraft.SourceMemory.On, a.tr("Reuse the level and mute I set for a source", "来源再次出现时沿用音量和静音"))
-		ui.Checkbox(c, &a.settingsDraft.SourceMemory.Remember, a.tr("Remember new sources' level and mute", "记住新来源的音量与静音")).Disabled(!a.settingsDraft.SourceMemory.On).
-			Tooltip(a.tr("memory is off, so nothing new is remembered", "记忆已关闭，不会记录新来源"))
+		a.checkboxRow(c, &a.settingsDraft.SourceMemory.On, a.tr("Reuse the level and mute I set for a source", "来源再次出现时沿用音量和静音"), false, "")
+		a.checkboxRow(c, &a.settingsDraft.SourceMemory.Remember, a.tr("Remember new sources' level and mute", "记住新来源的音量与静音"), !a.settingsDraft.SourceMemory.On,
+			a.tr("memory is off, so nothing new is remembered", "记忆已关闭，不会记录新来源"))
 		a.settingsHint(c, a.tr("remembers level and mute only; never reopens an address and never allows a source", "只记住音量与静音；不会重新打开地址，也不会授权任何来源"))
 		if !a.settingsDraft.SourceMemory.On && a.settingsDraft.SourceMemory.Remember {
 			ui.Text(c, a.tr("Remember is on while memory is off, so nothing is written", "记忆关闭时“记住”不起作用，不会写入")).
@@ -750,8 +753,8 @@ func (a *appState) settingsForm(c *ui.Context) {
 		})
 		a.choiceRow(c, a.tr("Font", "字体"), "settings-font", &a.settingsDraft.FontFamily, a.fontChoices())
 		a.settingsHint(c, a.tr("system picks a family that covers the window's language", "“跟随系统”会按界面语言选择字体"))
-		ui.Checkbox(c, &a.settingsDraft.Compact, a.tr("Tighter spacing", "更紧凑的间距"))
-		ui.Checkbox(c, &a.settingsDraft.DockOpen, a.tr("Show the timeline under the stage", "在画布下方显示时间线"))
+		a.checkboxRow(c, &a.settingsDraft.Compact, a.tr("Tighter spacing", "更紧凑的间距"), false, "")
+		a.checkboxRow(c, &a.settingsDraft.DockOpen, a.tr("Show the timeline under the stage", "在画布下方显示时间线"), false, "")
 		a.settingsHint(c, a.tr("spacing and the timeline apply when applied; both are remembered", "间距与时间线在应用后生效并记住"))
 		a.choiceRow(c, a.tr("Console layout", "控制台布局"), "settings-console", &a.settingsDraft.ConsoleLayout, []choiceOption{
 			{consolePanels, a.tr("Panels", "面板")},
@@ -797,14 +800,15 @@ func (a *appState) settingsForm(c *ui.Context) {
 func (a *appState) choiceRow(c *ui.Context, label, key string, current *string, options []choiceOption) {
 	ui.Column(c).Gap(spaceXs).WidthPercent(100).Children(func() {
 		ui.Text(c, label).FontSize(textMicro).TextColor(colorDim)
-		ui.Row(c).Wrap().Gap(spaceXs).Children(func() {
+		ui.Row(c).Height(32).Padding(3).Gap(2).Radius(9).Background(colorBg).
+			AlignSelf(ui.Start).AlignItems(ui.Center).Children(func() {
 			for _, option := range options {
 				selected := *current == option.value
-				button := ui.ButtonBase(c.Key(key+"-"+option.value)).Height(30).
+				button := ui.ButtonBase(c.Key(key+"-"+option.value)).Height(26).
 					Padding(0, spaceMd).Radius(radiusSm).AlignItems(ui.Center)
-				fill, ink := colorPanel2, colorTextDim
+				fill, ink := ui.Transparent, colorTextDim
 				if selected {
-					fill, ink = colorSelected, colorSelectedText
+					fill, ink = colorSegment, colorText
 				}
 				if button.Pressed() {
 					fill, ink = colorPressed, colorText
@@ -816,7 +820,11 @@ func (a *appState) choiceRow(c *ui.Context, label, key string, current *string, 
 				}
 				button = button.Background(fill).TextColor(ink)
 				button.Children(func() {
-					ui.Text(c, option.label).FontSize(textSmall).FontWeight(500).
+					weight := 400
+					if selected {
+						weight = 500
+					}
+					ui.Text(c, option.label).FontSize(textSmall).FontWeight(weight).
 						TextColor(ink).SingleLine()
 				})
 				if button.Clicked() {
@@ -892,12 +900,84 @@ func (a *appState) settingsHint(c *ui.Context, text string) {
 	ui.Text(c, text).FontSize(textMicro).TextColor(colorDim).Wrap()
 }
 
+// checkboxRow is the settings check box: an 18 DIP box with a 5 DIP radius,
+// 12 DIP check mark and the label 8 DIP to its right. It keeps the stock row's
+// click, Space and focus behavior; only the face is ours.
+func (a *appState) checkboxRow(c *ui.Context, checked *bool, label string, disabled bool, tip string) ui.Element {
+	row := ui.CheckboxBase(c, checked).Gap(spaceSm).AlignItems(ui.Center).FocusRing(false)
+	if disabled {
+		row = row.Disabled(true)
+	}
+	if tip != "" {
+		row = row.Tooltip(tip)
+	}
+	fill, edge := colorPanel2, colorCheckEdge
+	if disabled {
+		fill, edge = colorPanel2, colorLine
+	} else if row.Pressed() {
+		fill, edge = colorAccentDown, colorAccentDown
+	} else if *checked {
+		fill, edge = colorAccent, colorAccent
+	} else if row.Hovered() {
+		fill, edge = colorHover, colorDim
+	}
+	ink := colorText
+	if disabled {
+		ink = colorDim
+	}
+	row.Children(func() {
+		box := ui.Box(c).Width(18).Height(18).Radius(5).Shrink(0).
+			Background(fill).Border(1, edge).Center()
+		box.DrawOver(func(p *ui.Painter, r ui.Rect) {
+			if row.FocusVisible() {
+				p.FocusRing(r, [4]float32{5, 5, 5, 5})
+			}
+		})
+		box.Children(func() {
+			if *checked {
+				ui.Icon(c, lucide.Check()).Size(12, 12).TextColor(colorAccentText)
+			}
+		})
+		ui.Text(c, label).FontSize(textBody).TextColor(ink)
+	})
+	return row
+}
+
 // shortcutLine names one window shortcut and what it does. The list is read
 // from the bindings in main.go's view; a key that is not bound is not listed.
 func (a *appState) shortcutLine(c *ui.Context, keys, what string) {
-	ui.Row(c).Gap(12).WidthPercent(100).Children(func() {
-		ui.Text(c, keys).Width(150).FontSize(textCaption).TextColor(colorText)
+	ui.Row(c).Gap(12).WidthPercent(100).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Width(150).Gap(4).AlignItems(ui.Center).Children(func() {
+			a.shortcutKeys(c, keys)
+		})
 		ui.Text(c, what).FontSize(textCaption).TextColor(colorTextDim)
+	})
+}
+
+// shortcutKeys draws one shortcut as keycaps: Ctrl + S, or F11 / Esc. The
+// separators stay in the quiet ink so the caps, not the punctuation, carry
+// the shape.
+func (a *appState) shortcutKeys(c *ui.Context, keys string) {
+	if parts := strings.Split(keys, " / "); len(parts) == 2 {
+		a.keycap(c, parts[0])
+		ui.Text(c, "/").FontSize(textMicro).TextColor(colorDim)
+		a.keycap(c, parts[1])
+		return
+	}
+	parts := strings.Split(keys, "+")
+	for i, part := range parts {
+		if i > 0 {
+			ui.Text(c, "+").FontSize(textMicro).TextColor(colorDim)
+		}
+		a.keycap(c, strings.TrimSpace(part))
+	}
+}
+
+// keycap is display-only: a 22 DIP cap with a 4 DIP radius and one hairline.
+func (a *appState) keycap(c *ui.Context, label string) {
+	ui.Box(c).Height(22).MinWidth(22).Padding(0, 6).Radius(4).
+		Background(colorPanel2).Border(1, colorLine).Center().Children(func() {
+		ui.Text(c, label).FontSize(textMicro).FontWeight(500).TextColor(colorText).SingleLine()
 	})
 }
 

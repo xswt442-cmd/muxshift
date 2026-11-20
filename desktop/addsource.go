@@ -274,7 +274,7 @@ func (a *appState) addSourcePanel(c *ui.Context) {
 			for _, choice := range []addChoice{addChoiceFile, addChoiceMedia, addChoiceSite} {
 				selected := a.addChoice == choice
 				button := ui.ButtonBase(c.Key("add-"+choice.key())).Grow(1).Height(32).
-					Padding(0, spaceSm).Radius(radiusSm).AlignItems(ui.Center)
+					Padding(0, spaceSm).Radius(radiusMd).AlignItems(ui.Center)
 				fill, ink := colorBg, colorTextDim
 				if selected {
 					fill, ink = colorSelected, colorSelectedText
@@ -305,7 +305,7 @@ func (a *appState) addSourcePanel(c *ui.Context) {
 		switch a.addChoice {
 		case addChoiceMedia:
 			ui.TextInput(c, &a.importText).WidthPercent(100).Height(32).
-				Padding(0, 10).Radius(radiusSm).Background(colorInput).
+				Padding(0, 10).Radius(radiusMd).Background(colorInput).
 				Border(1, colorLine).PlaceholderColor(colorDim).
 				Placeholder(`https://… .m3u8  or  C:\path\file.mp4`).
 				Invalid(a.addNoteBad)
@@ -313,7 +313,7 @@ func (a *appState) addSourcePanel(c *ui.Context) {
 				FontSize(textMicro).FontWeight(400).TextColor(colorDim)
 		case addChoiceSite:
 			ui.TextInput(c, &a.addSiteText).WidthPercent(100).Height(32).
-				Padding(0, 10).Radius(radiusSm).Background(colorInput).
+				Padding(0, 10).Radius(radiusMd).Background(colorInput).
 				Border(1, colorLine).PlaceholderColor(colorDim).
 				Placeholder("https://example.com/watch?v=…").
 				Invalid(a.addNoteBad)
@@ -330,7 +330,7 @@ func (a *appState) addSourcePanel(c *ui.Context) {
 		ui.Row(c).Gap(spaceSm).WidthPercent(100).AlignItems(ui.Center).Children(func() {
 			ui.Box(c).Grow(1)
 			cancel := ui.ButtonBase(c.Key("add-cancel")).Width(88).Height(32).
-				Padding(0, spaceMd).Radius(radiusSm).AlignItems(ui.Center)
+				Padding(0, spaceMd).Radius(radiusMd).AlignItems(ui.Center)
 			cancelFill, cancelInk := colorBg, colorTextDim
 			if cancel.Pressed() {
 				cancelFill, cancelInk = colorPressed, colorText
@@ -347,7 +347,7 @@ func (a *appState) addSourcePanel(c *ui.Context) {
 			}
 			enabled := a.addChoice != addChoiceNone
 			submit := ui.ButtonBase(c.Key("add-submit")).Width(116).Height(32).
-				Padding(0, spaceMd).Radius(radiusSm).AlignItems(ui.Center)
+				Padding(0, spaceMd).Radius(radiusMd).AlignItems(ui.Center)
 			submitFill, submitInk := ui.Transparent, colorDim
 			if enabled {
 				submitFill, submitInk = colorAccent, colorAccentText

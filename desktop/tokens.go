@@ -47,20 +47,29 @@ var (
 	colorEnabledPress = ui.Hex("#27364a")
 	colorSliderKnob   = ui.Hex("#dce4f0")
 	colorInput        = ui.Hex("#111318")
+	colorSegment      = ui.Hex("#303b4b")
+	colorCheckEdge    = ui.Hex("#4b5563")
+	// Elevation is drawn with a shadow, never with a second border: cards sit
+	// one step above the base, floating tools and dialogs one step above cards.
+	shadowCard   = ui.RGBA(0, 0, 0, 0.18)
+	shadowFloat  = ui.RGBA(0, 0, 0, 0.42)
+	shadowDialog = ui.RGBA(0, 0, 0, 0.52)
 )
 
-// Radii, spacing and text sizes shared with the web client. Rows are 6, cards
-// and dock panels 8, dialogs 12: small enough to read as a tool, not a toy.
+// Radii, spacing and text sizes shared with the web client. The ladder is
+// deliberate: inner controls 8, cards 10, dialogs 12. A single radius on
+// everything is what made the first pass read as flat rectangles.
 const (
-	radiusSm = 6
-	radiusMd = 8
-	radiusLg = 12
-	spaceXs  = 4
-	spaceSm  = 8
-	spaceMd  = 12
-	spaceLg  = 16
-	spaceXl  = 24
-	spaceXxl = 32
+	radiusSm   = 6
+	radiusMd   = 8
+	radiusCard = 10
+	radiusLg   = 12
+	spaceXs    = 4
+	spaceSm    = 8
+	spaceMd    = 12
+	spaceLg    = 16
+	spaceXl    = 24
+	spaceXxl   = 32
 )
 
 // Text sizes are vars because the Appearance page scales them. Six roles, three
@@ -105,6 +114,7 @@ type palette struct {
 	enabledPressed         ui.Color
 	sliderKnob             ui.Color
 	input                  ui.Color
+	segment                ui.Color
 	line, lineSoft         ui.Color
 	text, textDim, dim     ui.Color
 	accent, accentText     ui.Color
@@ -127,6 +137,7 @@ var themePacks = []palette{
 		enabledHover: ui.Hex("#304157"), enabledPressed: ui.Hex("#27364a"),
 		sliderKnob: ui.Hex("#dce4f0"),
 		input:      ui.Hex("#111318"),
+		segment:    ui.Hex("#303b4b"),
 		line:       ui.Hex("#343a45"), lineSoft: ui.Hex("#292e36"),
 		text: ui.Hex("#e6eaf0"), textDim: ui.Hex("#a1aab8"), dim: ui.Hex("#858f9e"),
 		accent: ui.Hex("#8bb5f5"), accentText: ui.Hex("#101d30"),
@@ -146,6 +157,7 @@ var themePacks = []palette{
 		enabledHover: ui.Hex("#343d4b"), enabledPressed: ui.Hex("#2b3442"),
 		sliderKnob: ui.Hex("#e2e6ee"),
 		input:      ui.Hex("#101113"),
+		segment:    ui.Hex("#34383f"),
 		line:       ui.Hex("#303237"), lineSoft: ui.Hex("#26282c"),
 		text: ui.Hex("#ededf0"), textDim: ui.Hex("#a9aeb7"), dim: ui.Hex("#8b9099"),
 		accent: ui.Hex("#8cb4ff"), accentText: ui.Hex("#0a1420"),
@@ -165,6 +177,7 @@ var themePacks = []palette{
 		enabledHover: ui.Hex("#d2e2f8"), enabledPressed: ui.Hex("#c5d8f3"),
 		sliderKnob: ui.Hex("#1f2937"),
 		input:      ui.Hex("#ffffff"),
+		segment:    ui.Hex("#dce7f5"),
 		line:       ui.Hex("#d6d9de"), lineSoft: ui.Hex("#e6e8ec"),
 		text: ui.Hex("#14161a"), textDim: ui.Hex("#4f5661"), dim: ui.Hex("#6b7280"),
 		accent: ui.Hex("#1f6feb"), accentText: ui.Hex("#ffffff"),
@@ -184,6 +197,7 @@ var themePacks = []palette{
 		enabledHover: ui.Hex("#cfe4db"), enabledPressed: ui.Hex("#c1d9cf"),
 		sliderKnob: ui.Hex("#173b33"),
 		input:      ui.Hex("#ffffff"),
+		segment:    ui.Hex("#d8e9e2"),
 		line:       ui.Hex("#cdddd4"), lineSoft: ui.Hex("#dde9e3"),
 		text: ui.Hex("#10201a"), textDim: ui.Hex("#4a5f56"), dim: ui.Hex("#647a70"),
 		accent: ui.Hex("#0e7c66"), accentText: ui.Hex("#ffffff"),
@@ -203,6 +217,7 @@ var themePacks = []palette{
 		enabledHover: ui.Hex("#26364a"), enabledPressed: ui.Hex("#1e2c3e"),
 		sliderKnob: ui.Hex("#dfe7f5"),
 		input:      ui.Hex("#000000"),
+		segment:    ui.Hex("#253248"),
 		line:       ui.Hex("#2b2b36"), lineSoft: ui.Hex("#1d1d25"),
 		text: ui.Hex("#ffffff"), textDim: ui.Hex("#c2c7d0"), dim: ui.Hex("#9aa0ab"),
 		accent: ui.Hex("#4da3ff"), accentText: ui.Hex("#00101f"),
@@ -260,6 +275,7 @@ func applyPalette(p palette) {
 	colorEnabledPress = p.enabledPressed
 	colorSliderKnob = p.sliderKnob
 	colorInput = p.input
+	colorSegment = p.segment
 	colorLine = p.line
 	colorLineSoft = p.lineSoft
 	colorText = p.text

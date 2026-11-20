@@ -149,9 +149,35 @@ func (a *appState) dockBody(c *ui.Context) {
 					if a.dockTab < 0 || a.dockTab >= len(ids) {
 						a.dockTab = 0
 					}
-					ui.Box(c).Grow(1).Children(func() {
-						ui.Tabs(c, &a.dockTab, labels...)
+					ui.Row(c).Padding(2).Gap(2).Radius(14).Background(colorBgSoft).
+						Border(1, colorLineSoft).AlignItems(ui.Center).Children(func() {
+						for i, label := range labels {
+							selected := a.dockTab == i
+							tab := ui.ButtonBase(c.Key("dock-tab-"+ids[i])).Height(28).
+								Padding(0, spaceMd).Radius(12).AlignItems(ui.Center)
+							fill, ink := ui.Transparent, colorDim
+							if selected {
+								fill, ink = colorSelected, colorSelectedText
+							}
+							if tab.Pressed() {
+								fill, ink = colorPressed, colorText
+							} else if tab.Hovered() {
+								ink = colorText
+								if !selected {
+									fill = colorHover
+								}
+							}
+							tab = tab.Background(fill).TextColor(ink)
+							tab.Children(func() {
+								ui.Text(c, label).FontSize(textSmall).FontWeight(500).
+									TextColor(ink).SingleLine()
+							})
+							if tab.Clicked() {
+								a.dockTab = i
+							}
+						}
 					})
+					ui.Box(c).Grow(1)
 				}
 				if ui.Button(c.Key("dock-fold"), "▾").Width(24).Height(22).
 					Tooltip(a.tr("fold the console", "收起控制台")).Clicked() {
@@ -176,31 +202,35 @@ func (a *appState) dockBody(c *ui.Context) {
 			// Panel switches are chip-shaped and quiet: they sit on the same
 			// surface as the row, and only a shown panel carries the accent.
 			if !a.narrowDock() {
-				for _, id := range dockOrder {
-					label := a.dockTitle(id)
-					shown := a.dockShown(id)
-					chip := ui.ButtonBase(c.Key("dock-toggle-"+id)).Height(24).
-						Padding(0, spaceSm).Radius(radiusSm).AlignItems(ui.Center)
-					fill, ink := ui.Transparent, colorDim
-					if shown {
-						fill, ink = colorEnabled, colorSelectedText
-					}
-					if chip.Pressed() {
-						fill, ink = colorPressed, colorText
-					} else if chip.Hovered() {
-						ink = colorText
-						if !shown {
-							fill = colorHover
+				ui.Row(c).Height(28).Padding(2).Gap(2).Radius(14).
+					Background(colorBgSoft).Border(1, colorLineSoft).
+					AlignItems(ui.Center).Children(func() {
+					for _, id := range dockOrder {
+						label := a.dockTitle(id)
+						shown := a.dockShown(id)
+						chip := ui.ButtonBase(c.Key("dock-toggle-"+id)).Height(24).
+							Padding(0, 10).Radius(12).AlignItems(ui.Center)
+						fill, ink := ui.Transparent, colorDim
+						if shown {
+							fill, ink = colorEnabled, colorSelectedText
+						}
+						if chip.Pressed() {
+							fill, ink = colorPressed, colorText
+						} else if chip.Hovered() {
+							ink = colorText
+							if !shown {
+								fill = colorHover
+							}
+						}
+						chip = chip.Background(fill).TextColor(ink)
+						chip.Children(func() {
+							ui.Text(c, label).FontSize(textSmall).FontWeight(500).TextColor(ink).SingleLine()
+						})
+						if chip.Tooltip(a.tr("show or hide this panel", "显示或隐藏这块面板")).Clicked() {
+							a.toggleDockPanel(id)
 						}
 					}
-					chip = chip.Background(fill).TextColor(ink)
-					chip.Children(func() {
-						ui.Text(c, label).FontSize(textSmall).FontWeight(500).TextColor(ink).SingleLine()
-					})
-					if chip.Tooltip(a.tr("show or hide this panel", "显示或隐藏这块面板")).Clicked() {
-						a.toggleDockPanel(id)
-					}
-				}
+				})
 			}
 			a.iconButtonSized(c, "dock-fold", lucide.ChevronDown(),
 				a.tr("fold the console", "收起控制台"), 24, colorTextDim, false, func() {
@@ -276,13 +306,15 @@ func (a *appState) dockPanel(c *ui.Context, id string) {
 	}
 	ui.Box(c).WidthPercent(widthPercent).MinWidth(120).HeightPercent(100).Padding(spaceSm, spaceSm).
 		Children(func() {
-			ui.Column(c).WidthPercent(100).Grow(1).Padding(spaceMd, spaceMd).Gap(spaceXs).
-				Radius(radiusMd).Background(colorPanel).Children(func() {
+			ui.Column(c).WidthPercent(100).Grow(1).Padding(spaceMd, spaceMd, spaceSm, spaceMd).Gap(spaceXs).
+				Radius(radiusCard).Background(colorPanel).Border(1, colorLineSoft).
+				Shadow(0, 2, 8, 0, shadowCard).Children(func() {
 				ui.Row(c).WidthPercent(100).Height(22).Gap(spaceXs).
 					AlignItems(ui.Center).Children(func() {
 					ui.Text(c, a.dockTitle(id)).FontSize(textBody).FontWeight(600).TextColor(colorText)
 					ui.Box(c).Grow(1)
 				})
+				ui.Box(c).WidthPercent(100).Height(1).Background(colorLineSoft)
 				ui.Scroll(c).WidthPercent(100).Grow(1).Children(func() {
 					ui.Column(c).WidthPercent(100).Gap(2).Children(func() {
 						switch id {
@@ -435,7 +467,7 @@ func (a *appState) dockRowsBody(c *ui.Context) {
 		})
 		for i, it := range a.items {
 			row, index := it, i
-			ui.Box(c).WidthPercent(100).Height(48).Radius(radiusSm).Background(colorPanel).
+			ui.Box(c).WidthPercent(100).Height(48).Radius(radiusCard).Background(colorPanel).
 				Padding(spaceXs, spaceSm).Children(func() {
 				ui.Row(c).WidthPercent(100).HeightPercent(100).Gap(spaceXs).
 					AlignItems(ui.Center).Children(func() {

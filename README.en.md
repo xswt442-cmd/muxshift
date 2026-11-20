@@ -39,6 +39,10 @@ under [quick start](#quick-start).
 - **Desktop app**: a native MyGo window plays several sources, scenes choose
   picture and sound, each source has its own volume; manual nudges of ±0.1 s,
   and the automatic alignment only ever suggests, it never writes the timeline.
+  The left rail holds scenes only, the canvas carries a compact icon cluster,
+  and the console under it shows Sources / Mixer / Sync side by side: draggable,
+  foldable, each panel hideable, three tabs in a narrow window; the one-row-per-
+  source layout is a setting.
 - **Watching modes**: besides editing, the scene can be watched in cinema
 - **Five stage layouts**: Focus watches one picture, Split puts two side by side, PiP fills the stage and keeps a second picture in the lower right corner, Grid is 2×2, Hero is a wide main picture with the rest stacked on the right. Switching a layout only moves pictures; players, sound and sync are untouched. A source that does not fit is taken off the stage instead of covering it, and a slot whose first frame has not arrived says "waiting for the first picture".
 - **A stage you can arrange (OBS-style transforms)**: in editing mode a picture can be dragged, resized from eight handles, locked to its aspect ratio, placed by typing exact numbers, nudged with the arrow keys, and raised or lowered in the stacking order. Editing applies only while editing, so watching cannot move a picture by accident. Positions are stored as fractions of the stage, so resizing the window or changing display scaling keeps the arrangement.

@@ -216,14 +216,12 @@ func (a *appState) diagnosticsPage(c *ui.Context) {
 				ui.Row(c).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, a.handoff.codeLine()).FontSize(textSmall).TextColor(colorText).
 						FontFeatures("tnum")
-					ui.Button(c.Key("handoff-new-code"), a.tr("New code", "换一个码")).Height(28).Width(104).
-						Tooltip(a.tr("the browser pairs with this code instead of the expired one", "浏览器用这个新码配对，旧码随即失效")).
-						OnClick(func() {
-							if a.handoff != nil {
-								a.handoff.rotate()
-								log.Printf("handoff: made a new pairing code")
-							}
-						})
+					a.diagButton(c, "handoff-new-code", a.tr("New code", "换一个码"), 104, false, func() {
+						if a.handoff != nil {
+							a.handoff.rotate()
+							log.Printf("handoff: made a new pairing code")
+						}
+					})
 				})
 				ui.Text(c, a.tr("load the unpacked extension in Edge or Chrome, open its popup and pair once with the code above", "在 Edge 或 Chrome 里加载解包扩展，打开弹窗，用上面的码配对一次")).
 					FontSize(textMicro).TextColor(colorTextDim).Wrap()
@@ -235,8 +233,8 @@ func (a *appState) diagnosticsPage(c *ui.Context) {
 					ui.Text(c, row).FontSize(textSmall).TextColor(colorText).FontFeatures("tnum")
 				}
 				ui.Text(c, a.budgetLine()).FontSize(textMicro).TextColor(colorTextDim).Wrap()
-				ui.Button(c.Key("dvr-cleanup"), a.tr("Forget recordings nothing plays", "清掉没有在播放的录制")).Height(28).Width(268).
-					OnClick(func() { a.cleanupDVR() })
+				a.diagButton(c, "dvr-cleanup", a.tr("Forget recordings nothing plays", "清掉没有在播放的录制"), 268, true,
+					func() { a.cleanupDVR() })
 				if a.dvrNote != "" {
 					ui.Text(c, a.tr("last cleanup: ", "上次清理：")+a.dvrNote).FontSize(textMicro).TextColor(colorTextDim)
 				}
@@ -267,6 +265,30 @@ func (a *appState) diagnosticsPage(c *ui.Context) {
 			})
 		})
 	})
+}
+
+// diagButton is the diagnostics page's one secondary action: raised, quiet,
+// and warning-tinted only while the pointer is on a destructive one.
+func (a *appState) diagButton(c *ui.Context, key, label string, width float32, warning bool, onClick func()) ui.Element {
+	button := ui.ButtonBase(c.Key(key)).Width(width).Height(28).
+		Padding(0, spaceSm).Radius(radiusMd).AlignItems(ui.Center)
+	fill, ink := colorPanel2, colorText
+	if button.Pressed() {
+		fill, ink = colorPressed, colorText
+	} else if button.Hovered() {
+		fill = colorHover
+		if warning {
+			ink = colorWarn
+		}
+	}
+	button = button.Background(fill).TextColor(ink)
+	button.Children(func() {
+		ui.Text(c, label).FontSize(textMicro).FontWeight(500).TextColor(ink).SingleLine()
+	})
+	if button.Clicked() && onClick != nil {
+		onClick()
+	}
+	return button
 }
 
 // diagSection is one named block inside the diagnostics surface. The page is

@@ -346,7 +346,7 @@ func (a *appState) sourceEntry(c *ui.Context, it *item, index int, compact bool)
 		} else if row.Hovered() {
 			fill = colorHover
 		}
-		row = row.Background(fill)
+		row = row.Background(fill).Border(1, colorRowEdge)
 	} else {
 		row = row.Wrap().Gap(spaceSm).Padding(spaceSm, spaceMd).Radius(radiusCard).
 			Background(colorPanel).Border(1, colorLineSoft)

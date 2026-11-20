@@ -604,8 +604,12 @@ func (a *appState) dockSyncBody(c *ui.Context) {
 	for i, it := range a.items {
 		isRef := reference != nil && it.source.ID == reference.source.ID
 		row := it
+		edge := colorLineSoft
+		if isRef {
+			edge = colorRowEdge
+		}
 		ui.Column(c).WidthPercent(100).Gap(0).Padding(spaceXs, spaceSm).
-			Background(colorRow).Border(1, colorLineSoft).Radius(radiusMd).Children(func() {
+			Background(colorRow).Border(1, edge).Radius(radiusMd).Children(func() {
 			// The reference is one line: it has no offset to step, and the
 			// second line would only repeat the same word.
 			lineHeight := float32(20)

@@ -1,4 +1,4 @@
-package main
+package win
 
 // This window reaches the network through Go's HTTP client, which honours
 // HTTP_PROXY and HTTPS_PROXY but not the Windows Internet Settings that a
@@ -16,11 +16,11 @@ import (
 	"strings"
 )
 
-// applySystemProxy copies the Windows proxy into the environment and returns the
+// ApplyProxy copies the Windows proxy into the environment and returns the
 // address it used, with any credentials removed, or "" when nothing was set.
 // An environment that already names a proxy is left alone: it is the more
 // specific instruction.
-func applySystemProxy() string {
+func ApplyProxy() string {
 	if os.Getenv("HTTP_PROXY") != "" || os.Getenv("HTTPS_PROXY") != "" {
 		return ""
 	}

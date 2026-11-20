@@ -1,4 +1,4 @@
-package main
+package win
 
 import "testing"
 
@@ -33,12 +33,12 @@ func TestRedactProxy(t *testing.T) {
 	}
 }
 
-func TestApplySystemProxyKeepsAnExistingSetting(t *testing.T) {
+func TestApplyProxyKeepsAnExistingSetting(t *testing.T) {
 	// A proxy named in the environment is the more specific instruction, and
 	// the one a person can set without touching Windows.
 	t.Setenv("HTTP_PROXY", "http://env.example:3128")
 	t.Setenv("HTTPS_PROXY", "")
-	if got := applySystemProxy(); got != "" {
-		t.Fatalf("applySystemProxy overrode the environment with %q", got)
+	if got := ApplyProxy(); got != "" {
+		t.Fatalf("ApplyProxy overrode the environment with %q", got)
 	}
 }

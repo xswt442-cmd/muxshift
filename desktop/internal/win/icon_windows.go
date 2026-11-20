@@ -1,6 +1,6 @@
 //go:build windows
 
-package main
+package win
 
 import (
 	_ "embed"
@@ -36,10 +36,10 @@ var (
 	sendMessage = user32.NewProc("SendMessageW")
 )
 
-// installWindowIcon puts the project icon on the window's title bar and
+// InstallWindowIcon puts the project icon on the window's title bar and
 // taskbar button. MyGo has no option for this, so the window handle it
 // exposes is used directly; a failure is logged and does not stop the app.
-func installWindowIcon(window *mygo.Window) {
+func InstallWindowIcon(window *mygo.Window) {
 	path := filepath.Join(os.TempDir(), "muxshift-window.ico")
 	if err := os.WriteFile(path, windowIcon, 0o600); err != nil {
 		log.Printf("icon: write %s: %v", path, err)

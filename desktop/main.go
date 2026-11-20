@@ -33,6 +33,7 @@ import (
 	"github.com/egoist/mygo/ui/video"
 	"github.com/xswt442-cmd/muxshift/core"
 	"github.com/xswt442-cmd/muxshift/core/dvr"
+	"github.com/xswt442-cmd/muxshift/desktop/internal/win"
 )
 
 // mygoRunOnMain runs fn on the thread that draws the window and waits for it.
@@ -848,7 +849,7 @@ func main() {
 	}
 	// Before the first request: the streams a browser can open are the ones this
 	// window can open, and on this kind of machine that includes the proxy.
-	if proxy := applySystemProxy(); proxy != "" {
+	if proxy := win.ApplyProxy(); proxy != "" {
 		log.Printf("proxy: using the Windows Internet Settings proxy %s", proxy)
 	}
 	// -scenario-extra is a check's input, not an option a person can hand to a
@@ -1043,7 +1044,7 @@ func main() {
 			Height:  height,
 			Content: ui.View(s.view),
 		})
-		installWindowIcon(window)
+		win.InstallWindowIcon(window)
 		s.window = window
 		// P5.3: the browser's only way in is a loopback socket this window
 		// owns. It starts with the window and stops with it; a port already in

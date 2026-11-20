@@ -1,6 +1,10 @@
 package main
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/xswt442-cmd/muxshift/desktop/internal/win"
+)
 
 // The language setting's stored values. "auto" follows the window locale, which
 // on a Chinese Windows install is zh-*; an explicit choice survives restarts.
@@ -60,7 +64,7 @@ func (a *appState) detectLocale(locale string) {
 		a.systemLang = languageZH
 		return
 	}
-	if strings.HasPrefix(strings.ToLower(windowsLocale()), "zh") {
+	if strings.HasPrefix(strings.ToLower(win.Locale()), "zh") {
 		a.systemLang = languageZH
 		return
 	}

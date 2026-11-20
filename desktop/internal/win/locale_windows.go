@@ -1,6 +1,6 @@
 //go:build windows
 
-package main
+package win
 
 import (
 	"syscall"
@@ -11,10 +11,10 @@ const internationalKey = `Control Panel\International`
 
 var procRegGetValueWLocale = syscall.NewLazyDLL("advapi32.dll").NewProc("RegGetValueW")
 
-// windowsLocale reads the Windows display locale (for example "zh-CN"). The UI
+// Locale reads the Windows display locale (for example "zh-CN"). The UI
 // library only reports the C locale, so following the system language needs the
 // value the shell itself uses.
-func windowsLocale() string {
+func Locale() string {
 	subkey, err := syscall.UTF16PtrFromString(internationalKey)
 	if err != nil {
 		return ""

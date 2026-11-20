@@ -1,6 +1,6 @@
 //go:build !windows
 
-package main
+package win
 
 // windowsProxy has nothing to read outside Windows: the setting it names is a
 // Windows Internet Options value, not a portable concept.

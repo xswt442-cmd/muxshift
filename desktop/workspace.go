@@ -6,6 +6,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -144,6 +145,30 @@ func (a *appState) selectedSource() (*item, int, bool) {
 
 // diagnosticsPage shows what the session and the players actually report. It is
 // read-only: nothing on this page changes playback.
+// sourceFacts says what the player can actually tell about a source, and names
+// the things it cannot. The engine reports a decoded picture size but no frame
+// rate and no codec, so those stay unknown rather than guessed.
+func (a *appState) sourceFacts(it *item) string {
+	if it == nil {
+		return a.tr("no player", "没有播放器")
+	}
+	parts := []string{}
+	if p := rawPlayer(it.player); p != nil {
+		if w, h := p.Size(); w > 0 && h > 0 {
+			parts = append(parts, fmt.Sprintf("%d×%d", w, h))
+		}
+	}
+	if it.video == "" {
+		parts = append(parts, a.tr("sound only", "仅声音"))
+	} else {
+		parts = append(parts, a.tr("fps unknown", "帧率未知"), a.tr("codec unknown", "编码未知"))
+	}
+	if it.source.ID == "" {
+		return a.tr("not loaded", "未载入")
+	}
+	return strings.Join(parts, " · ")
+}
+
 func (a *appState) diagnosticsPage(c *ui.Context) {
 	ui.Column(c).Fill().Grow(1).Gap(spaceXs).Children(func() {
 		snapshot := a.snapshot()
@@ -160,6 +185,11 @@ func (a *appState) diagnosticsPage(c *ui.Context) {
 				source.Player, source.Playing,
 				source.Position.Round(100*1e6), source.Duration.Round(100*1e6), source.Offset)).
 				FontSize(textSmall).TextColor(colorText).FontFeatures("tnum")
+			// What the picture and sound actually are, as far as the player can
+			// tell. Frame rate and codec are not exposed by the engine, so they
+			// are named as unknown rather than invented.
+			ui.Text(c, a.sourceFacts(a.find(source.ID))).FontSize(textMicro).
+				TextColor(colorTextDim).FontFeatures("tnum")
 		}
 		if snapshot.SeekWallClock != "" {
 			ui.Text(c, fmt.Sprintf("seek %s · requested %s · actual %s · residual %s · window %s · at %s (wall clock)",
@@ -208,7 +238,7 @@ func (a *appState) diagnosticsPage(c *ui.Context) {
 			count, last := a.backgroundFailures()
 			line := fmt.Sprintf("%d failure(s) this run · %s", count, last.line())
 			if count == 0 {
-				line = last.line()
+				line = a.tr("nothing has failed in the background this run", "这次运行没有后台失败")
 			}
 			ui.Text(c, line).FontSize(textSmall).TextColor(colorText).Wrap()
 			ui.Text(c, a.tr("the status bar notice can be dismissed; this count keeps the record", "状态条上的提示可以关掉，这里的计数会保留")).

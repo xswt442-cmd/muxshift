@@ -10,6 +10,7 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/lucide"
 )
 
 type viewingMode int8
@@ -304,13 +305,26 @@ func (a *appState) windowRef() viewingWindow {
 // cannot see the failure cannot decide whether to keep watching.
 func (a *appState) viewingError(c *ui.Context) {
 	ui.Row(c).Absolute().Top(a.space(10, 10)).LeftPercent(2).RightPercent(2).
-		Padding(a.space(10, 12)).Radius(a.space(radiusSm, radiusSm)).
-		Background(colorBgSoft).Border(1, colorBad).AlignItems(ui.Center).
+		Padding(a.space(8, 12)).Radius(radiusSm).
+		Background(colorPanel2).AlignItems(ui.Center).Gap(spaceSm).
 		Children(func() {
+			ui.Icon(c, lucide.AlertTriangle()).Size(16, 16).TextColor(colorBad)
 			ui.Text(c, a.errorShort()).FontSize(textSmall).
-				TextColor(colorBad).SingleLine().Grow(1)
-			if ui.Button(c.Key("view-dismiss"), a.tr("Dismiss", "关闭")).Width(84).Height(24).
-				FontSize(textSmall).Tooltip(a.tr("hides the message; the log keeps it", "只隐藏这条消息，日志里仍然保留")).
+				TextColor(colorText).SingleLine().Grow(1)
+			dismiss := ui.ButtonBase(c.Key("view-dismiss")).Height(24).
+				Padding(0, spaceSm).Radius(radiusSm).AlignItems(ui.Center)
+			fill, ink := ui.Transparent, colorTextDim
+			if dismiss.Pressed() {
+				fill, ink = colorPressed, colorText
+			} else if dismiss.Hovered() {
+				fill, ink = colorHover, colorText
+			}
+			dismiss = dismiss.Background(fill).TextColor(ink)
+			dismiss.Children(func() {
+				ui.Text(c, a.tr("Dismiss", "关闭")).FontSize(textSmall).FontWeight(500).
+					TextColor(ink).SingleLine()
+			})
+			if dismiss.Tooltip(a.tr("hides the message; the log keeps it", "只隐藏这条消息，日志里仍然保留")).
 				Clicked() {
 				a.dismissError()
 				a.showControls()

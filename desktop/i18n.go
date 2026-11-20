@@ -77,12 +77,15 @@ func (a *appState) fontFamily() string {
 	case "yahei":
 		return "Microsoft YaHei UI"
 	case "cascadia":
-		return "Cascadia Mono"
+		return "Cascadia Mono, Microsoft YaHei UI"
 	case "inter":
-		return "Inter"
+		return "Inter, Microsoft YaHei UI"
 	}
 	if a.chinese() {
-		return "Microsoft YaHei UI"
+		// Latin and digits take Segoe UI's tighter forms; Chinese falls
+		// through to YaHei UI glyph by glyph. Asking for the language's one
+		// family instead is what made filenames and numbers look soft.
+		return "Segoe UI, Microsoft YaHei UI"
 	}
 	return "Segoe UI"
 }

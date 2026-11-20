@@ -174,56 +174,29 @@ func (a *appState) stageEditing(c *ui.Context, geometry []stagePlacement, sizeW,
 	// held this frame, the gesture is over. There is no release callback in
 	// the frame model, so the press state itself is the signal.
 	a.drag.held = false
+	editing := a.editMode
 	for i, spot := range geometry {
 		it := spot.item
 		box := spot.box
 		px := boxPixels(box, sizeW, sizeH)
 		selected := a.stageSelected(it)
 		frame := ui.Box(c).Absolute().Left(px.X).Top(px.Y).Width(px.W).Height(px.H).
-			ZIndex(100+i).Border(1, colorLine)
-		if selected {
-			frame = frame.Border(2, colorAccent)
+			ZIndex(100 + i)
+		if editing {
+			// Outside the edit mode the stage stays clean: no frame, no
+			// handles, no tooltip sitting over the picture.
+			frame = frame.Border(1, colorLine)
+			if selected {
+				frame = frame.Border(2, colorAccent)
+			}
 		}
 		frame = frame.Children(func() {
 			if it.player == nil || !it.shown {
 				return
 			}
 			c.Key("stage-shot-" + string(it.source.ID))
-			hit := ui.Box(c).Absolute().Left(0).Top(0).WidthPercent(100).HeightPercent(100)
-			hit = hit.Border(0, colorLine)
-			// The picture itself carries every gesture: the corner and edge a
-			// press lands nearest decides whether this is a move or a resize,
-			// so a split second of imprecision at a corner still resizes.
-			// PointerPosition is relative to the element, so the box's own
-			// left/top is added back. It is read every frame, because on the
-			// frame a press arrives it can still hold the previous position.
-			if mx, my, inside := hit.PointerPosition(); inside {
-				a.hoverX, a.hoverY = box.X+mx/sizeW, box.Y+my/sizeH
-				a.hoverKnown = true
-			}
-			if hit.Pressed() {
-				a.drag.held = true
-				a.selectFromStage(it)
-				if !a.drag.active || a.drag.id != it.source.ID {
-					kind := handleNone
-					if a.hoverKnown {
-						kind = box.handleAt(a.hoverX, a.hoverY)
-					}
-					a.drag = dragState{active: true, id: it.source.ID, handle: kind, box: box, stageW: sizeW, stageH: sizeH}
-				}
-			}
-			if hit.DoubleClicked() {
-				a.enterViewing(viewFullscreen, a.windowRef())
-			}
-			if dx, dy, dragging := hit.Dragged(); dragging {
-				kind := handleNone
-				if a.drag.active && a.drag.id == it.source.ID {
-					kind = a.drag.handle
-				}
-				a.dragBy(it, kind, dx/sizeW, dy/sizeH)
-			}
 		})
-		if !selected {
+		if !selected || !editing {
 			continue
 		}
 		locked := a.stageLocked(it.source.ID)
@@ -248,6 +221,44 @@ func (a *appState) stageEditing(c *ui.Context, geometry []stagePlacement, sizeW,
 			})
 		}
 	}
+	// One transparent layer over the whole stage carries the pointer: a press
+	// selects the picture under it, a drag moves or resizes that picture, and
+	// the picture elements themselves stay free of input. A gesture that
+	// starts inside a picture but leaves its rectangle must keep moving it,
+	// which is why the layer, not the picture, owns the press.
+	c.Key("stage-input")
+	input := ui.Box(c).Absolute().Left(0).Top(0).Width(sizeW).Height(sizeH).ZIndex(150)
+	mx, my, onStage := input.PointerPosition()
+	if onStage {
+		a.hoverX, a.hoverY = mx/sizeW, my/sizeH
+		a.hoverKnown = true
+	}
+	if input.Pressed() && onStage && a.hoverKnown {
+		a.drag.held = true
+		// Pressed() stays true for as long as the pointer is down, so the
+		// gesture is started once, not once per frame.
+		if !a.drag.active {
+			if spot, ok := topmostAt(geometry, a.hoverX, a.hoverY); ok {
+				a.selectFromStage(spot.item)
+				kind := handleNone
+				if editing {
+					kind = spot.box.handleAt(a.hoverX, a.hoverY)
+				}
+				a.drag = dragState{active: true, id: spot.item.source.ID, handle: kind,
+					box: spot.box, stageW: sizeW, stageH: sizeH}
+			}
+		}
+	}
+	if input.DoubleClicked() {
+		a.enterViewing(viewFullscreen, a.windowRef())
+	}
+	if dx, dy, dragging := input.Dragged(); dragging && editing && a.drag.active {
+		// The engine reports the movement of this frame, not the total since
+		// the press, so it is applied as it arrives.
+		if it := a.find(a.drag.id); it != nil && (dx != 0 || dy != 0) {
+			a.dragByIn(it, a.drag.handle, dx/sizeW, dy/sizeH, sizeW, sizeH)
+		}
+	}
 	// A press that brings neither a move nor a new press is over, but one
 	// quiet frame is not enough: the pointer can rest for a frame mid-drag.
 	if a.drag.held {
@@ -265,6 +276,17 @@ func (a *appState) stageEditing(c *ui.Context, geometry []stagePlacement, sizeW,
 				ui.Text(c, a.editNote).FontSize(textMicro).TextColor(colorTextDim).SingleLine()
 			})
 	}
+}
+
+// topmostAt reports the last (topmost) picture whose box holds the point.
+func topmostAt(geometry []stagePlacement, x, y float32) (stagePlacement, bool) {
+	for i := len(geometry) - 1; i >= 0; i-- {
+		box := geometry[i].box
+		if x >= box.X && x <= box.X+box.W && y >= box.Y && y <= box.Y+box.H {
+			return geometry[i], true
+		}
+	}
+	return stagePlacement{}, false
 }
 
 // handleBox centers a 10 DIP handle on the point it grabs.
@@ -496,18 +518,18 @@ func (a *appState) editControls(c *ui.Context, it *item) {
 		})
 	}
 	ui.Row(c).Gap(spaceXs).WidthPercent(100).Children(func() {
-		apply := ui.Button(c.Key("box-apply"), a.tr("Apply", "应用")).Height(a.controlHeight() - 6)
+		apply := ui.Button(c.Key("box-apply"), a.tr("Apply", "搴旂敤")).Height(a.controlHeight() - 6)
 		if !dirty {
 			apply.Disabled(true)
 		}
 		if apply.Clicked() {
 			a.applyBoxFields(it)
 		}
-		if ui.Button(c.Key("box-fit"), a.tr("Fit", "适应")).Height(a.controlHeight() - 6).Clicked() {
+		if ui.Button(c.Key("box-fit"), a.tr("Fit", "閫傚簲")).Height(a.controlHeight() - 6).Clicked() {
 			a.fitStage(it.source.ID)
 			a.reloadBoxFields(it)
 		}
-		if ui.Button(c.Key("box-reset"), a.tr("Reset", "重置")).Height(a.controlHeight() - 6).Clicked() {
+		if ui.Button(c.Key("box-reset"), a.tr("Reset", "閲嶇疆")).Height(a.controlHeight() - 6).Clicked() {
 			a.forgetBox(it.source.ID)
 			a.reloadBoxFields(it)
 		}
@@ -515,7 +537,7 @@ func (a *appState) editControls(c *ui.Context, it *item) {
 	ui.Row(c).Wrap().Gap(spaceXs).Padding(spaceXs, 0).Children(func() {
 		ratio := a.tr("Keep ratio", "锁定比例")
 		if a.freeRatio {
-			ratio = a.tr("Any ratio", "自由比例")
+			ratio = a.tr("Any ratio", "鑷敱姣斾緥")
 		}
 		if ui.Button(c.Key("box-ratio"), ratio).Height(24).Padding(0, spaceXs).
 			Tooltip(a.tr("drag a corner to resize", "拖角可以改大小")).Clicked() {
@@ -523,7 +545,7 @@ func (a *appState) editControls(c *ui.Context, it *item) {
 		}
 		lock := a.tr("Lock", "锁定")
 		if a.stageLocked(it.source.ID) {
-			lock = a.tr("Unlock", "解锁")
+			lock = a.tr("Unlock", "瑙ｉ攣")
 		}
 		if ui.Button(c.Key("box-lock"), lock).Height(24).Padding(0, spaceXs).Clicked() {
 			a.toggleStageLock(it.source.ID)

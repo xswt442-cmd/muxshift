@@ -41,6 +41,11 @@ type settings struct {
 	// wide enough for it.
 	DockOpen bool `json:"dockOpen"`
 
+	// ConsoleLayout is how the console draws the same sources: "panels" is the
+	// three side-by-side panels, "rows" is one row per source with its volume,
+	// its place in the stack and its offset. Both read the same state.
+	ConsoleLayout string `json:"consoleLayout"`
+
 	// Compact tightens the spacing of the workbench.
 	Compact bool `json:"compact"`
 
@@ -169,7 +174,8 @@ func defaultSettings() settings {
 		NudgeStep:     0.1,
 		MuteUnaligned: true,
 		MasterVolume:  1,
-		DockOpen:      false,
+		DockOpen:      true,
+		ConsoleLayout: consolePanels,
 		Compact:       false,
 		Language:      languageAuto,
 		Theme:         "midnight",
@@ -197,7 +203,7 @@ func cloneSettings(st settings) settings {
 func sameSettings(a, b settings) bool {
 	if a.StartPage != b.StartPage || a.DefaultVolume != b.DefaultVolume || a.NudgeStep != b.NudgeStep ||
 		a.MuteUnaligned != b.MuteUnaligned || a.MasterVolume != b.MasterVolume ||
-		a.DockOpen != b.DockOpen || a.Compact != b.Compact ||
+		a.DockOpen != b.DockOpen || a.ConsoleLayout != b.ConsoleLayout || a.Compact != b.Compact ||
 		a.Language != b.Language || a.Theme != b.Theme || a.TextScale != b.TextScale || a.FontFamily != b.FontFamily ||
 		a.Workspace != b.Workspace || a.DVR != b.DVR {
 		return false
@@ -220,8 +226,8 @@ func sameSettings(a, b settings) bool {
 // remembered addresses: a log line is copied into evidence, bug reports and
 // terminal scrollback, and an address can carry a private path or a host name.
 func settingsSummary(st settings) string {
-	return fmt.Sprintf("start page %q, nudge %.2fs, default volume %.2f, master %.2f, mute unaligned %v, dock %v, compact %v, language %q, theme %q, text scale %q, font %q, dvr %s, source memory %d entr(ies) on=%v remember=%v set=%s",
-		st.StartPage, st.NudgeStep, st.DefaultVolume, st.MasterVolume, st.MuteUnaligned,
+	return fmt.Sprintf("start page %q, console %q, nudge %.2fs, default volume %.2f, master %.2f, mute unaligned %v, dock %v, compact %v, language %q, theme %q, text scale %q, font %q, dvr %s, source memory %d entr(ies) on=%v remember=%v set=%s",
+		st.StartPage, st.ConsoleLayout, st.NudgeStep, st.DefaultVolume, st.MasterVolume, st.MuteUnaligned,
 		st.DockOpen, st.Compact, st.Language, st.Theme, st.TextScale, st.FontFamily,
 		st.DVR.line(), len(st.SourceMemory.Entries),
 		st.SourceMemory.On, st.SourceMemory.Remember, memoryDigest(st.SourceMemory))
@@ -300,10 +306,17 @@ func validateSettings(s settings) error {
 			return fmt.Errorf("language %q is not auto, zh or en", s.Language)
 		}
 	}
+	if s.ConsoleLayout != "" {
+		switch s.ConsoleLayout {
+		case consolePanels, consoleRows:
+		default:
+			return fmt.Errorf("consoleLayout %q is not panels or rows", s.ConsoleLayout)
+		}
+	}
 	switch s.StartPage {
-	case "stage", "sources":
+	case "stage", "sources", "diagnostics", "settings":
 	default:
-		return fmt.Errorf("startPage %q is not a page, want stage or sources", s.StartPage)
+		return fmt.Errorf("startPage %q is not a page, want stage, sources, diagnostics or settings", s.StartPage)
 	}
 	if s.Theme != "" && !validThemeName(s.Theme) {
 		return fmt.Errorf("theme %q is not one of the packs this build carries", s.Theme)
@@ -551,14 +564,22 @@ type choiceOption struct {
 func (a *appState) settingsPage(c *ui.Context) {
 	ui.Row(c).Fill().AlignItems(ui.Start).Gap(spaceLg).Padding(spaceMd).Children(func() {
 		ui.Column(c).Width(190).Gap(spaceXs).Padding(spaceSm).Children(func() {
-			ui.Text(c, a.tr("settings", "设置")).FontSize(textMicro).TextColor(colorDim)
+			ui.Text(c, a.tr("settings", "设置")).FontSize(textCaption).FontWeight(600).TextColor(colorTextDim)
 			for _, section := range settingsSections {
 				name := section
-				button := ui.Button(c.Key("settings-tab-"+name), a.settingsSectionLabel(name)).Width(170).Height(32)
-				if name == a.settingsSection {
-					button = button.Background(colorAccentSoft).Border(1, colorAccent)
+				selected := name == a.settingsSection
+				row := ui.ButtonBase(c.Key("settings-tab-"+name)).Width(170).Height(34).
+					Padding(0, spaceSm).Gap(spaceSm).Radius(radiusSm).Justify(ui.Start)
+				row = row.Background(stateFill(row.Hovered(), row.Pressed(), selected))
+				ink := colorTextDim
+				if selected {
+					ink = colorSelectedText
 				}
-				if button.Clicked() {
+				row = row.TextColor(ink)
+				row.Children(func() {
+					ui.Text(c, a.settingsSectionLabel(name)).FontSize(textBody).FontWeight(500).TextColor(ink)
+				})
+				if row.Clicked() {
 					a.settingsSection = name
 					a.settingsErr = ""
 					a.settingsNote = ""
@@ -568,7 +589,7 @@ func (a *appState) settingsPage(c *ui.Context) {
 			ui.Text(c, a.settingsBoundary()).FontSize(textMicro).TextColor(colorDim).Wrap()
 		})
 		ui.Column(c).Grow(1).Gap(spaceSm).Padding(spaceMd).Children(func() {
-			ui.Text(c, a.settingsSectionLabel(a.settingsSection)).FontSize(textTitle)
+			ui.Text(c, a.settingsSectionLabel(a.settingsSection)).FontSize(textTitle).FontWeight(600)
 			a.settingsForm(c)
 			if a.settingsErr != "" {
 				ui.Text(c, a.settingsErr).TextColor(colorBad).Wrap()
@@ -578,23 +599,55 @@ func (a *appState) settingsPage(c *ui.Context) {
 			}
 			dirty := !sameSettings(a.settingsDraft, a.settings)
 			ui.Row(c).Gap(spaceSm).Padding(0, spaceSm).Children(func() {
-				apply := ui.Button(c.Key("settings-apply"), a.tr("Apply", "应用")).Width(100).Disabled(!dirty)
+				apply := ui.ButtonBase(c.Key("settings-apply")).Width(100).Height(32).
+					Padding(0, spaceMd).Radius(radiusSm).AlignItems(ui.Center)
+				applyFill, applyInk := ui.Transparent, colorDim
 				if dirty {
-					apply = apply.Border(1, colorAccent)
+					applyFill, applyInk = colorAccent, colorAccentText
+					if apply.Pressed() {
+						applyFill = colorAccentDown
+					} else if apply.Hovered() {
+						applyFill = colorAccentHi
+					}
+				} else {
+					apply = apply.Disabled(true)
 				}
+				apply = apply.Background(applyFill).TextColor(applyInk)
+				apply.Children(func() {
+					ui.Text(c, a.tr("Apply", "应用")).FontSize(textSmall).FontWeight(500).
+						TextColor(applyInk).SingleLine()
+				})
 				if apply.Clicked() {
 					a.applySettingsCommand()
 				}
-				if ui.Button(c.Key("settings-cancel"), a.tr("Cancel", "取消")).Width(100).Disabled(!dirty).Clicked() {
+				cancel := ui.ButtonBase(c.Key("settings-cancel")).Width(100).Height(32).
+					Padding(0, spaceMd).Radius(radiusSm).AlignItems(ui.Center)
+				cancelFill, cancelInk := ui.Transparent, colorDim
+				if dirty {
+					cancelFill, cancelInk = colorPanel2, colorText
+					if cancel.Pressed() {
+						cancelFill = colorPressed
+					} else if cancel.Hovered() {
+						cancelFill = colorHover
+					}
+				} else {
+					cancel = cancel.Disabled(true)
+				}
+				cancel = cancel.Background(cancelFill).TextColor(cancelInk)
+				cancel.Children(func() {
+					ui.Text(c, a.tr("Cancel", "取消")).FontSize(textSmall).FontWeight(500).
+						TextColor(cancelInk).SingleLine()
+				})
+				if cancel.Clicked() {
 					a.beginDraft(a.settings)
 					a.settingsErr = ""
 					a.settingsNote = a.tr("cancelled: the draft is back to what is applied", "已取消：草稿恢复为当前生效的设置")
 				}
-				if ui.Button(c.Key("settings-reset"), a.tr("Reset to defaults", "恢复默认")).Width(160).Clicked() {
+				a.ghostButton(c, "settings-reset", a.tr("Reset to defaults", "恢复默认"), 160, func() {
 					a.beginDraft(defaultSettings())
 					a.settingsErr = ""
 					a.settingsNote = a.tr("defaults are in the draft; Apply writes them", "默认值已填入草稿，点击“应用”写入")
-				}
+				})
 				if dirty {
 					ui.Text(c, a.tr("unsaved changes", "有未应用的更改")).FontSize(textMicro).TextColor(colorWarn)
 				}
@@ -700,6 +753,11 @@ func (a *appState) settingsForm(c *ui.Context) {
 		ui.Checkbox(c, &a.settingsDraft.Compact, a.tr("Tighter spacing", "更紧凑的间距"))
 		ui.Checkbox(c, &a.settingsDraft.DockOpen, a.tr("Show the timeline under the stage", "在画布下方显示时间线"))
 		a.settingsHint(c, a.tr("spacing and the timeline apply when applied; both are remembered", "间距与时间线在应用后生效并记住"))
+		a.choiceRow(c, a.tr("Console layout", "控制台布局"), "settings-console", &a.settingsDraft.ConsoleLayout, []choiceOption{
+			{consolePanels, a.tr("Panels", "面板")},
+			{consoleRows, a.tr("One row per source", "每源一行")},
+		})
+		a.settingsHint(c, a.tr("both read the same sources, levels and offsets", "两种布局读的是同一批来源、音量与偏移"))
 	case "DVR":
 		ui.Text(c, a.tr("what a new replay buffer may use; the marker shows a buffer opened now", "新回放缓存的上限；下方数值为当前生效值")).Wrap()
 		a.dvrStepper(c, a.tr("Keep this much history", "保留时长"), "dvr-ret-less", a.tr("-1 min", "-1 分"), "dvr-ret-more", a.tr("+1 min", "+1 分"),
@@ -741,10 +799,26 @@ func (a *appState) choiceRow(c *ui.Context, label, key string, current *string, 
 		ui.Text(c, label).FontSize(textMicro).TextColor(colorDim)
 		ui.Row(c).Wrap().Gap(spaceXs).Children(func() {
 			for _, option := range options {
-				button := ui.Button(c.Key(key+"-"+option.value), option.label).Height(30).Padding(0, spaceMd)
-				if *current == option.value {
-					button = button.Background(colorAccentSoft).Border(1, colorAccent)
+				selected := *current == option.value
+				button := ui.ButtonBase(c.Key(key+"-"+option.value)).Height(30).
+					Padding(0, spaceMd).Radius(radiusSm).AlignItems(ui.Center)
+				fill, ink := colorPanel2, colorTextDim
+				if selected {
+					fill, ink = colorSelected, colorSelectedText
 				}
+				if button.Pressed() {
+					fill, ink = colorPressed, colorText
+				} else if button.Hovered() {
+					ink = colorText
+					if !selected {
+						fill = colorHover
+					}
+				}
+				button = button.Background(fill).TextColor(ink)
+				button.Children(func() {
+					ui.Text(c, option.label).FontSize(textSmall).FontWeight(500).
+						TextColor(ink).SingleLine()
+				})
 				if button.Clicked() {
 					*current = option.value
 				}
@@ -810,7 +884,7 @@ func (a *appState) settingsSlider(c *ui.Context, label string, value *float64, l
 		ui.Box(c).Grow(1)
 		ui.Text(c, fmt.Sprintf("%.2f", *value)).Width(64)
 	})
-	ui.Slider(c, value, lo, hi).WidthPercent(100)
+	a.rangeSlider(c, "settings-"+label, value, lo, hi, 0)
 }
 
 // settingsHint is the small line under a control that explains what it does.

@@ -645,12 +645,26 @@ func (a *appState) stage(c *ui.Context) {
 			a.stageEditing(c, geometry, bounds.W, bounds.H)
 		}
 		if len(shown) == 0 {
-			// An empty stage asks for the one thing it needs. A file is the
-			// common case, so it is the primary button; an address is the
-			// second. The wording is the window's language, not the code's.
+			// An empty stage asks for the one thing it needs. When the session
+			// already holds sources, opening another one is the wrong offer:
+			// this scene is simply empty, and the console is where a picture
+			// comes from.
+			hasSources := len(a.items) > 0
 			ui.Column(c).Fill().Center().Gap(spaceSm).Children(func() {
 				ui.Text(c, a.tr("No picture yet", "还没有画面")).
 					FontSize(textTitle).TextColor(colorText)
+				if hasSources {
+					ui.Text(c, a.tr("This scene holds no picture. Add one in the console's sources.",
+						"这个场景还没有画面，在控制台的「来源」里把它放上来。")).
+						FontSize(textSmall).TextColor(colorDim)
+					if ui.Button(c.Key("empty-console"), a.tr("Show the sources", "显示来源")).Height(26).
+						Padding(0, spaceMd).Background(colorAccent).TextColor(colorAccentText).Clicked() {
+						delete(a.dockHidden, dockSources)
+						a.dockUp = true
+						a.invalidate()
+					}
+					return
+				}
 				ui.Text(c, a.tr("Drop in a file, or paste an address that plays.",
 					"打开一个文件，或粘贴一个能播放的地址。")).
 					FontSize(textSmall).TextColor(colorDim)
@@ -667,11 +681,6 @@ func (a *appState) stage(c *ui.Context) {
 						a.openAddSource()
 					}
 				})
-				if ui.Button(c.Key("empty-sources"), a.tr("See every source", "查看全部来源")).
-					Height(24).Background(colorPanel).Clicked() {
-					a.workspace = workspaceSources
-					a.invalidate()
-				}
 			})
 		}
 	})
@@ -686,6 +695,18 @@ func (a *appState) stage(c *ui.Context) {
 func (a *appState) selectVideo(it *item) {
 	a.selected = it.source.ID
 	a.report(a.runCommand(command{Kind: commandShow, Source: it.source.ID}))
+}
+
+// toggleVideo is the eye's whole job: showVideo also removes the picture when
+// the scene already names it, so showing and hiding are one command.
+func (a *appState) toggleVideo(index int) {
+	it, err := a.at(index)
+	if err != nil {
+		a.lastErr = safeOpenError(err)
+		a.invalidate()
+		return
+	}
+	a.selectVideo(it)
 }
 
 // selectAudio plays a source's sound and makes the inspector follow it.
@@ -908,9 +929,21 @@ func main() {
 	if note != "" {
 		log.Printf("settings: %s", note)
 	}
-	if loaded.StartPage == "sources" {
-		s.workspace = workspaceSources
+	setStartPage := func(page string) {
+		switch page {
+		case "sources":
+			// The console holds the source list, so "open on sources" means
+			// the stage with that panel in front.
+			s.dockUp = true
+			delete(s.dockHidden, dockSources)
+			s.workspace = workspaceStage
+		case "diagnostics":
+			s.workspace = workspaceDiagnostics
+		case "settings":
+			s.workspace = workspaceSettings
+		}
 	}
+	setStartPage(loaded.StartPage)
 	// The DVR cache root belongs to this process: a sweep collects only the
 	// directories of runs that are gone, and the session opened right after keeps
 	// this run's own cache distinguishable while it lives.

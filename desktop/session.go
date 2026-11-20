@@ -245,8 +245,32 @@ type appState struct {
 	sceneMenu     bool
 	drawerOpen    bool
 	leftCollapsed bool
-	// editingShell mounts the editing columns. It is false by default: the
-	// window is a player first, the workbench is something you open.
+
+	// The shell's three parts are sized by the person using them: the scene
+	// column keeps its own width, the console keeps its own height, and each
+	// console panel can be hidden on its own.
+	navWidth   float32
+	navUp      bool
+	dockHeight float32
+	dockUp     bool
+	dockHidden map[string]bool
+	// syncRef is the source the other ones are lined up against. Empty means
+	// "the first picture on the stage", which is what the console shows.
+	syncRef core.SourceID
+	// winW is the width the shell drew at last frame; the console uses it to
+	// decide between three panels and tabs.
+	winW    float32
+	dockTab int
+	// dockWidths is the share of the console each panel holds, and dockW is the
+	// console's width in DIP, so a dragged seam can turn pixels into a share.
+	dockWidths map[string]float32
+	dockW      float32
+	// dockSeam remembers how far each dragged seam has travelled, so only the
+	// new part of the travel moves the panels.
+	dockSeam map[string]float32
+	// editingShell mounts the editing columns. The workbench is what the window
+	// is: the scene list, the picture and the console are the product, and the
+	// bare player is a mode the person switches to.
 	editingShell bool
 	// propsTab is the properties panel's tab: 0 picture, 1 sound, 2 time.
 	propsTab int
@@ -505,6 +529,14 @@ func newAppStateWithSettings(uris []string, loaded settings) (*appState, error) 
 		return nil, err
 	}
 	app := &appState{session: session, scene: scene.ID, output: output.ID, frames: make(chan struct{}, 1), sync: newSyncState(), audible: make(map[core.TrackID]bool), settings: cloneSettings(loaded), settingsDraft: cloneSettings(loaded), settingsSection: "General"}
+	// The shell opens the way a workbench is used: scenes on the left, the
+	// console under the picture, every panel of it visible.
+	app.navWidth = 236
+	app.navUp = true
+	app.editingShell = true
+	app.dockHeight = 208
+	app.dockUp = true
+	app.dockHidden = make(map[string]bool)
 	for _, uri := range uris {
 		it, err := app.addFrom(uri, originCommandLine)
 		if err != nil {
@@ -1014,6 +1046,22 @@ func (a *appState) closeImportTicker() {
 // apply maps the current scene onto the players: the video tracks in the scene
 // are drawn, everything else is hidden, and each source's player takes the
 // level the scene gives its audio track, muted when it is not in the scene.
+// addScene creates a scene and switches to it. A new scene starts empty: its
+// purpose is to hold a different arrangement of the same sources.
+func (a *appState) addScene() {
+	name := fmt.Sprintf("scene %d", len(a.session.Scenes())+1)
+	scene, err := a.session.AddScene(name)
+	if err != nil {
+		a.lastErr = safeOpenError(err)
+		a.invalidate()
+		return
+	}
+	a.scene = scene.ID
+	a.edits = nil
+	a.apply()
+	a.invalidate()
+}
+
 func (a *appState) apply() {
 	a.pruneStageEdits()
 	scene, err := a.session.Scene(a.scene)

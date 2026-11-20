@@ -13,11 +13,13 @@ package main
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/layout"
+	"github.com/lobehub/lobe-mygo/pkg/lucide"
+	"github.com/xswt442-cmd/muxshift/core"
 )
 
 const (
@@ -36,6 +38,7 @@ const (
 	dockHeight                 = 168
 	inspectorWidth             = 300
 	railWidth                  = 240
+	railFoldWidth              = 64
 	inspectorAutoWidth         = 1600
 	railAutoWidth              = 1600
 	dockAutoHeight             = 660
@@ -122,19 +125,37 @@ func (a *appState) rowHeight() float32 {
 // overlay is open.
 func (a *appState) shell(c *ui.Context, width, height float32) {
 	narrow := width < 900
+	a.winW = width
 	if !narrow {
 		a.drawerOpen = false
 	}
+	// The source list lives in the console now. Anything that still asks for
+	// the old page (a shortcut, a scenario, a settings file) lands on the stage
+	// with that panel in front instead of a second copy of the list.
+	if a.workspace == workspaceSources {
+		delete(a.dockHidden, dockSources)
+		a.dockUp = true
+		a.workspace = workspaceStage
+	}
 	ui.Column(c).Fill().Background(colorBg).Children(func() {
-		a.topBar(c, width)
 		ui.Row(c).WidthPercent(100).Grow(1).AlignItems(ui.Stretch).Children(func() {
-			whole := a.workspace != workspaceStage
-			if !narrow && !a.leftCollapsed && !whole && a.editingShell {
-				a.sceneColumn(c)
+			// The scene column is a draggable rail the way a capture program
+			// has one: it starts open, keeps its own width, and folds to icons.
+			if !narrow && a.editingShell {
+				layout.DraggableSideNav(c, &a.navWidth, &a.navUp, layout.DraggableSideNavProps{
+					MinWidth: 64, MaxWidth: 360, NoHandle: true, Background: colorPanel,
+					// Settings and Diagnostics belong under the scene list, and
+					// the nav's own footer row is the place that reaches the
+					// bottom: a plain Grow spacer inside the body does not.
+					Footer: func(nav layout.SideNavState) { a.columnFooter(c) },
+				}, func(nav layout.SideNavState) {
+					a.sceneColumnBody(c, nav.Expanded)
+				})
 			}
 			ui.Column(c).Grow(1).MinWidth(0).Children(func() {
 				if a.workspace == workspaceStage {
 					a.preview(c, width, height)
+					a.dockArea(c)
 					return
 				}
 				// Another page keeps the picture mounted and hidden, so the
@@ -142,16 +163,12 @@ func (a *appState) shell(c *ui.Context, width, height float32) {
 				a.parkedStage(c)
 				a.pageBody(c, width, height)
 			})
-			if !narrow && !whole && a.editingShell {
-				a.propertiesColumn(c, height)
-			}
 			if narrow && a.drawerOpen {
 				a.drawer(c, height)
 			}
 		})
-		if narrow && a.workspace == workspaceStage && a.editingShell {
-			a.mixerStrip(c)
-		}
+		// In a narrow window the console already carries the mixer, so the
+		// separate strip under it would be the same controls twice.
 		a.statusBar(c, width)
 		if a.errorOpen {
 			a.errorReport(c, width, height)
@@ -173,8 +190,6 @@ func (a *appState) shell(c *ui.Context, width, height float32) {
 func (a *appState) pageBody(c *ui.Context, width, height float32) {
 	ui.Box(c).Fill().Padding(spaceMd).Children(func() {
 		switch a.workspace {
-		case workspaceSources:
-			a.sourcesPage(c)
 		case workspaceDiagnostics:
 			a.diagnosticsPage(c)
 		case workspaceSettings:
@@ -190,12 +205,8 @@ func (a *appState) pageBody(c *ui.Context, width, height float32) {
 // switch moved to the column it acts on.
 func (a *appState) topBar(c *ui.Context, width float32) {
 	a.frameWidth, a.frameHeight = width, a.lastHeight
-	ui.Row(c).Height(a.barHeight()).WidthPercent(100).Padding(0, spaceMd).
-		Gap(spaceSm).AlignItems(ui.Center).Background(colorBgSoft).Children(func() {
-		if width >= 620 {
-			ui.Text(c, "MuxShift").FontSize(textSubtitle).TextColor(colorText).SingleLine()
-			ui.Box(c).Width(4)
-		}
+	ui.Row(c).Height(a.barHeight()).WidthPercent(100).Padding(0, spaceLg).
+		Gap(spaceSm).AlignItems(ui.Center).Background(colorBg).Children(func() {
 		a.sceneChip(c)
 		if width >= 900 {
 			label := "‹"
@@ -223,11 +234,6 @@ func (a *appState) topBar(c *ui.Context, width float32) {
 			if primary.Clicked() {
 				a.openAddSource()
 			}
-			if ui.Button(c.Key("top-watch"), a.tr("Watch", "观看")).Height(a.controlHeight()).Padding(0, spaceMd).Clicked() {
-				a.enterViewing(viewCinema, a.windowRef())
-			}
-		}
-		if a.workspace != workspaceSettings {
 			if ui.Button(c.Key("top-settings"), a.tr("Settings", "设置")).Height(a.controlHeight()).Padding(0, spaceSm).
 				Tooltip(a.tr("appearance, language and the other settings", "外观、语言与其他设置")).Clicked() {
 				a.workspace = workspaceSettings
@@ -265,14 +271,16 @@ func (a *appState) topBar(c *ui.Context, width float32) {
 // sceneLabelText is the core's scene name in the window's language. The name is
 // a description, not data: "picture 1 · sound 1 at 0.30" reads as gibberish to a
 // Chinese user, so the three words are translated while the numbers stay.
+// sceneLabelText names the scene the way the sidebar lists it. The core name
+// ("main", or "scene 2") describes the scene's audio, not the scene, and reads
+// as gibberish in the sidebar; its position is what a person points at.
 func (a *appState) sceneLabelText() string {
-	label := a.sceneLabel()
-	if !a.chinese() {
-		return label
+	for i, scene := range a.session.Scenes() {
+		if scene.ID == a.scene {
+			return fmt.Sprintf(a.tr("Scene %d", "场景 %d"), i+1)
+		}
 	}
-	label = strings.ReplaceAll(label, "picture", "画面")
-	label = strings.ReplaceAll(label, "sound", "声音")
-	return strings.ReplaceAll(label, " at ", " @ ")
+	return a.tr("Scene", "场景")
 }
 
 func (a *appState) sceneChip(c *ui.Context) {
@@ -324,41 +332,44 @@ func (a *appState) sourceEntry(c *ui.Context, it *item, index int, compact bool)
 	active := a.selected == it.source.ID
 	row := ui.Row(c).WidthPercent(100).Gap(spaceXs).AlignItems(ui.Center)
 	if compact {
-		row = row.Height(a.rowHeight()).Padding(0, spaceSm).Radius(6).
+		row = row.Height(a.rowHeight()).Padding(0, spaceMd).Radius(radiusSm).
 			OnClick(func() { a.selected = it.source.ID })
-		if active {
-			row = row.Background(colorPanel2)
-		}
+		row = row.Background(stateFill(row.Hovered(), row.Pressed(), active))
 	} else {
 		row = row.Wrap().Gap(spaceSm).Padding(spaceSm, spaceMd).Radius(10).
 			Background(colorPanel).Border(1, colorLine)
 	}
 	nameSize := textBody
 	subSize := textMicro
-	if compact {
-		nameSize = textCaption
-		subSize = textMicro
+	nameWeight := 500
+	if compact && !active {
+		nameWeight = 400
 	}
 	row.Children(func() {
 		if !compact {
 			ui.Text(c, itoa(index+1)).FontSize(textMicro).TextColor(colorDim).
 				Width(16).FontFeatures("tnum")
 		}
-		ui.Box(c).Width(6).Height(6).Radius(3).Background(a.sourceDot(it))
 		ui.Column(c).Grow(1).Gap(0).Children(func() {
 			ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, shortURI(it.uri)).FontSize(nameSize).TextColor(colorText).SingleLine()
+				ui.Box(c).Width(5).Height(5).Radius(2.5).Background(a.sourceDot(it))
+				ui.Text(c, shortURI(it.uri)).FontSize(nameSize).FontWeight(nameWeight).
+					TextColor(colorText).SingleLine()
 				if !compact {
 					a.sourceMarks(c, it)
 				}
 			})
-			ui.Text(c, a.sourceSub(it)).FontSize(subSize).TextColor(colorDim).SingleLine()
+			facts := ui.Text(c, a.sourceSub(it)).FontSize(subSize).FontWeight(400).
+				TextColor(colorDim).SingleLine()
+			if compact {
+				facts = facts.PaddingStart(13)
+			}
 		})
 		if compact {
-			a.sourceEye(c, it)
+			a.sourceEye(c, it, index)
 			return
 		}
-		a.sourceActions(c, it)
+		a.sourceActions(c, it, index)
 	})
 }
 
@@ -376,31 +387,26 @@ func (a *appState) sourceMarks(c *ui.Context, it *item) {
 	}
 }
 
-// sourceEye is the compact density's one control: the mark is a state, and only
-// the off-stage state is a button, because this build has no "take it off the
-// stage" command — a source leaves the stage by being removed.
-func (a *appState) sourceEye(c *ui.Context, it *item) {
-	if it.shown {
-		ui.Box(c).Width(24).Height(22).Center().Tooltip(a.tr("on the stage", "在舞台上")).
-			Children(func() { ui.Text(c, "◉").FontSize(textCaption).TextColor(colorGood) })
-		return
-	}
-	if ui.Button(c.Key("sc-eye-"+string(it.source.ID)), "○").Width(24).Height(22).
-		Tooltip(a.tr("put it on the stage", "放到舞台上")).Clicked() {
-		a.selected = it.source.ID
-		a.selectVideo(it)
-	}
+// sourceEye is the compact density's one control. It is a real switch now: the
+// eye that is on takes the picture off the stage without closing the player,
+// and the eye that is off puts it back.
+func (a *appState) sourceEye(c *ui.Context, it *item, index int) {
+	a.quietIconButton(c, "sc-eye-"+string(it.source.ID), a.eyeIcon(it), a.eyeTip(it),
+		a.eyeTint(it), func() {
+			a.selected = it.source.ID
+			a.toggleVideo(index)
+		})
 }
 
 // sourceActions is the card density's control row.
-func (a *appState) sourceActions(c *ui.Context, it *item) {
+func (a *appState) sourceActions(c *ui.Context, it *item, index int) {
 	ui.Row(c).Gap(spaceXs).Children(func() {
 		show := a.tr("Hide", "隐藏")
 		if !it.shown {
 			show = a.tr("Show", "显示")
 		}
 		if ui.Button(c.Key("card-show-"+string(it.source.ID)), show).Height(28).Clicked() {
-			a.selectVideo(it)
+			a.toggleVideo(index)
 		}
 		if ui.Button(c.Key("card-hear-"+string(it.source.ID)), a.tr("Hear", "试听")).Height(28).Clicked() {
 			a.selectAudio(it)
@@ -421,39 +427,167 @@ func (a *appState) sourceActions(c *ui.Context, it *item) {
 	})
 }
 
-func (a *appState) sceneColumn(c *ui.Context) {
-	ui.Column(c).Width(sceneWidth).Background(colorBgSoft).Children(func() {
-		ui.Row(c).Padding(spaceSm, spaceMd).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, a.tr("Scene", "场景")).FontSize(textMicro).TextColor(colorDim)
-			ui.Box(c).Grow(1)
-		})
-		a.sceneRow(c)
-		ui.Box(c).WidthPercent(100).Height(1).Background(colorLine)
-		ui.Row(c).Padding(spaceSm, spaceMd).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, a.tr("Sources", "来源")).FontSize(textMicro).TextColor(colorDim)
-			ui.Box(c).Grow(1)
-			if ui.Button(c.Key("sources-add"), "＋").Width(24).Height(22).Tooltip(a.tr("add a source", "添加来源")).Clicked() {
-				a.openAddSource()
+// sceneColumnBody draws the left rail. Expanded it shows the scene, the source
+// list and the way into settings; folded it becomes a strip of icons, because
+// Chinese labels do not fit a 64 pixel rail (see the console prototype).
+func (a *appState) sceneColumnBody(c *ui.Context, expanded bool) {
+	ui.Column(c).Fill().WidthPercent(100).HeightPercent(100).AlignItems(ui.Stretch).
+		Children(func() {
+			if !expanded {
+				ui.Column(c).WidthPercent(100).Padding(spaceXs, spaceSm).Gap(spaceXs).
+					AlignItems(ui.Center).Children(func() {
+					if ui.Button(c.Key("rail-add"), "＋").Width(28).Height(26).
+						Tooltip(a.tr("add a source", "添加来源")).Clicked() {
+						a.openAddSource()
+					}
+					for _, it := range a.items {
+						if ui.Button(c.Key("rail-src-"+string(it.source.ID)), "▢").Width(28).Height(26).
+							Tooltip(shortURI(it.uri)).Clicked() {
+							a.selected = it.source.ID
+							a.invalidate()
+						}
+						if it.shown {
+							ui.Box(c).Width(6).Height(6).Radius(3).Background(colorAccent)
+						}
+					}
+				})
+				return
 			}
-		})
-		ui.Scroll(c).Grow(1).WidthPercent(100).Children(func() {
-			ui.Column(c).WidthPercent(100).Padding(0, spaceSm).Gap(1).Children(func() {
-				if len(a.items) == 0 {
-					ui.Text(c, a.tr("No sources yet. Add one above.", "还没有来源，点上面的 ＋ 添加。")).
-						FontSize(textCaption).TextColor(colorDim).Wrap().Padding(spaceSm, spaceSm)
-					return
-				}
-				for i, it := range a.items {
-					a.sourceEntry(c, it, i, true)
-				}
+			ui.Row(c).Padding(spaceSm, 18).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, a.tr("Scene", "场景")).FontSize(textCaption).FontWeight(600).
+					TextColor(colorTextDim)
+				ui.Box(c).Grow(1)
 			})
+			a.sceneList(c)
+			ui.Box(c).Fill().Grow(1).MinHeight(0)
 		})
-		a.columnFooter(c)
+}
+
+// layoutRow is the five arrangements, kept in the scene column rather than
+// floating over the picture: a strip of small buttons that says where the
+// pictures go.
+func (a *appState) layoutRow(c *ui.Context) {
+	ui.Column(c).WidthPercent(100).Padding(spaceSm, spaceMd).Gap(spaceXs).Children(func() {
+		ui.Text(c, a.tr("Layout", "布局")).FontSize(textMicro).TextColor(colorDim)
+		ui.Column(c).WidthPercent(100).Gap(spaceXs).Children(func() {
+			row := func(kinds []layoutKind) {
+				ui.Row(c).WidthPercent(100).Gap(spaceXs).Children(func() {
+					for _, kind := range kinds {
+						on := a.layout == kind
+						label := a.tr(kind.label(), map[string]string{
+							"Focus": "聚焦", "Split": "分屏", "PiP": "小窗",
+							"Grid": "网格", "Hero": "主次",
+						}[kind.label()])
+						b := ui.Button(c.Key("layout-"+kind.String()), label).Height(24).Grow(1)
+						if on {
+							b = b.Background(colorAccentSoft).TextColor(colorAccent)
+						}
+						if b.Clicked() {
+							a.setLayout(kind)
+						}
+					}
+				})
+			}
+			row(layoutKinds[0:3])
+			row(layoutKinds[3:])
+		})
 	})
 }
 
 // sceneRow draws the one scene. It is a row, not a button, because there is
 // nothing to switch to yet.
+// sceneList draws every scene as a row: the current one carries the accent
+// dot, a press switches to it, and the cross removes it when more than one is
+// left. A scene is where a different arrangement of the same sources lives, so
+// the list is the only place that can bring one forward.
+func (a *appState) sceneList(c *ui.Context) {
+	scenes := a.session.Scenes()
+	ui.Column(c).WidthPercent(100).Gap(spaceXs).Padding(0, spaceSm).Children(func() {
+		for i, scene := range scenes {
+			sc := scene
+			current := sc.ID == a.scene
+			row := ui.Row(c).WidthPercent(100).Height(36).Padding(0, 10).Gap(spaceSm).
+				AlignItems(ui.Center).Radius(radiusSm).
+				OnClick(func() { a.selectScene(sc.ID) })
+			row = row.Background(stateFill(row.Hovered(), row.Pressed(), current))
+			row.Children(func() {
+				dot := ui.Box(c).Width(6).Height(6).Radius(3).Background(colorDim)
+				if current {
+					dot = dot.Background(colorSelectedText)
+				}
+				label := ui.Text(c, a.tr("Scene ", "场景 ")+itoa(i+1)).FontSize(textBody).
+					FontWeight(500)
+				if current {
+					label = label.TextColor(colorSelectedText)
+				} else {
+					label = label.TextColor(colorTextDim)
+				}
+				ui.Box(c).Grow(1)
+				ui.Text(c, itoa(len(sc.Video))).FontSize(textMicro).TextColor(colorDim).
+					FontFeatures("tnum")
+				if len(scenes) > 1 {
+					a.iconButton(c, "scene-drop-"+string(sc.ID), lucide.X(),
+						a.tr("remove this scene", "删除这个场景"), false, func() {
+							a.removeScene(sc.ID)
+						})
+				}
+			})
+		}
+		// A new scene is a row like the others, not a filled button under
+		// them: it is the same kind of thing, so it looks the same.
+		add := ui.ButtonBase(c.Key("scene-add")).WidthPercent(100).Height(36).
+			Padding(0, 10).Gap(spaceSm).Justify(ui.Start).Radius(radiusSm)
+		add = add.Background(stateFill(add.Hovered(), add.Pressed(), false))
+		ink := colorTextDim
+		if add.Hovered() {
+			ink = colorText
+		}
+		add = add.TextColor(ink)
+		add.Children(func() {
+			ui.Icon(c, lucide.Plus()).Size(16, 16)
+			ui.Text(c, a.tr("Add scene", "添加场景")).FontSize(textBody).FontWeight(500).TextColor(ink)
+		})
+		if add.Clicked() {
+			a.addScene()
+		}
+	})
+}
+
+// selectScene makes an existing scene the one the stage draws.
+func (a *appState) selectScene(id core.SceneID) {
+	if id == a.scene {
+		return
+	}
+	if _, err := a.session.Scene(id); err != nil {
+		a.lastErr = safeOpenError(err)
+		a.invalidate()
+		return
+	}
+	a.scene = id
+	a.apply()
+	a.invalidate()
+}
+
+// removeScene drops a scene and stays on a scene that exists.
+func (a *appState) removeScene(id core.SceneID) {
+	if err := a.session.RemoveScene(id); err != nil {
+		a.lastErr = safeOpenError(err)
+		a.invalidate()
+		return
+	}
+	delete(a.edits, id)
+	if a.scene == id {
+		if scenes := a.session.Scenes(); len(scenes) > 0 {
+			a.scene = scenes[0].ID
+		}
+	}
+	a.pruneStageEdits()
+	a.apply()
+	a.invalidate()
+}
+
+// sceneRow is the single-line scene label used where only the current scene
+// matters, such as the stage's own caption.
 func (a *appState) sceneRow(c *ui.Context) {
 	ui.Row(c).WidthPercent(100).Height(38).Padding(0, spaceMd).Gap(spaceXs).
 		AlignItems(ui.Center).Background(colorPanel2).Children(func() {
@@ -486,20 +620,43 @@ func (a *appState) sourceSub(it *item) string {
 // so this is where they stay one press away while the picture is visible.
 func (a *appState) columnFooter(c *ui.Context) {
 	ui.Row(c).WidthPercent(100).Padding(spaceSm, spaceSm).Gap(spaceXs).Wrap().Children(func() {
-		for _, page := range []workspace{workspaceSources, workspaceDiagnostics, workspaceSettings} {
-			p := page
-			button := ui.Button(c.Key("foot-"+itoa(int(p))), a.pageLabel(p)).Height(26).Padding(0, spaceSm)
-			if p == a.workspace {
-				button = button.Background(colorAccentSoft).TextColor(colorAccent)
+		navRow := func(key string, icon *ui.SVG, label string, on bool, click func()) {
+			button := ui.ButtonBase(c.Key(key)).Height(30).Padding(0, spaceSm).Gap(spaceSm).
+				Radius(radiusSm).Justify(ui.Start)
+			button = button.Background(stateFill(button.Hovered(), button.Pressed(), on))
+			ink := colorTextDim
+			if on {
+				ink = colorSelectedText
 			}
+			button = button.TextColor(ink).Tooltip(label)
+			button.Children(func() {
+				ui.Icon(c, icon).Size(16, 16)
+				ui.Text(c, label).FontSize(textSmall).FontWeight(500).TextColor(ink)
+			})
 			if button.Clicked() {
-				a.workspace = p
+				click()
 			}
 		}
+		// Sources are not a page any more: the console owns that list, so this
+		// button brings the console forward instead of opening a second copy.
+		sourcesOn := a.dockUp && !a.dockHidden[dockSources] && a.workspace == workspaceStage
+		navRow("foot-sources", lucide.SquareStack(), a.pageLabel(workspaceSources), sourcesOn, func() {
+			delete(a.dockHidden, dockSources)
+			a.dockUp = true
+			a.workspace = workspaceStage
+		})
+		navRow("foot-"+itoa(int(workspaceDiagnostics)), lucide.Activity(),
+			a.pageLabel(workspaceDiagnostics), a.workspace == workspaceDiagnostics, func() {
+				a.workspace = workspaceDiagnostics
+			})
+		navRow("foot-"+itoa(int(workspaceSettings)), lucide.Settings(),
+			a.pageLabel(workspaceSettings), a.workspace == workspaceSettings, func() {
+				a.workspace = workspaceSettings
+			})
 		if a.workspace != workspaceStage {
-			if ui.Button(c.Key("foot-stage"), a.tr("Stage", "舞台")).Height(26).Padding(0, spaceSm).Clicked() {
+			navRow("foot-stage", lucide.Clapperboard(), a.tr("Stage", "舞台"), false, func() {
 				a.workspace = workspaceStage
-			}
+			})
 		}
 	})
 }
@@ -524,12 +681,20 @@ func (a *appState) pageLabel(page workspace) string {
 // preview is the stage page in the middle column: the layout switches, the
 // picture, and the transport under it.
 func (a *appState) preview(c *ui.Context, width, height float32) {
-	if a.editingShell {
-		a.toolbar(c, width)
-	}
+	// The P16 shell has one rail on the left and no properties column on the
+	// right, so the picture may use everything after the rail and its gap.
+	// Subtracting a right column that is no longer drawn was what kept the
+	// canvas at half the window.
 	available := width
 	if width >= 900 {
-		available -= sceneWidth + propertiesWidth
+		rail := a.navWidth
+		if rail <= 0 {
+			rail = sceneWidth
+		}
+		if !a.navUp {
+			rail = railFoldWidth
+		}
+		available -= rail + spaceSm
 	}
 	if available < 320 {
 		available = 320
@@ -540,7 +705,16 @@ func (a *appState) preview(c *ui.Context, width, height float32) {
 	if !a.editingShell {
 		pictureCap = height
 	}
-	if room := height - a.barHeight() - a.statusBarHeight() - 44 - 12; room > 120 && pictureCap > room {
+	// The console takes its own height out of the window; the picture must not
+	// be measured against the whole window or it is drawn under the dock.
+	room := height
+	if a.editingShell {
+		room = height - a.statusBarHeight() - 44 - 12
+		if a.dockUp {
+			room -= a.dockHeight
+		}
+	}
+	if room > 120 && pictureCap > room {
 		pictureCap = room
 	}
 	// The picture is 16:9, so the box that holds it is too. Without this the
@@ -555,8 +729,9 @@ func (a *appState) preview(c *ui.Context, width, height float32) {
 		ui.Box(c).Grow(1)
 		ui.Row(c).WidthPercent(100).AlignItems(ui.Center).Children(func() {
 			ui.Box(c).Grow(1)
-			ui.Box(c).Width(pictureWidth).Height(pictureCap).Children(func() {
+			ui.Box(c).Width(pictureWidth).Height(pictureCap).MaxHeight(pictureCap).Children(func() {
 				a.stage(c)
+				a.stageCorner(c)
 			})
 			ui.Box(c).Grow(1)
 		})
@@ -570,8 +745,51 @@ func (a *appState) preview(c *ui.Context, width, height float32) {
 	}
 }
 
-// toolbar is the stage's own strip: the five layouts, the edit switch, and the
-// note when a layout cannot show everything.
+// stageCorner is the small cluster in the picture's top-right corner: the
+// working controls that belong to the picture itself. They are icons because
+// five words over a picture is what this window is trying not to be, and the
+// tooltip carries the name for anyone who needs it.
+func (a *appState) stageCorner(c *ui.Context) {
+	ui.Row(c).Absolute().Top(spaceSm).Right(spaceSm).Gap(spaceXs).
+		Padding(spaceXs, spaceXs).Radius(radiusMd).Background(colorPanel2).
+		Border(1, colorLine).Children(func() {
+		next := a.layout.next()
+		a.iconButtonSized(c, "corner-layout", lucide.Grid2x2(),
+			a.tr("layout: ", "布局：")+a.layoutLabel(a.layout)+a.tr(" → next ", "，下一个：")+a.layoutLabel(next),
+			32, colorText, false, func() { a.setLayout(next) })
+		editInk := colorText
+		if a.editMode {
+			editInk = colorAccent
+		}
+		a.iconButtonSized(c, "corner-edit", lucide.Move(),
+			a.tr("edit the picture's place", "编辑画面位置"), 32, editInk, a.editMode, func() {
+				a.editMode = !a.editMode
+				a.invalidate()
+			})
+		a.iconButtonSized(c, "corner-cinema", lucide.MonitorPlay(),
+			a.tr("watch in cinema", "沉浸观看"), 32, colorText, false, func() {
+				a.enterViewing(viewCinema, a.windowRef())
+				a.invalidate()
+			})
+		a.iconButtonSized(c, "corner-full", lucide.Maximize(),
+			a.tr("window full screen", "窗口全屏"), 32, colorText, false, func() {
+				a.enterViewing(viewFullscreen, a.windowRef())
+				a.invalidate()
+			})
+	})
+}
+
+// next names the arrangement a second press of the layout button reaches, so
+// the button can say what it will do before it does it.
+func (k layoutKind) next() layoutKind {
+	for i, kind := range layoutKinds {
+		if kind == k {
+			return layoutKinds[(i+1)%len(layoutKinds)]
+		}
+	}
+	return layoutFocus
+}
+
 func (a *appState) toolbar(c *ui.Context, width float32) {
 	ui.Row(c).WidthPercent(100).Height(36).Padding(0, spaceSm).Gap(spaceXs).
 		AlignItems(ui.Center).Children(func() {
@@ -647,58 +865,73 @@ func (a *appState) transportBar(c *ui.Context) {
 	snap := a.snapshot()
 	first := a.firstShown()
 	ui.Row(c).WidthPercent(100).Height(44).Padding(0, spaceSm).Gap(spaceSm).
+		Background(colorBg).Border(0, colorBg).
 		AlignItems(ui.Center).Children(func() {
-		playing := a.playing()
-		play := a.tr("Pause", "暂停")
-		if !playing {
-			play = a.tr("Play", "播放")
-		}
-		playButton := ui.Button(c.Key("transport-play"), play).Width(80).Height(32)
-		if len(a.items) == 0 {
-			playButton = playButton.Disabled(true)
-		}
-		if playButton.Clicked() {
-			if a.playing() {
-				a.runCommand(command{Kind: commandPause})
-			} else {
-				a.runCommand(command{Kind: commandPlay})
-			}
-		}
-		mute := a.tr("Mute", "静音")
-		if a.masterMute {
-			mute = a.tr("Unmute", "取消静音")
-		}
-		if ui.Button(c.Key("transport-mute"), mute).Width(88).Height(32).Clicked() {
-			a.runCommand(command{Kind: commandMasterMute})
-		}
-		if ui.Button(c.Key("transport-reload"), a.tr("Reload", "重载")).Width(72).Height(32).Clicked() {
-			a.runCommand(command{Kind: commandReload})
-		}
-		if first != nil {
-			ui.Text(c, a.name(first)).FontSize(textCaption).TextColor(colorTextDim).
-				MaxWidth(220).SingleLine().Padding(spaceSm, 0)
-		}
-		// The event clock only means something once the shared timeline
-		// has been started. A window opened straight onto a file has not
-		// started one, and printing 0.0s beside a player at 0:14 would
-		// read as a stuck clock rather than as "there is no timeline yet".
-		if snap.Event > 0 {
-			ui.Text(c, formatEvent(snap.Event)).FontSize(textBody).TextColor(colorText).
-				FontFeatures("tnum").Padding(spaceXs, 0)
-		}
-		if first != nil {
-			total := first.player.Duration()
-			ui.Text(c, clock(first.player.Position())+" / "+clock(total)).
-				FontSize(textBody).TextColor(colorTextDim).FontFeatures("tnum").
-				Padding(spaceSm, 0)
-		}
-		ui.Box(c).Grow(1)
-		// One way in to watching. Cinema is the windowed form; the
-		// overlay inside it already offers full screen, so the workbench
-		// does not need two buttons that both mean "stop editing".
-		if ui.Button(c.Key("transport-cinema"), a.tr("Watch", "沉浸观看")).Width(104).Height(32).Clicked() {
-			a.enterViewing(viewCinema, a.windowRef())
-		}
+		ui.Row(c).Grow(1).Justify(ui.SpaceBetween).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
+				playing := a.playing()
+				play := a.tr("Pause", "暂停")
+				if !playing {
+					play = a.tr("Play", "播放")
+				}
+				playButton := ui.ButtonBase(c.Key("transport-play")).Width(88).Height(32).
+					Padding(0, spaceMd).Radius(radiusSm).AlignItems(ui.Center).Shrink(0).AlignSelf(ui.Center)
+				fill, ink := colorEnabled, colorSelectedText
+				if len(a.items) == 0 {
+					fill, ink = colorPanel2, colorDim
+					playButton = playButton.Disabled(true)
+				} else if playButton.Pressed() {
+					fill, ink = colorEnabledPress, colorText
+				} else if playButton.Hovered() {
+					fill, ink = colorEnabledHover, colorText
+				}
+				playButton = playButton.Background(fill).TextColor(ink)
+				playButton.Children(func() {
+					ui.Text(c, play).FontSize(textSmall).FontWeight(500).TextColor(ink).SingleLine()
+				})
+				if playButton.Clicked() {
+					if a.playing() {
+						a.runCommand(command{Kind: commandPause})
+					} else {
+						a.runCommand(command{Kind: commandPlay})
+					}
+				}
+				mute := a.tr("Mute", "静音")
+				if a.masterMute {
+					mute = a.tr("Unmute", "取消静音")
+				}
+				a.ghostButton(c, "transport-mute", mute, 0, func() {
+					a.runCommand(command{Kind: commandMasterMute})
+				})
+				a.ghostButton(c, "transport-reload", a.tr("Reload", "重载"), 0, func() {
+					a.runCommand(command{Kind: commandReload})
+				})
+				if first != nil {
+					ui.Text(c, a.name(first)).FontSize(textCaption).TextColor(colorTextDim).
+						MaxWidth(220).SingleLine().Padding(spaceSm, 0)
+				}
+				// The event clock only means something once the shared timeline
+				// has been started. A window opened straight onto a file has not
+				// started one, and printing 0.0s beside a player at 0:14 would
+				// read as a stuck clock rather than as "there is no timeline yet".
+				if snap.Event > 0 {
+					ui.Text(c, formatEvent(snap.Event)).FontSize(textBody).TextColor(colorText).
+						FontFeatures("tnum").Padding(spaceXs, 0)
+				}
+				if first != nil {
+					total := first.player.Duration()
+					ui.Text(c, clock(first.player.Position())+" / "+clock(total)).
+						FontSize(textBody).TextColor(colorTextDim).FontFeatures("tnum").
+						Padding(spaceSm, 0)
+				}
+			})
+			// One way in to watching. Cinema is the windowed form; the
+			// overlay inside it already offers full screen, so the workbench
+			// does not need two buttons that both mean "stop editing".
+			a.ghostButton(c, "transport-cinema", a.tr("Watch", "沉浸观看"), 104, func() {
+				a.enterViewing(viewCinema, a.windowRef())
+			})
+		})
 	})
 }
 
@@ -801,14 +1034,11 @@ func (a *appState) soundTab(c *ui.Context, it *item, index int) {
 	a.detailRow(c, a.tr("State", "状态"), a.soundState(a.entryOf(it)))
 	ui.Row(c).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, a.tr("Level", "音量")).FontSize(textMicro).TextColor(colorDim).Width(52)
-		if ui.Button(c.Key("snd-vol-down"), "−").Width(28).Height(26).Clicked() {
-			a.runCommand(command{Kind: commandVolume, Source: it.source.ID, Volume: clamp01(it.volume - 0.05)})
+		if a.rangeSlider(c, "snd-vol", &it.volume, 0, 1, 160) {
+			a.runCommand(command{Kind: commandVolume, Source: it.source.ID, Volume: it.volume})
 		}
 		ui.Text(c, fmt.Sprintf("%.2f", it.volume)).Width(40).FontSize(textSmall).
 			TextColor(colorText).FontFeatures("tnum")
-		if ui.Button(c.Key("snd-vol-up"), "+").Width(28).Height(26).Clicked() {
-			a.runCommand(command{Kind: commandVolume, Source: it.source.ID, Volume: clamp01(it.volume + 0.05)})
-		}
 	})
 	ui.Row(c).Wrap().Gap(spaceXs).Children(func() {
 		if ui.Button(c.Key("snd-mute"), a.muteLabel(it)).Height(26).Clicked() {
@@ -831,11 +1061,15 @@ func (a *appState) soundTab(c *ui.Context, it *item, index int) {
 	a.detailRow(c, a.tr("Align", "对齐"), a.alignedState(a.entryOf(it)))
 	ui.Row(c).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, a.tr("Offset", "偏移")).FontSize(textMicro).TextColor(colorDim).Width(52)
-		if ui.Button(c.Key("snd-back"), "−0.1s").Width(64).Height(26).Clicked() {
-			a.runCommand(command{Kind: commandNudge, Source: it.source.ID, Delta: -100 * time.Millisecond})
-		}
-		if ui.Button(c.Key("snd-fwd"), "+0.1s").Width(64).Height(26).Clicked() {
-			a.runCommand(command{Kind: commandNudge, Source: it.source.ID, Delta: 100 * time.Millisecond})
+		a.offsetStepper(c, "snd-step", a.entryOf(it).Offset, a.settingsNudge(1),
+			func(delta time.Duration) {
+				a.report(a.runCommand(command{Kind: commandNudge, Source: it.source.ID, Delta: delta}))
+			})
+		if offset := a.entryOf(it).Offset; offset != 0 {
+			a.iconButton(c, "snd-reset", lucide.RotateCcw(),
+				a.tr("set this offset back to zero", "把这一路的偏移复位"), false, func() {
+					a.report(a.runCommand(command{Kind: commandNudge, Source: it.source.ID, Delta: -offset}))
+				})
 		}
 	})
 	if it.audio != "" && a.hasCommonClock(it) {
@@ -894,21 +1128,27 @@ func (a *appState) mixerPanel(c *ui.Context, height float32) {
 
 // mixerChannel is one strip in the mixer: name, mute, level.
 func (a *appState) mixerChannel(c *ui.Context, it *item) {
-	ui.Row(c).WidthPercent(100).Height(28).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).WidthPercent(100).Height(32).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
 		ui.Box(c).Width(6).Height(6).Radius(3).Background(colorSound)
-		ui.Text(c, shortURI(it.uri)).FontSize(textMicro).TextColor(colorText).Width(70).SingleLine()
-		mute := "M"
-		if a.sourceMuted(it) {
-			mute = "M·"
+		ui.Text(c, shortURI(it.uri)).FontSize(textBody).FontWeight(400).TextColor(colorText).
+			Grow(1).MinWidth(0).SingleLine()
+		muted := a.sourceMuted(it)
+		icon := lucide.Volume2()
+		tint := colorTextDim
+		if muted {
+			icon = lucide.VolumeX()
+			tint = colorDim
 		}
-		if ui.Button(c.Key("mix-mute-"+string(it.source.ID)), mute).Width(30).Height(20).Clicked() {
-			a.runCommand(command{Kind: commandMute, Source: it.source.ID})
-		}
-		if ui.Slider(c, &it.volume, 0, 1).Grow(1).Height(18).Changed() {
+		a.quietIconButton(c, "mix-mute-"+string(it.source.ID), icon,
+			a.tr("mute this source", "静音这一路"), tint, func() {
+				a.runCommand(command{Kind: commandMute, Source: it.source.ID})
+			})
+		if a.volumeSlider(c, "mix-vol-"+string(it.source.ID), &it.volume, 84) {
 			a.runCommand(command{Kind: commandVolume, Source: it.source.ID, Volume: it.volume})
 		}
-		ui.Text(c, fmt.Sprintf("%.0f%%", it.volume*100)).Width(34).FontSize(textMicro).
-			TextColor(colorDim).FontFeatures("tnum").SingleLine()
+		ui.Text(c, fmt.Sprintf("%.0f%%", it.volume*100)).Width(42).PaddingStart(6).
+			FontSize(textSmall).FontWeight(500).TextColor(colorTextDim).TextAlign(ui.End).
+			FontFeatures("tnum").SingleLine()
 	})
 }
 
@@ -1008,13 +1248,15 @@ func (a *appState) statusBar(c *ui.Context, width float32) {
 func (a *appState) errorReport(c *ui.Context, width, height float32) {
 	ui.Box(c).Absolute().Left(0).Top(0).Right(0).Bottom(0).Center().
 		Background(ui.RGBA(0, 0, 0, 0.55)).Children(func() {
-		ui.Column(c).Width(560).MaxWidth(width-40).Padding(spaceLg).Gap(spaceSm).
-			Radius(12).Background(colorPanel).Border(1, colorLine).Children(func() {
-			ui.Text(c, a.tr("Something went wrong", "出错了")).FontSize(textSubtitle).TextColor(colorText)
+		ui.Column(c).Width(560).MaxWidth(width-40).Padding(spaceXl).Gap(spaceMd).
+			Radius(radiusLg).Background(colorPanel2).Border(1, colorLine).Children(func() {
+			ui.Text(c, a.tr("Something went wrong", "出错了")).FontSize(textTitle).
+				FontWeight(600).TextColor(colorText)
 			ui.Text(c, a.errorShort()).FontSize(textBody).TextColor(colorText).Wrap()
 			if a.lastErr != nil {
 				ui.Scroll(c).WidthPercent(100).MaxHeight(140).Children(func() {
-					ui.Text(c, a.lastErr.Error()).FontSize(textMicro).TextColor(colorDim).Wrap()
+					ui.Text(c, a.lastErr.Error()).FontSize(textMicro).FontWeight(400).
+						TextColor(colorDim).Wrap()
 				})
 			}
 			ui.Row(c).Gap(spaceSm).Children(func() {
@@ -1054,13 +1296,13 @@ func (a *appState) errorShort() string {
 func (a *appState) pageMenuPanel(c *ui.Context, width float32) {
 	ui.Box(c).Absolute().Left(0).Top(0).Right(0).Bottom(0).ZIndex(19).
 		OnClick(func() { a.pageMenu = false })
-	ui.Column(c).Absolute().Top(a.barHeight()+4).Right(12).Width(220).Padding(6).Gap(2).
-		Radius(10).Background(colorPanel).Border(1, colorLine).ZIndex(20).Children(func() {
+	ui.Column(c).Absolute().Top(a.barHeight()+4).Right(12).Width(220).Padding(4).Gap(2).
+		Radius(radiusMd).Background(colorPanel2).Border(1, colorLine).ZIndex(20).Children(func() {
 		for _, page := range []workspace{workspaceStage, workspaceSources, workspaceDiagnostics, workspaceSettings, workspaceMixer} {
 			p := page
-			button := ui.Button(c.Key("menu-"+itoa(int(p))), a.pageLabel(p)).Height(30).Padding(0, spaceSm)
+			button := ui.Button(c.Key("menu-"+itoa(int(p))), a.pageLabel(p)).Height(32).Padding(0, spaceSm)
 			if p == a.workspace {
-				button = button.Background(colorAccentSoft).TextColor(colorAccent)
+				button = button.Background(colorSelected).TextColor(colorSelectedText)
 			}
 			if button.Clicked() {
 				a.workspace = p
@@ -1068,7 +1310,7 @@ func (a *appState) pageMenuPanel(c *ui.Context, width float32) {
 			}
 		}
 		ui.Box(c).WidthPercent(100).Height(1).Background(colorLine)
-		if ui.Button(c.Key("menu-quit"), a.tr("Quit MuxShift", "退出 MuxShift")).Height(30).
+		if ui.Button(c.Key("menu-quit"), a.tr("Quit MuxShift", "退出 MuxShift")).Height(32).
 			Padding(0, spaceSm).TextColor(colorBad).Clicked() {
 			a.release()
 			a.closes++
@@ -1082,11 +1324,12 @@ func (a *appState) sceneMenuPanel(c *ui.Context, width float32) {
 	ui.Box(c).Absolute().Left(0).Top(0).Right(0).Bottom(0).ZIndex(19).
 		OnClick(func() { a.sceneMenu = false })
 	ui.Column(c).Absolute().Top(a.barHeight()+4).Left(sceneWidth+spaceMd).Width(220).
-		Padding(6).Gap(2).Radius(10).Background(colorPanel).Border(1, colorLine).ZIndex(20).Children(func() {
-		ui.Row(c).Height(30).Padding(0, spaceSm).Gap(spaceXs).AlignItems(ui.Center).Background(colorAccentSoft).Children(func() {
-			ui.Text(c, a.sceneLabelText()).FontSize(textBody).TextColor(colorAccent)
+		Padding(4).Gap(2).Radius(radiusMd).Background(colorPanel2).Border(1, colorLine).ZIndex(20).Children(func() {
+		ui.Row(c).Height(32).Padding(0, spaceSm).Gap(spaceXs).AlignItems(ui.Center).
+			Background(colorSelected).Children(func() {
+			ui.Text(c, a.sceneLabelText()).FontSize(textBody).TextColor(colorSelectedText)
 		})
-		ui.Button(c.Key("scene-new"), a.tr("New scene…", "新建场景…")).Height(30).Padding(0, spaceSm).Disabled(true).
+		ui.Button(c.Key("scene-new"), a.tr("New scene…", "新建场景…")).Height(32).Padding(0, spaceSm).Disabled(true).
 			Tooltip(a.tr("this build has one scene", "此版本只有一个场景"))
 	})
 }
@@ -1120,8 +1363,8 @@ func (a *appState) detailRow(c *ui.Context, label, value string) {
 func (a *appState) addSourceDialog(c *ui.Context) {
 	ui.DialogBase(c, &a.addOpen, func(backdrop, panel ui.Element) {
 		backdrop.Background(ui.RGBA(0, 0, 0, 0.55))
-		panel = panel.Background(colorPanel).Border(1, colorLine).Radius(12).
-			Padding(spaceLg).Gap(spaceSm)
+		panel = panel.Background(colorPanel2).Border(1, colorLine).Radius(radiusLg).
+			Padding(spaceXl).Gap(spaceMd)
 		panel.Children(func() { a.addSourcePanel(c) })
 	})
 }

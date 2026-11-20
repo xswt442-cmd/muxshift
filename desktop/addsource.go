@@ -267,18 +267,31 @@ func (a *appState) addSourcePanel(c *ui.Context) {
 	// way to ask for one. Handing it over here keeps the choice usable from the
 	// panel alone, while a test can still put its own opener in place instead.
 	a.contextOpenURL = c.OpenURLThen
-	ui.Column(c).Gap(spaceSm).MinWidth(400).MaxWidth(480).Children(func() {
-		ui.Text(c, a.tr("Add a source", "添加来源")).FontSize(textSubtitle).TextColor(colorText)
+	ui.Column(c).Gap(spaceSm).MinWidth(412).MaxWidth(440).Children(func() {
+		ui.Text(c, a.tr("Add a source", "添加来源")).FontSize(textTitle).FontWeight(600).
+			TextColor(colorText)
 		ui.Row(c).Gap(spaceSm).WidthPercent(100).Children(func() {
 			for _, choice := range []addChoice{addChoiceFile, addChoiceMedia, addChoiceSite} {
-				label := a.addChoiceLabel(choice)
-				if a.addChoice == choice {
-					label += " ✓"
+				selected := a.addChoice == choice
+				button := ui.ButtonBase(c.Key("add-"+choice.key())).Grow(1).Height(32).
+					Padding(0, spaceSm).Radius(radiusSm).AlignItems(ui.Center)
+				fill, ink := colorBg, colorTextDim
+				if selected {
+					fill, ink = colorSelected, colorSelectedText
 				}
-				button := ui.Button(c.Key("add-"+choice.key()), label).Grow(1).Height(36)
-				if a.addChoice == choice {
-					button.Border(1, colorAccent).Background(colorPanel2)
+				if button.Pressed() {
+					fill, ink = colorPressed, colorText
+				} else if button.Hovered() {
+					ink = colorText
+					if !selected {
+						fill = colorHover
+					}
 				}
+				button = button.Background(fill).TextColor(ink)
+				button.Children(func() {
+					ui.Text(c, a.addChoiceLabel(choice)).FontSize(textSmall).
+						FontWeight(500).TextColor(ink).SingleLine()
+				})
 				if button.Clicked() {
 					a.addChoice = choice
 					a.addNote, a.addNoteBad = "", false
@@ -286,43 +299,80 @@ func (a *appState) addSourcePanel(c *ui.Context) {
 			}
 		})
 		if a.addChoice != addChoiceNone {
-			ui.Text(c, a.addChoiceExplanation(a.addChoice)).FontSize(textSmall).
-				TextColor(colorTextDim).Wrap()
+			ui.Text(c, a.addChoiceExplanation(a.addChoice)).FontSize(textMicro).
+				FontWeight(400).TextColor(colorDim).Wrap()
 		}
 		switch a.addChoice {
 		case addChoiceMedia:
-			ui.TextInput(c, &a.importText).WidthPercent(100).Height(a.controlHeight()).
+			ui.TextInput(c, &a.importText).WidthPercent(100).Height(32).
+				Padding(0, 10).Radius(radiusSm).Background(colorInput).
+				Border(1, colorLine).PlaceholderColor(colorDim).
 				Placeholder(`https://… .m3u8  or  C:\path\file.mp4`).
-				Description(a.tr("the media address or file path to read", "要读取的媒体地址或文件路径"))
+				Invalid(a.addNoteBad)
+			ui.Text(c, a.tr("the media address or file path to read", "要读取的媒体地址或文件路径")).
+				FontSize(textMicro).FontWeight(400).TextColor(colorDim)
 		case addChoiceSite:
-			ui.TextInput(c, &a.addSiteText).WidthPercent(100).Height(a.controlHeight()).
+			ui.TextInput(c, &a.addSiteText).WidthPercent(100).Height(32).
+				Padding(0, 10).Radius(radiusSm).Background(colorInput).
+				Border(1, colorLine).PlaceholderColor(colorDim).
 				Placeholder("https://example.com/watch?v=…").
-				Description(a.tr("the page to open in your browser", "要在浏览器里打开的页面"))
+				Invalid(a.addNoteBad)
+			ui.Text(c, a.tr("the page to open in your browser", "要在浏览器里打开的页面")).
+				FontSize(textMicro).FontWeight(400).TextColor(colorDim)
 		}
 		if a.addNote != "" {
 			tone := colorTextDim
 			if a.addNoteBad {
 				tone = colorBad
 			}
-			ui.Text(c, a.addNote).FontSize(textSmall).TextColor(tone).Wrap()
+			ui.Text(c, a.addNote).FontSize(textMicro).FontWeight(400).TextColor(tone).Wrap()
 		}
 		ui.Row(c).Gap(spaceSm).WidthPercent(100).AlignItems(ui.Center).Children(func() {
 			ui.Box(c).Grow(1)
-			if ui.Button(c.Key("add-cancel"), a.tr("Cancel", "取消")).Width(88).
-				Height(a.controlHeight()).Clicked() {
+			cancel := ui.ButtonBase(c.Key("add-cancel")).Width(88).Height(32).
+				Padding(0, spaceMd).Radius(radiusSm).AlignItems(ui.Center)
+			cancelFill, cancelInk := colorBg, colorTextDim
+			if cancel.Pressed() {
+				cancelFill, cancelInk = colorPressed, colorText
+			} else if cancel.Hovered() {
+				cancelFill, cancelInk = colorHover, colorText
+			}
+			cancel = cancel.Background(cancelFill).TextColor(cancelInk)
+			cancel.Children(func() {
+				ui.Text(c, a.tr("Cancel", "取消")).FontSize(textSmall).FontWeight(500).
+					TextColor(cancelInk).SingleLine()
+			})
+			if cancel.Clicked() {
 				a.closeAddSource()
 			}
-			submit := ui.Button(c.Key("add-submit"), a.addSubmitLabel()).Width(116).
-				Height(a.controlHeight())
+			enabled := a.addChoice != addChoiceNone
+			submit := ui.ButtonBase(c.Key("add-submit")).Width(116).Height(32).
+				Padding(0, spaceMd).Radius(radiusSm).AlignItems(ui.Center)
+			submitFill, submitInk := ui.Transparent, colorDim
+			if enabled {
+				submitFill, submitInk = colorAccent, colorAccentText
+				if submit.Pressed() {
+					submitFill = colorAccentDown
+				} else if submit.Hovered() {
+					submitFill = colorAccentHi
+				}
+			} else {
+				submit = submit.Disabled(true)
+			}
+			submit = submit.Background(submitFill).TextColor(submitInk)
+			submit.Children(func() {
+				ui.Text(c, a.addSubmitLabel()).FontSize(textSmall).FontWeight(500).
+					TextColor(submitInk).SingleLine()
+			})
 			switch a.addChoice {
 			case addChoiceMedia:
-				submit.Tooltip(a.tr("read this address and add it to the session", "读取这个地址并加入本次会话"))
+				submit = submit.Tooltip(a.tr("read this address and add it to the session", "读取这个地址并加入本次会话"))
 			case addChoiceSite:
-				submit.Tooltip(a.tr("open the page; the extension hands the media back", "打开页面，由扩展把媒体交回来"))
+				submit = submit.Tooltip(a.tr("open the page; the extension hands the media back", "打开页面，由扩展把媒体交回来"))
 			case addChoiceFile:
-				submit.Tooltip(a.tr("open the desktop file picker", "打开系统文件选择器"))
+				submit = submit.Tooltip(a.tr("open the desktop file picker", "打开系统文件选择器"))
 			default:
-				submit.Disabled(true).Tooltip(a.tr("choose one of the three first", "先选这三者之一"))
+				submit = submit.Tooltip(a.tr("choose one of the three first", "先选这三者之一"))
 			}
 			if submit.Clicked() {
 				a.submitAddSource()

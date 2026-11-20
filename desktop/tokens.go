@@ -14,31 +14,47 @@ import (
 )
 
 // Colours shared with the web client. ui.Hex is a call, so these are vars.
+// The ladder is deliberate: base, surface, raised, hover. Adjacent regions are
+// separated by that ladder and an 8 DIP gap, not by a hairline on everything.
 var (
-	colorBg         = ui.Hex("#0b0d11")
-	colorBgSoft     = ui.Hex("#0f1218")
-	colorPanel      = ui.Hex("#14181f")
-	colorPanel2     = ui.Hex("#1a1f28")
-	colorLine       = ui.Hex("#262d39")
-	colorLineSoft   = ui.Hex("#1e242e")
-	colorText       = ui.Hex("#e9ecf2")
-	colorTextDim    = ui.Hex("#9aa4b3")
-	colorDim        = ui.Hex("#808a99")
-	colorAccent     = ui.Hex("#5aa9ff")
-	colorAccentText = ui.Hex("#06121f")
+	colorBg         = ui.Hex("#13151a")
+	colorBgSoft     = ui.Hex("#1b1e24")
+	colorPanel      = ui.Hex("#1b1e24")
+	colorPanel2     = ui.Hex("#252932")
+	colorLine       = ui.Hex("#343a45")
+	colorLineSoft   = ui.Hex("#292e36")
+	colorText       = ui.Hex("#e6eaf0")
+	colorTextDim    = ui.Hex("#a1aab8")
+	colorDim        = ui.Hex("#858f9e")
+	colorAccent     = ui.Hex("#8bb5f5")
+	colorAccentText = ui.Hex("#0f1420")
+	colorAccentHi   = ui.Hex("#a2c6fa")
+	colorAccentDown = ui.Hex("#739dde")
 	colorSound      = ui.Hex("#ff79b0")
-	colorGood       = ui.Hex("#5fd39a")
-	colorWarn       = ui.Hex("#f5c451")
-	colorBad        = ui.Hex("#ff7d7d")
-	colorAccentSoft = ui.RGBA(90, 169, 255, 0.16)
+	colorGood       = ui.Hex("#70c7a1")
+	colorWarn       = ui.Hex("#e4b66d")
+	colorBad        = ui.Hex("#ed818b")
+	colorAccentSoft = ui.RGBA(139, 181, 245, 0.16)
 	colorSoundSoft  = ui.RGBA(255, 121, 176, 0.16)
+	// The pointer states every control shares. Hover and pressed are part of a
+	// theme pack; the zero value keeps a window drawn before one applied usable.
+	colorHover        = ui.Hex("#2d333d")
+	colorPressed      = ui.Hex("#363e4a")
+	colorSelected     = ui.Hex("#273a51")
+	colorSelectedText = ui.Hex("#b3d0fa")
+	colorEnabled      = ui.Hex("#252f3d")
+	colorEnabledHover = ui.Hex("#304157")
+	colorEnabledPress = ui.Hex("#27364a")
+	colorSliderKnob   = ui.Hex("#dce4f0")
+	colorInput        = ui.Hex("#111318")
 )
 
-// Radii, spacing and text sizes shared with the web client.
+// Radii, spacing and text sizes shared with the web client. Rows are 6, cards
+// and dock panels 8, dialogs 12: small enough to read as a tool, not a toy.
 const (
-	radiusSm = 9
-	radiusMd = 14
-	radiusLg = 18
+	radiusSm = 6
+	radiusMd = 8
+	radiusLg = 12
 	spaceXs  = 4
 	spaceSm  = 8
 	spaceMd  = 12
@@ -48,16 +64,17 @@ const (
 )
 
 // Text sizes are vars because the Appearance page scales them. Six roles, three
-// scales; nothing else in the window hard-codes a font size.
+// scales; nothing else in the window hard-codes a font size. The steps are the
+// five the interface actually needs: title, heading, body, control, caption.
 var (
 	textMicro    float32 = 11
-	textCaption  float32 = 12
+	textCaption  float32 = 11
 	textSmall    float32 = 12
 	textBody     float32 = 13
 	textLarge    float32 = 14
-	textSubtitle float32 = 15
-	textTitle    float32 = 18
-	textDisplay  float32 = 22
+	textSubtitle float32 = 16
+	textTitle    float32 = 20
+	textDisplay  float32 = 24
 )
 
 // The three type scales. Micro is the smallest label still meant to be read,
@@ -69,7 +86,7 @@ type typeScale struct {
 
 var typeScales = []typeScale{
 	{name: "compact", micro: 11, caption: 12, body: 13, subtitle: 14, title: 16, display: 20},
-	{name: "standard", micro: 12, caption: 13, body: 14, subtitle: 15, title: 18, display: 22},
+	{name: "standard", micro: 11, caption: 12, body: 13, subtitle: 16, title: 20, display: 24},
 	{name: "large", micro: 13, caption: 14, body: 16, subtitle: 17, title: 20, display: 26},
 }
 
@@ -77,39 +94,62 @@ var typeScales = []typeScale{
 // that is drawn *on* the accent (a light accent needs dark ink) and the tone the
 // tooltip uses (Inverse/InverseText), which the previous build left to chance.
 type palette struct {
-	name, label, labelZH  string
-	dark                  bool
-	bg, bgSoft            ui.Color
-	panel, panel2         ui.Color
-	line, lineSoft        ui.Color
-	text, textDim, dim    ui.Color
-	accent, accentText    ui.Color
-	sound                 ui.Color
-	good, warn, bad       ui.Color
-	inverse, inverseText  ui.Color
-	accentSoft, soundSoft ui.Color
+	name, label, labelZH   string
+	dark                   bool
+	bg, bgSoft             ui.Color
+	panel, panel2          ui.Color
+	hover, pressed         ui.Color
+	selected, selectedText ui.Color
+	enabled                ui.Color
+	enabledHover           ui.Color
+	enabledPressed         ui.Color
+	sliderKnob             ui.Color
+	input                  ui.Color
+	line, lineSoft         ui.Color
+	text, textDim, dim     ui.Color
+	accent, accentText     ui.Color
+	accentHover            ui.Color
+	accentPressed          ui.Color
+	sound                  ui.Color
+	good, warn, bad        ui.Color
+	inverse, inverseText   ui.Color
+	accentSoft, soundSoft  ui.Color
 }
 
 var themePacks = []palette{
 	{
 		name: "midnight", label: "Midnight", labelZH: "午夜", dark: true,
-		bg: ui.Hex("#0b0d11"), bgSoft: ui.Hex("#0f1218"),
-		panel: ui.Hex("#14181f"), panel2: ui.Hex("#1a1f28"),
-		line: ui.Hex("#262d39"), lineSoft: ui.Hex("#1e242e"),
-		text: ui.Hex("#e9ecf2"), textDim: ui.Hex("#9aa4b3"), dim: ui.Hex("#808a99"),
-		accent: ui.Hex("#5aa9ff"), accentText: ui.Hex("#06121f"),
-		sound: ui.Hex("#ff79b0"),
-		good:  ui.Hex("#5fd39a"), warn: ui.Hex("#f5c451"), bad: ui.Hex("#ff7d7d"),
-		inverse: ui.Hex("#1a1f28"), inverseText: ui.Hex("#e9ecf2"),
-		accentSoft: ui.RGBA(90, 169, 255, 0.16), soundSoft: ui.RGBA(255, 121, 176, 0.16),
+		bg: ui.Hex("#13151a"), bgSoft: ui.Hex("#1b1e24"),
+		panel: ui.Hex("#1b1e24"), panel2: ui.Hex("#252932"),
+		hover: ui.Hex("#2d333d"), pressed: ui.Hex("#363e4a"),
+		selected: ui.Hex("#273a51"), selectedText: ui.Hex("#b3d0fa"),
+		enabled:      ui.Hex("#252f3d"),
+		enabledHover: ui.Hex("#304157"), enabledPressed: ui.Hex("#27364a"),
+		sliderKnob: ui.Hex("#dce4f0"),
+		input:      ui.Hex("#111318"),
+		line:       ui.Hex("#343a45"), lineSoft: ui.Hex("#292e36"),
+		text: ui.Hex("#e6eaf0"), textDim: ui.Hex("#a1aab8"), dim: ui.Hex("#858f9e"),
+		accent: ui.Hex("#8bb5f5"), accentText: ui.Hex("#101d30"),
+		accentHover: ui.Hex("#a2c6fa"), accentPressed: ui.Hex("#739dde"),
+		sound: ui.Hex("#e89abf"),
+		good:  ui.Hex("#70c7a1"), warn: ui.Hex("#e4b66d"), bad: ui.Hex("#ed818b"),
+		inverse: ui.Hex("#252932"), inverseText: ui.Hex("#e6eaf0"),
+		accentSoft: ui.RGBA(139, 181, 245, 0.16), soundSoft: ui.RGBA(232, 154, 191, 0.16),
 	},
 	{
 		name: "graphite", label: "Graphite", labelZH: "石墨", dark: true,
 		bg: ui.Hex("#121315"), bgSoft: ui.Hex("#16171a"),
 		panel: ui.Hex("#1b1c20"), panel2: ui.Hex("#232428"),
-		line: ui.Hex("#303237"), lineSoft: ui.Hex("#26282c"),
+		hover: ui.Hex("#232428"), pressed: ui.Hex("#2c2f35"),
+		selected: ui.Hex("#2b3444"), selectedText: ui.Hex("#c7d8f5"),
+		enabled:      ui.Hex("#2a313c"),
+		enabledHover: ui.Hex("#343d4b"), enabledPressed: ui.Hex("#2b3442"),
+		sliderKnob: ui.Hex("#e2e6ee"),
+		input:      ui.Hex("#101113"),
+		line:       ui.Hex("#303237"), lineSoft: ui.Hex("#26282c"),
 		text: ui.Hex("#ededf0"), textDim: ui.Hex("#a9aeb7"), dim: ui.Hex("#8b9099"),
 		accent: ui.Hex("#8cb4ff"), accentText: ui.Hex("#0a1420"),
+		accentHover: ui.Hex("#a6c7ff"), accentPressed: ui.Hex("#7da9f0"),
 		sound: ui.Hex("#d99ac0"),
 		good:  ui.Hex("#86cfa4"), warn: ui.Hex("#e3c069"), bad: ui.Hex("#f08a8a"),
 		inverse: ui.Hex("#232428"), inverseText: ui.Hex("#ededf0"),
@@ -119,9 +159,16 @@ var themePacks = []palette{
 		name: "daylight", label: "Daylight", labelZH: "日光", dark: false,
 		bg: ui.Hex("#f5f6f8"), bgSoft: ui.Hex("#eceef1"),
 		panel: ui.Hex("#ffffff"), panel2: ui.Hex("#f4f5f7"),
-		line: ui.Hex("#d6d9de"), lineSoft: ui.Hex("#e6e8ec"),
+		hover: ui.Hex("#eef0f3"), pressed: ui.Hex("#e3e6ea"),
+		selected: ui.Hex("#dbe7fb"), selectedText: ui.Hex("#1d4f9c"),
+		enabled:      ui.Hex("#e8f0fc"),
+		enabledHover: ui.Hex("#d2e2f8"), enabledPressed: ui.Hex("#c5d8f3"),
+		sliderKnob: ui.Hex("#1f2937"),
+		input:      ui.Hex("#ffffff"),
+		line:       ui.Hex("#d6d9de"), lineSoft: ui.Hex("#e6e8ec"),
 		text: ui.Hex("#14161a"), textDim: ui.Hex("#4f5661"), dim: ui.Hex("#6b7280"),
 		accent: ui.Hex("#1f6feb"), accentText: ui.Hex("#ffffff"),
+		accentHover: ui.Hex("#4a86f0"), accentPressed: ui.Hex("#1858c9"),
 		sound: ui.Hex("#b4327a"),
 		good:  ui.Hex("#16794a"), warn: ui.Hex("#8a5a00"), bad: ui.Hex("#b42318"),
 		inverse: ui.Hex("#14161a"), inverseText: ui.Hex("#f5f6f8"),
@@ -131,9 +178,16 @@ var themePacks = []palette{
 		name: "celadon", label: "Celadon", labelZH: "青瓷", dark: false,
 		bg: ui.Hex("#f1f5f3"), bgSoft: ui.Hex("#e7eeea"),
 		panel: ui.Hex("#ffffff"), panel2: ui.Hex("#eef4f1"),
-		line: ui.Hex("#cdddd4"), lineSoft: ui.Hex("#dde9e3"),
+		hover: ui.Hex("#e9f1ed"), pressed: ui.Hex("#dde9e3"),
+		selected: ui.Hex("#d8ebe4"), selectedText: ui.Hex("#0b5f4d"),
+		enabled:      ui.Hex("#e2f0ea"),
+		enabledHover: ui.Hex("#cfe4db"), enabledPressed: ui.Hex("#c1d9cf"),
+		sliderKnob: ui.Hex("#173b33"),
+		input:      ui.Hex("#ffffff"),
+		line:       ui.Hex("#cdddd4"), lineSoft: ui.Hex("#dde9e3"),
 		text: ui.Hex("#10201a"), textDim: ui.Hex("#4a5f56"), dim: ui.Hex("#647a70"),
 		accent: ui.Hex("#0e7c66"), accentText: ui.Hex("#ffffff"),
+		accentHover: ui.Hex("#2e947c"), accentPressed: ui.Hex("#0b6553"),
 		sound: ui.Hex("#a63d72"),
 		good:  ui.Hex("#1a7f52"), warn: ui.Hex("#7d5a00"), bad: ui.Hex("#b02a2a"),
 		inverse: ui.Hex("#10201a"), inverseText: ui.Hex("#f1f5f3"),
@@ -143,9 +197,16 @@ var themePacks = []palette{
 		name: "noir", label: "Noir", labelZH: "纯黑", dark: true,
 		bg: ui.Hex("#000000"), bgSoft: ui.Hex("#07070a"),
 		panel: ui.Hex("#0d0d12"), panel2: ui.Hex("#16161d"),
-		line: ui.Hex("#2b2b36"), lineSoft: ui.Hex("#1d1d25"),
+		hover: ui.Hex("#16161d"), pressed: ui.Hex("#20202a"),
+		selected: ui.Hex("#1b2a3f"), selectedText: ui.Hex("#9ec8ff"),
+		enabled:      ui.Hex("#1e2c3d"),
+		enabledHover: ui.Hex("#26364a"), enabledPressed: ui.Hex("#1e2c3e"),
+		sliderKnob: ui.Hex("#dfe7f5"),
+		input:      ui.Hex("#000000"),
+		line:       ui.Hex("#2b2b36"), lineSoft: ui.Hex("#1d1d25"),
 		text: ui.Hex("#ffffff"), textDim: ui.Hex("#c2c7d0"), dim: ui.Hex("#9aa0ab"),
 		accent: ui.Hex("#4da3ff"), accentText: ui.Hex("#00101f"),
+		accentHover: ui.Hex("#7cb8ff"), accentPressed: ui.Hex("#3d8be8"),
 		sound: ui.Hex("#ff5fa8"),
 		good:  ui.Hex("#3ee08f"), warn: ui.Hex("#ffc44d"), bad: ui.Hex("#ff6060"),
 		inverse: ui.Hex("#16161d"), inverseText: ui.Hex("#ffffff"),
@@ -190,6 +251,15 @@ func applyPalette(p palette) {
 	colorBgSoft = p.bgSoft
 	colorPanel = p.panel
 	colorPanel2 = p.panel2
+	colorHover = p.hover
+	colorPressed = p.pressed
+	colorSelected = p.selected
+	colorSelectedText = p.selectedText
+	colorEnabled = p.enabled
+	colorEnabledHover = p.enabledHover
+	colorEnabledPress = p.enabledPressed
+	colorSliderKnob = p.sliderKnob
+	colorInput = p.input
 	colorLine = p.line
 	colorLineSoft = p.lineSoft
 	colorText = p.text
@@ -197,6 +267,8 @@ func applyPalette(p palette) {
 	colorDim = p.dim
 	colorAccent = p.accent
 	colorAccentText = p.accentText
+	colorAccentHi = p.accentHover
+	colorAccentDown = p.accentPressed
 	colorSound = p.sound
 	colorGood = p.good
 	colorWarn = p.warn
@@ -230,14 +302,18 @@ func muxshiftTheme() *ui.Theme {
 	theme.Dark = p.dark
 	theme.Background = colorBg
 	theme.Surface = colorPanel
-	theme.SurfaceHover = colorPanel2
-	theme.SurfacePressed = colorPanel2
-	theme.Border = colorLine
+	theme.SurfaceHover = colorHover
+	theme.SurfacePressed = colorPressed
+	// Borders are the quietest line in the interface: a hard outline around
+	// every button and card is what makes a dark tool look like a spreadsheet.
+	// The surface ladder separates regions; only inputs and popovers get a
+	// visible edge.
+	theme.Border = colorBg
 	theme.Text = colorText
 	theme.TextMuted = colorTextDim
 	theme.Accent = colorAccent
-	theme.AccentHover = colorAccent
-	theme.AccentPressed = colorAccent
+	theme.AccentHover = colorAccentHi
+	theme.AccentPressed = colorAccentDown
 	theme.AccentText = colorAccentText
 	theme.Selection = colorAccentSoft
 	theme.Success = colorGood

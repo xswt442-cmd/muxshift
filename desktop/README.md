@@ -9,30 +9,6 @@ go build .
 
 It is a separate Go module (`github.com/xswt442-cmd/muxshift/desktop`), so run its tests from this directory with `go test ./...`. The root module's `go test ./...` does not reach it.
 
-## Source layout
-
-The window is one Go package because the shell, the command path and the state
-are one object; the files below are grouped by the job they do:
-
-- `main.go`, `session.go`, `controller.go`, `workspace.go`: the process, the
-  session state, the command path and the page switch.
-- `workbench.go`, `dock.go`, `workspace.go`, `viewing.go`, `uikit.go`, `tokens.go`:
-  the shell, the console, the pages, the watching modes and the shared controls.
-- `player.go`, `live.go`, `sync.go`, `align.go`, `replay_*.go`, `dvr.go`,
-  `mixer.go`, `sourcememory.go`: playback, timing, replay and sound.
-- `settings.go`, `i18n.go`, `addsource.go`, `stage_edit*.go`: settings,
-  language, the add-source chooser and the editing mode.
-- `*_scenario.go`: the scripted checks, grouped by domain (align, playback,
-  replay, UI, sources, Win32-only). They only run under `-scenario`.
-- `*_group_test.go`: the package tests, grouped by domain.
-- `internal/win`: Win32 registry, locale, proxy and window icon helpers.
-- `internal/version`: the build stamp read by `-version`.
-
-The scenarios and tests were 121 parallel files before this layout; merging
-them keeps the package boundary intact and makes the directory readable. The
-remaining product files stay in one package because a package split would need
-an exported app/UI boundary, not a file move.
-
 ## What the window does
 
 - **Shell**: a scene rail on the left, the canvas in the middle and a console under it. The rail holds only scenes plus `Add scene`; Settings and Diagnostics sit at its bottom. The picture's corner has a compact icon cluster (layout, edit, cinema, full screen) whose names are tooltips.

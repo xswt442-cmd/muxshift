@@ -1,4 +1,4 @@
-# Regenerates desktop\rsrc_windows_amd64.syso from desktop\icon.ico.
+# Regenerates desktop\rsrc_windows_amd64.syso from desktop\internal\win\icon.ico.
 #
 # The object file carries two things Windows reads from the file itself rather
 # than from the running program: the icon Explorer and the task bar show, and
@@ -30,7 +30,7 @@ try {
     & go run github.com/tc-hib/go-winres@latest simply `
         --out rsrc `
         --arch amd64 `
-        --icon icon.ico `
+        --icon internal/win/icon.ico `
         --product-name MuxShift `
         --file-description "MuxShift desktop" `
         --file-version $Version `

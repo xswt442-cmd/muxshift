@@ -4,22 +4,28 @@
 
 This changelog records completed changes that matter to someone using MuxShift. GitHub Release notes come from the matching tagged section, not a separately maintained summary.
 
-## [Unreleased]
+## [0.0.2] - 2026-11-21
 
 ### 简体中文
 
 **新增**
 
-- 顶部 `Open…` 与 Sources 页的 `Add…` 打开同一个「添加来源」面板，三选一：本地文件、媒体链接、网站地址。
-- 本地文件走系统文件选择器，选中后加入当前会话，取消不改变任何东西。
-- 媒体链接按实际内容判断是播放列表还是可直读媒体，网页、404 与不支持的类型明确拒绝且不留空卡片。
-- 网站地址用系统浏览器打开；扩展不再需要 Native Host，改为与桌面窗口回环配对后交回页面已加载的地址。
+- 桌面端工作台改为场景栏、画布和控制台：Sources / Mixer / Sync 三块面板同时可见，可拖高、折叠、单独隐藏，也可拖动面板之间的分隔；窄窗口退化为三页 Tabs，设置里可切换成每源一行。
+- 增加影院、全屏与置顶紧凑小窗三种观看方式；来回切换不重开播放器、不跳时钟，退出时恢复窗口界限、最大化状态与打开的面板。
+- 舞台支持五种布局：Focus、Split、PiP、Grid、Hero；切换只调整各画面的位置，不重开播放器，也不动声音和同步。
+- 编辑模式下画面可以拖动、八向缩放、锁定比例、填精确数值、方向键微调，并调整置顶与叠放顺序；位置按舞台比例保存，窗口缩放后仍然有效。
+- 空舞台直接给出「打开来源」与「去来源面板」两条起始动作。
+- 顶部 `+ 来源` 与控制台来源面板的 `+` 打开同一个添加面板：本地文件、媒体链接、网站地址。
+- 本地文件走系统文件选择器；取消不改变会话。
+- 媒体链接按实际内容判断播放列表或可直读媒体；网页、404 与不支持的类型明确拒绝，失败不留空卡片。
+- 网站地址用系统浏览器打开；浏览器扩展与桌面窗口通过一次性配对码把页面已加载的地址传给桌面窗口，不再需要 Native Host。
+- 扩展在 B 站、Twitch、Kick 的直播页和 YouTube 的直播页上可以取出一条签名地址；B 站、Twitch、Kick 可直接播放，YouTube 的地址与取地址时的出口 IP 绑定，可能只拿到播放列表而分片被拒绝，扩展与桌面会如实报错。
+- 设置新增外观页：午夜、石墨、日光、青瓷、纯黑五套配色，三档字号，字体选择（跟随系统与四种字体），界面语言与更紧凑的间距；选择立即预览，应用后写入设置。
 
-- 舞台有五种布局（Focus / Split / PiP / Grid / Hero），切换只改落位，不重开播放器、不动声音与同步。
-- 画面可以自由摆放：拖动、八向缩放、锁定比例、在检查器里填精确数值、方向键微调、置顶置底与上移下移；位置按舞台比例保存。
-- 空舞台直接给出两条起始动作（打开选择器、去 Sources），不再指向别的页面上的按钮。
-- 工作台默认把窗口留给画面：窄窗口不再自动打开固定栏，底部 dock 默认收起；检查和轨道仍然一键打开。
-- 检查器改用动作与状态的说法（`playing`、`held at 3.2s`、`muted`、`silent: volume is zero`、`not yet: no common clock found`），Core id、代次与播放器句柄移到 Diagnostics。
+**改进**
+
+- 桌面端统一颜色、间距、字号、圆角与焦点状态；来源行、混音通道和同步卡片按类型使用不同的表面，减少悬空文字。
+- 检查器改用动作与状态的说法（`playing`、`held at 3.2s`、`muted`、`silent: volume is zero`、`not yet: no common clock found`），Core id、代次与播放器句柄移到诊断页。
 
 **修复**
 
@@ -31,10 +37,22 @@ This changelog records completed changes that matter to someone using MuxShift. 
 
 **Added**
 
-- The top bar's `Open…` and the Sources page's `Add…` open one add-a-source panel with three choices: local file, media link, website address.
-- Local file opens the system file picker; the chosen file joins the current session and cancelling changes nothing.
-- Media links are classified by what the address actually serves, so a web page, a 404 or an unsupported type is refused with a reason and leaves no empty card.
-- Website addresses open in the system browser; the extension no longer needs a Native Host and hands the page's loaded address back over a loopback pairing.
+- The desktop workbench now has a scene rail, the canvas and a console: the Sources / Mixer / Sync panels are visible together, can be made taller, folded, hidden one at a time, and resized from the seams between them. A narrow window turns them into three tabs, and a setting switches to one row per source.
+- Cinema, full screen and an always-on-top compact window join the viewing modes. Moving between them never reopens a player or jumps the clock, and leaving one restores the old window bounds, maximized state and open panels.
+- The stage supports five layouts: Focus, Split, PiP, Grid and Hero. Switching one only moves pictures; players, sound and sync are untouched.
+- In editing mode a picture can be dragged, resized from eight handles, locked to its aspect ratio, placed by exact numbers, nudged with the arrow keys, and raised or lowered in the stack. Positions are stored as fractions of the stage, so they survive a window resize.
+- An empty stage offers two starting actions: open a source, or go to the sources panel.
+- The top bar's `+ Source` and the console source panel's `+` open one add-a-source panel with three choices: local file, media link, website address.
+- A local file opens the system file picker; cancelling changes nothing.
+- A media link is classified by what the address actually serves, so a web page, a 404 or an unsupported type is refused with a reason and leaves no empty card.
+- A website address opens in the system browser; a one-time pairing code connects the browser extension to the desktop window and hands back the address the page already loaded, with no Native Host.
+- On Bilibili, Twitch and Kick live pages and YouTube live pages, the extension can obtain one signed address; Bilibili, Twitch and Kick can play it directly, while a YouTube address is bound to the egress IP used to obtain it, so only the playlist may load and the segments may be refused; the extension and the desktop report that instead of pretending to play.
+- Settings gained an Appearance page: five themes (Midnight, Graphite, Daylight, Celadon, Noir), three text sizes, font selection (System plus four families), the interface language and tighter spacing. A choice previews at once and is written to settings on Apply.
+
+**Improved**
+
+- The desktop uses one set of colours, spacing, type sizes, radii and focus states; source rows, mixer channels and sync cards use surfaces that match their job, so fewer labels float on the page.
+- The inspector now speaks in actions and states (`playing`, `held at 3.2s`, `muted`, `silent: volume is zero`, `not yet: no common clock found`); Core ids, generations and player handles moved to the diagnostics page.
 
 **Fixed**
 
@@ -51,8 +69,8 @@ This changelog records completed changes that matter to someone using MuxShift. 
 
 - 桌面端以 MyGo 原生窗口同时播放多路 HLS 或本地媒体，由场景决定看哪一路、听哪几路，每路音量独立。
 - HLS 接入能读播放列表、探测轨道与首个样本时间；跨流对齐需要播放列表里的 PDT，没有就明确拒绝。
-- 回看缓冲把直播分片存进有界目录，报告真实可回看区间与缺口，并把一段连续区间切成录像；切换先让新播放器画出画面再换源，失败回滚。
-- 已经处于回放的舞台可以在 inspector 里按「候选共同窗口内第几秒」请求一次 Seek：逐源授权，越界与并发都被拒绝，提交失败整体回滚；账户只声明位置已落定，不声称目标帧已呈现。
+- 回看缓冲把直播分片保存在有界目录里，报告真实可回看区间与缺口，并把一段连续区间切成录像。切换时先让新播放器画出画面再换源，失败则回滚。
+- 已经处于回放的舞台可以在 inspector 里按「候选共同窗口内第几秒」请求一次 Seek：逐源授权，越界与并发都被拒绝，提交失败整体回滚。账户只声明位置被接受，不声称目标帧已呈现。
 - 手动对轴以 ±0.1 秒步进，自动对轴只给出建议与置信度，不写时间轴。
 - 设置页覆盖常规、回放、音频、DVR、界面、快捷键与诊断，写入本机配置目录，重启后恢复工作区与数值。
 - Sources 页支持运行中导入地址、选中源、显示与听音、移除，以及失败后的重试。

@@ -168,6 +168,7 @@ type appState struct {
 	openSeek         func(recording dvr.Recording) (desktopPlayer, error)
 	seekStarted      func(player desktopPlayer) bool
 	beforeSeekCommit func()
+	afterSeekCommit  func()
 
 	// seek is the replay transaction in flight, nil when none is running. The
 	// window keeps the player it has until that transaction commits.

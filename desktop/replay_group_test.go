@@ -3625,3 +3625,44 @@ func TestShutdownDoesNotAbortACommittedTransaction(t *testing.T) {
 		t.Fatal("shutdown marked a committed transaction as stopped")
 	}
 }
+
+func TestShutdownBetweenCommitAndOldReleaseDoesNotWait(t *testing.T) {
+	// Pause the commit after it has installed its resources but before it
+	// releases the previous players, then close. A shutdown that waited here
+	// would deadlock against the commit's drawing-thread release.
+	session, opened := seekTxnFixture(t)
+	reached := make(chan struct{})
+	resume := make(chan struct{})
+	session.app.afterSeekCommit = func() {
+		close(reached)
+		<-resume
+	}
+	if err := session.app.startSeekTxn(session.items, 6*time.Second); err != nil {
+		t.Fatalf("starting: %v", err)
+	}
+	select {
+	case <-reached:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the commit did not reach the interleaving point")
+	}
+	closed := make(chan bool, 1)
+	go func() { closed <- session.app.shutdownReplayTxn() }()
+	select {
+	case ok := <-closed:
+		if !ok {
+			t.Fatal("shutdown reported the committed transaction unfinished")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown waited for a committed transaction")
+	}
+	close(resume)
+	waitSeekTxn(t, session.app)
+	if open, given := session.app.leaseStats(); open != 2 || given != 2 {
+		t.Fatalf("leases open=%d given=%d after the interleaving, want 2 and 2", open, given)
+	}
+	for _, player := range *opened {
+		if player.closed {
+			t.Fatalf("%s was closed after a committed transaction", player.name)
+		}
+	}
+}

@@ -416,6 +416,9 @@ func (a *appState) commitSeekTxn(txn *seekTxn) {
 		// looked while the commit was finishing must not see the slot free and
 		// then read the previous transaction's "preparing" line.
 		a.seekMu.Unlock()
+		if a.afterSeekCommit != nil {
+			a.afterSeekCommit()
+		}
 	})
 	if !ran {
 		a.abortSeekTxn(txn, "the session did not run the commit step in time")

@@ -17,7 +17,7 @@
 
 ## Download
 
-[Releases](https://github.com/xswt442-cmd/muxshift/releases) ship a Windows amd64 ZIP (`muxshift-0.0.3-windows-amd64.zip`); unzip it and run `muxshift.exe`. It is a GUI executable, so a normal start carries no console window; it needs Windows 10/11 and the Media Foundation that comes with it. The archive also carries `VERSION.txt`, `THIRD-PARTY.md`, and the checksum. Building from source is under [quick start](#quick-start).
+[Releases](https://github.com/xswt442-cmd/muxshift/releases) ship a Windows amd64 installer (`muxshift-0.0.3-windows-amd64-setup.exe`) and a portable ZIP (`muxshift-0.0.3-windows-amd64.zip`). The installer installs per user, creates Start Menu and optional desktop shortcuts, and registers an uninstall entry; the ZIP runs `muxshift.exe` after unpacking. Both are GUI programs, so a normal start carries no console window; they need Windows 10/11 and the Media Foundation that comes with it. The archive also carries `VERSION.txt`, `THIRD-PARTY.md`, and the checksum. Building from source is under [quick start](#quick-start).
 
 ## What it does
 

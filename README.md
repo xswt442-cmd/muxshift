@@ -17,7 +17,7 @@
 
 ## 下载
 
-[Releases](https://github.com/xswt442-cmd/muxshift/releases) 提供 Windows amd64 ZIP（`muxshift-0.0.3-windows-amd64.zip`），解压后运行 `muxshift.exe`。这是 GUI 可执行文件，正常启动不会带控制台窗口；运行需要 Windows 10/11 和系统自带的 Media Foundation。压缩包里还有 `VERSION.txt`、`THIRD-PARTY.md` 和校验值。从源码构建见[快速开始](#快速开始)。
+[Releases](https://github.com/xswt442-cmd/muxshift/releases) 提供 Windows amd64 安装器（`muxshift-0.0.3-windows-amd64-setup.exe`）和便携 ZIP（`muxshift-0.0.3-windows-amd64.zip`）。安装器按当前用户安装，创建开始菜单快捷方式与可选的桌面快捷方式，并注册卸载项；ZIP 解压后直接运行 `muxshift.exe`。两者都是 GUI 程序，正常启动不会带控制台窗口；运行需要 Windows 10/11 和系统自带的 Media Foundation。压缩包里还有 `VERSION.txt`、`THIRD-PARTY.md` 和校验值。从源码构建见[快速开始](#快速开始)。
 
 ## 能做什么
 

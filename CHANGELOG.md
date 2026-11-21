@@ -16,6 +16,7 @@ This changelog records completed changes that matter to someone using MuxShift. 
 **变更**
 
 - Windows 发布包改用 GUI 子系统构建，正常启动不再带一个控制台窗口；从终端启动时日志仍附着到父控制台。
+- 发布新增按当前用户安装的安装器：创建开始菜单快捷方式、可选的桌面快捷方式和卸载项，同时保留免安装 ZIP。
 
 **兼容性**
 
@@ -31,6 +32,7 @@ This changelog records completed changes that matter to someone using MuxShift. 
 **Changed**
 
 - Windows release builds now use the GUI subsystem, so a normal start no longer carries a console window; started from a terminal, logs still attach to the parent console.
+- Releases now include a per-user installer that creates Start Menu and optional desktop shortcuts and an uninstall entry, while the portable ZIP remains available.
 
 **Compatibility**
 

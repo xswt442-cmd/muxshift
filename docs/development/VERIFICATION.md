@@ -83,6 +83,11 @@ result is committed so a build needs neither the tool nor a network. The steps
 from a green commit to a published tag are in
 [RELEASE.md](RELEASE.md); this section only says what the build produces.
 
+`scripts\build-installer.ps1` wraps an existing release directory in an Inno
+Setup per-user installer; it creates Start Menu shortcuts, an optional desktop
+shortcut and an uninstall entry. It needs Inno Setup 6 on the building machine
+and does not rebuild the binary.
+
 What a release does **not** carry: no sample media, no vocal-separation weights,
 no ffmpeg. `RUNNING.txt` says what the machine has to provide.
 ## 4. Evidence

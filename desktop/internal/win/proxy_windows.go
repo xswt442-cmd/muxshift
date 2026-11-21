@@ -17,18 +17,19 @@ const (
 var procRegGetValueW = syscall.NewLazyDLL("advapi32.dll").NewProc("RegGetValueW")
 
 // windowsProxy reads ProxyEnable and ProxyServer from the settings a browser
-// follows.
-func windowsProxy() (string, bool) {
+// follows. The two returned addresses are the HTTP and HTTPS proxies; a single
+// Windows address is used for both.
+func windowsProxy() (string, string, bool) {
 	enabled, ok := regDWORD("ProxyEnable")
 	if !ok || enabled == 0 {
-		return "", false
+		return "", "", false
 	}
 	server, ok := regString("ProxyServer")
 	if !ok {
-		return "", false
+		return "", "", false
 	}
-	picked := pickProxyServer(server)
-	return picked, picked != ""
+	httpProxy, httpsProxy := pickProxyServers(server)
+	return httpProxy, httpsProxy, httpProxy != "" || httpsProxy != ""
 }
 
 func regString(name string) (string, bool) {

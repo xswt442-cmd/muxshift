@@ -117,6 +117,9 @@ func (a *appState) enterViewing(mode viewingMode, w viewingWindow) {
 	case viewFullscreen:
 		w.SetFullScreen(true)
 	case viewCompact:
+		if w.IsFullScreen() {
+			w.SetFullScreen(false)
+		}
 		if w.IsMaximized() {
 			w.Unmaximize()
 		}
@@ -379,7 +382,7 @@ func (a *appState) viewingControls(c *ui.Context, width, height float32) ui.Elem
 			}
 			if ui.Button(c.Key("view-mute"), muteText).Width(88).
 				Height(a.controlHeight() - 2).Clicked() {
-				main.player.SetMuted(!muted)
+				a.report(a.runCommand(command{Kind: commandMute, Source: main.source.ID}))
 				a.showControls()
 			}
 		}
@@ -476,7 +479,7 @@ func (a *appState) viewingShortcuts(c *ui.Context) {
 		if it == nil || it.player == nil {
 			return
 		}
-		it.player.SetMuted(!it.player.Muted())
+		a.report(a.runCommand(command{Kind: commandMute, Source: it.source.ID}))
 		a.showControls()
 	})
 	c.OnWindowShortcut(0, ui.KeyUp, func() { a.stepVolume(0.05) })
@@ -491,14 +494,14 @@ func (a *appState) stepVolume(delta float32) {
 	if it == nil || it.player == nil {
 		return
 	}
-	level := it.player.Volume() + float64(delta)
+	level := it.volume + float64(delta)
 	if level < 0 {
 		level = 0
 	}
 	if level > 1 {
 		level = 1
 	}
-	it.player.SetVolume(level)
+	a.report(a.runCommand(command{Kind: commandVolume, Source: it.source.ID, Volume: level}))
 	a.showControls()
 }
 

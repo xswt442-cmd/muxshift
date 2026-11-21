@@ -322,7 +322,6 @@ func (e *stageEdits) setBox(id core.SourceID, box stageBox) {
 		return
 	}
 	e.boxes[id] = box
-	e.remember(id)
 }
 
 // forget drops a source's rectangle, putting it back where the layout puts
@@ -339,16 +338,6 @@ func (e *stageEdits) forget(id core.SourceID) {
 			return
 		}
 	}
-}
-
-// remember puts a source at the front of the order when it is not in it yet.
-func (e *stageEdits) remember(id core.SourceID) {
-	for _, other := range e.order {
-		if other == id {
-			return
-		}
-	}
-	e.order = append(e.order, id)
 }
 
 // ordered returns the given sources back to front, using the explicit order

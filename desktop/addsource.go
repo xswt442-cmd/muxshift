@@ -207,30 +207,30 @@ func (a *appState) openSiteAddress(text string) (commandResult, bool) {
 	refuse := func(format string, args ...any) (commandResult, bool) {
 		return commandResult{Command: command, At: time.Now(), Err: fmt.Errorf(format, args...)}, false
 	}
-	parsed, err := url.Parse(address)
-	if err != nil {
+	if _, err := url.Parse(address); err != nil {
 		return refuse("%q is not an address a browser can open: %v", address, err)
 	}
+	display := stripSecrets(address)
 	opener := a.openURL
 	if opener == nil {
 		opener = a.contextOpenURL
 	}
 	if opener == nil {
-		return refuse("this build has no system browser to open %s", parsed.Redacted())
+		return refuse("this build has no system browser to open %s", display)
 	}
 	opener(address, func(err error) {
 		if err != nil {
-			a.lastErr = fmt.Errorf("opening %s failed: %w", parsed.Redacted(), err)
+			a.lastErr = safeWrap("opening "+display+" failed", err)
 			a.report(commandResult{Command: command, At: time.Now(), Err: a.lastErr})
 			a.invalidate()
 			return
 		}
-		log.Printf("add-source: opened %s in the system browser", parsed.Redacted())
+		log.Printf("add-source: opened %s in the system browser", display)
 	})
 	result := commandResult{
 		Command: command,
 		At:      time.Now(),
-		Message: fmt.Sprintf("opened %s in your browser; the MuxShift extension there can hand one media address back to this window", parsed.Redacted()),
+		Message: fmt.Sprintf("opened %s in your browser; the MuxShift extension there can hand one media address back to this window", display),
 	}
 	a.report(result)
 	return result, true

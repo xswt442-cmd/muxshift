@@ -129,7 +129,8 @@ func TestAWebsiteIsOpenedAndDoesNotBecomeASource(t *testing.T) {
 	if !app.addOpen {
 		t.Fatal("the chooser closed while the media was still in the browser")
 	}
-	if !strings.Contains(app.addNote, "opened https://example.com/watch?v=1") ||
+	if !strings.Contains(app.addNote, "opened https://example.com/watch") ||
+		strings.Contains(app.addNote, "?v=1") ||
 		!strings.Contains(app.addNote, "can hand one media address back") {
 		t.Fatalf("the note does not say where the media still is: %q", app.addNote)
 	}
@@ -145,7 +146,8 @@ func TestAWebsiteIsOpenedAndDoesNotBecomeASource(t *testing.T) {
 	if app.session.Sources() != nil && len(app.session.Sources()) != 0 {
 		t.Fatalf("the website added %d core source(s), want none", len(app.session.Sources()))
 	}
-	if !strings.Contains(result.Message, "opened https://example.com/watch?v=1") ||
+	if !strings.Contains(result.Message, "opened https://example.com/watch") ||
+		strings.Contains(result.Message, "?v=1") ||
 		!strings.Contains(result.Message, "can hand one media address back") {
 		t.Fatalf("the message does not say where the media still is: %q", result.Message)
 	}
@@ -188,7 +190,7 @@ func TestABrowserThatFailsIsReported(t *testing.T) {
 	if _, ok := app.submitAddSource(); !ok {
 		t.Fatal("a browser failure should still be recorded as the attempt's outcome")
 	}
-	if app.lastErr == nil || !strings.Contains(app.lastErr.Error(), "opening https://example.com/watch?v=1 failed") {
+	if app.lastErr == nil || !strings.Contains(app.lastErr.Error(), "opening https://example.com/watch failed") {
 		t.Fatalf("the browser failure was not reported: %v", app.lastErr)
 	}
 	if len(app.items) != 0 {

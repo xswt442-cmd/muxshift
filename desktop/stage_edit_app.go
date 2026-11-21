@@ -76,9 +76,12 @@ func (a *appState) boxOf(it *item, slot stageBox) (stageBox, bool) {
 // pictureAspect is the shape of the picture itself, or 0 when the player has
 // not reported a size yet. A resize with ratio on uses it to keep the picture
 // from being stretched; without it the box keeps whatever shape it has.
-func (a *appState) pictureAspect(it *item, box stageBox) float32 {
+func (a *appState) pictureAspect(it *item, box stageBox, stageW, stageH float32) float32 {
 	if p := rawPlayer(it.player); p != nil {
 		if w, h := p.Size(); w > 0 && h > 0 {
+			if stageW > 0 && stageH > 0 {
+				return (float32(w) / float32(h)) / (stageW / stageH)
+			}
 			return float32(w) / float32(h)
 		}
 	}
@@ -114,12 +117,10 @@ func (a *appState) stageLocked(id core.SourceID) bool {
 	return edits != nil && edits.locked[id]
 }
 
-// toggleStageLock flips one picture's lock, remembering the source in the
-// scene's arrangement so the order stays complete.
+// toggleStageLock flips one picture's lock without changing the stack.
 func (a *appState) toggleStageLock(id core.SourceID) {
 	edits := a.sceneEdits()
 	edits.locked[id] = !edits.locked[id]
-	edits.remember(id)
 	a.invalidate()
 }
 
@@ -376,7 +377,7 @@ func (a *appState) dragByIn(it *item, h handleKind, dx, dy float32, stageW, stag
 	if h == handleNone {
 		next = next.movedBy(dx, dy)
 	} else {
-		aspect := a.pictureAspect(it, next)
+		aspect := a.pictureAspect(it, next, stageW, stageH)
 		next, ok = next.resizedBy(h, dx, dy, aspect, !a.freeRatio)
 	}
 	if !ok {
@@ -478,7 +479,7 @@ func (a *appState) editControls(c *ui.Context, it *item) {
 		}
 		return
 	}
-	if a.boxFields.forSource != it.source.ID {
+	if a.boxFields.forSource != it.source.ID || !a.boxFields.loaded {
 		a.boxFields = boxFields{forSource: it.source.ID, loaded: true,
 			x: fmt.Sprintf("%.2f", box.X), y: fmt.Sprintf("%.2f", box.Y),
 			w: fmt.Sprintf("%.2f", box.W), h: fmt.Sprintf("%.2f", box.H)}

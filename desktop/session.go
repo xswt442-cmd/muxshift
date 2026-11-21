@@ -996,6 +996,8 @@ func (a *appState) dropUnreachableSource(it *item) {
 		return
 	}
 	it.source = core.Source{}
+	it.video = ""
+	it.audio = ""
 }
 
 // invalidate asks for a frame after the state the window shows has changed. It
@@ -1057,7 +1059,6 @@ func (a *appState) addScene() {
 		return
 	}
 	a.scene = scene.ID
-	a.edits = nil
 	a.apply()
 	a.invalidate()
 }

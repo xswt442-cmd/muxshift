@@ -13,6 +13,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -135,6 +136,7 @@ func (a *appState) shell(c *ui.Context, width, height float32) {
 	if a.workspace == workspaceSources {
 		delete(a.dockHidden, dockSources)
 		a.dockUp = true
+		a.dockTab = 0
 		a.workspace = workspaceStage
 	}
 	ui.Column(c).Fill().Background(colorBg).Children(func() {
@@ -729,6 +731,14 @@ func (a *appState) preview(c *ui.Context, width, height float32) {
 	if room > 120 && pictureCap > room {
 		pictureCap = room
 	}
+	if room <= 120 {
+		if room < 0 {
+			room = 0
+		}
+		if pictureCap > room {
+			pictureCap = room
+		}
+	}
 	// The picture is 16:9, so the box that holds it is too. Without this the
 	// box takes the whole width and the video is letterboxed inside it, which
 	// reads as two dead columns rather than as a picture with room around it.
@@ -790,6 +800,16 @@ func (a *appState) stageCorner(c *ui.Context) {
 				a.enterViewing(viewFullscreen, a.windowRef())
 				a.invalidate()
 			})
+		if a.winW < 900 {
+			a.iconButtonSized(c, "corner-props", lucide.PanelRight(),
+				a.tr("properties", "属性"), 30, colorText, false, func() {
+					a.drawerOpen = !a.drawerOpen
+				})
+			a.iconButtonSized(c, "corner-pages", lucide.Menu(),
+				a.tr("pages", "页面"), 30, colorText, false, func() {
+					a.pageMenu = !a.pageMenu
+				})
+		}
 	})
 }
 
@@ -927,7 +947,9 @@ func (a *appState) transportBar(c *ui.Context) {
 					a.runCommand(command{Kind: commandMasterMute})
 				})
 				a.ghostIconButton(c, "transport-reload", a.tr("Reload", "重载"), lucide.RotateCcw(), 0, func() {
-					a.runCommand(command{Kind: commandReload})
+					if first != nil {
+						a.runCommand(command{Kind: commandReload, Source: first.source.ID})
+					}
 				})
 				ui.Box(c).Width(1).Height(20).Background(colorLineSoft)
 				if first != nil {
@@ -1266,8 +1288,12 @@ func (a *appState) statusBar(c *ui.Context, width float32) {
 			}
 		}
 		if a.importing != "" {
-			ui.Text(c, a.tr("reading ", "正在读取 ")+a.importing).FontSize(textMicro).
+			ui.Text(c, a.tr("reading ", "正在读取 ")+stripSecrets(a.importing)).FontSize(textMicro).
 				TextColor(colorWarn).SingleLine()
+			if ui.Button(c.Key("status-cancel"), a.tr("Cancel", "取消")).Height(18).
+				Padding(0, spaceXs).FontSize(textMicro).Clicked() {
+				a.runCommand(command{Kind: commandCancelImport})
+			}
 		}
 	})
 }
@@ -1294,7 +1320,7 @@ func (a *appState) errorReport(c *ui.Context, width, height float32) {
 					a.workspace = workspaceDiagnostics
 					a.errorOpen = false
 				}
-				if a.importText != "" {
+				if a.importRetryTarget() != "" {
 					if ui.Button(c.Key("err-retry"), a.tr("Retry", "重试")).Height(30).Clicked() {
 						a.retryImport()
 						a.errorOpen = false
@@ -1316,8 +1342,12 @@ func (a *appState) errorShort() string {
 		return ""
 	}
 	msg := a.tr("The last import did not finish.", "上一次导入没有完成。")
-	if a.importText != "" {
-		msg = a.tr("This address did not load: ", "这个地址没有加载成功：") + a.importText
+	if a.lastCommand.Command.Kind == commandAdd && a.lastCommand.Err != nil {
+		if uri := strings.TrimSpace(a.lastCommand.Command.URI); uri != "" {
+			msg = a.tr("This address did not load: ", "这个地址没有加载成功：") + stripSecrets(uri)
+		}
+	} else {
+		msg = redactSecrets(a.lastErr.Error())
 	}
 	return msg
 }

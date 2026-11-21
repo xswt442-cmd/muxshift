@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -101,15 +102,24 @@ func (a *appState) hasCommonClock(it *item) bool {
 	return entry.Player && entry.Playing && len(a.items) > 1
 }
 
-// retryImport sends the address that failed again. An address that is still in
-// the import field is what a person just typed; a failed row keeps it there, so
-// the retry is the same read rather than a remembered one.
+// importRetryTarget is the address a failed import still owns. The editor's
+// current text is a draft and may already name something else.
+func (a *appState) importRetryTarget() string {
+	if a.importing != "" || a.lastCommand.Err == nil || a.lastCommand.Command.Kind != commandAdd {
+		return ""
+	}
+	return strings.TrimSpace(a.lastCommand.Command.URI)
+}
+
+// retryImport sends the address that failed again. A source selected after a
+// failed import is retried through its own command; a fresh draft is not used
+// to answer for the failure.
 func (a *appState) retryImport() {
 	if a.importing != "" {
 		return
 	}
-	if text := a.importText; text != "" {
-		a.report(a.runCommand(command{Kind: commandAdd, URI: text}))
+	if target := a.importRetryTarget(); target != "" {
+		a.report(a.runCommand(command{Kind: commandAdd, URI: target}))
 		return
 	}
 	if a.selected != "" && a.itemOf(a.selected) != nil {

@@ -124,7 +124,7 @@ func (a *appState) dockBody(c *ui.Context) {
 				}
 			})
 			ui.Box(c).WidthPercent(100).Height(1).Background(colorLine)
-			ui.Box(c).WidthPercent(100).Grow(1).Children(func() { a.dockRowsBody(c) })
+			ui.Scroll(c).WidthPercent(100).Grow(1).Children(func() { a.dockRowsBody(c) })
 			return
 		}
 		if a.narrowDock() {

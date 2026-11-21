@@ -91,6 +91,10 @@ type seekTxn struct {
 	// stopped is set by abortSeekTxn. A drawing-thread step that was posted
 	// before the stop still runs after it, and must then do nothing.
 	stopped bool
+	// committed marks the point where the items own the prepared resources.
+	// From then on an abort must not give them back as if the transaction had
+	// failed; the slot is still held until the final account is published.
+	committed bool
 
 	steps []*seekTxnStep
 
@@ -401,7 +405,13 @@ func (a *appState) commitSeekTxn(txn *seekTxn) {
 			it.replayAnchor = &anchor
 			it.replayAnchorErr = nil
 			it.generation++
+			// The item now owns these resources. Clearing the step under the
+			// same lock means a closing session cannot close or release them a
+			// second time.
+			step.player = nil
+			step.lease = nil
 		}
+		txn.committed = true
 		// The slot stays held until the account is published: a caller that
 		// looked while the commit was finishing must not see the slot free and
 		// then read the previous transaction's "preparing" line.
@@ -517,6 +527,10 @@ func (a *appState) seekStep(txn *seekTxn, step *seekTxnStep, fn func(desktopPlay
 
 func (a *appState) abortSeekTxn(txn *seekTxn, why string) {
 	a.seekMu.Lock()
+	if txn.committed {
+		a.seekMu.Unlock()
+		return
+	}
 	txn.stopped = true
 	a.seekMu.Unlock()
 	if txn.cancel != nil {

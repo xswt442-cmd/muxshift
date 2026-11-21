@@ -47,21 +47,24 @@ type playlistRole struct {
 // returns the handed-over address unchanged for a media playlist, and refuses
 // a protected stream outright.
 func inspectPlaylist(ctx context.Context, rawURL string) (playlistRole, error) {
-	text, err := fetchPlaylist(ctx, rawURL)
+	text, playlistURL, err := fetchPlaylist(ctx, rawURL)
 	if err != nil {
 		return playlistRole{}, err
 	}
 	if method := protectedMethod(text); method != "" {
 		return playlistRole{}, protected(method)
 	}
-	if !strings.Contains(text, "#EXT-X-STREAM-INF:") {
-		return playlistRole{address: rawURL, live: !hasEnd(text)}, nil
+	if hasSeparateAudioRendition(text) {
+		return playlistRole{}, fmt.Errorf("the master uses a separate audio rendition; this build opens streams with muxed audio only")
 	}
-	variant, err := pickVariant(rawURL, text)
+	if !strings.Contains(text, "#EXT-X-STREAM-INF:") {
+		return playlistRole{address: playlistURL, live: !hasEnd(text)}, nil
+	}
+	variant, err := pickVariant(playlistURL, text)
 	if err != nil {
 		return playlistRole{}, err
 	}
-	child, err := fetchPlaylist(ctx, variant)
+	child, variantURL, err := fetchPlaylist(ctx, variant)
 	if err != nil {
 		return playlistRole{}, err
 	}
@@ -70,7 +73,7 @@ func inspectPlaylist(ctx context.Context, rawURL string) (playlistRole, error) {
 	}
 	// A master playlist may itself end with EXT-X-ENDLIST while its variants do
 	// not, so only the chosen variant answers whether the stream ends.
-	return playlistRole{address: variant, live: !hasEnd(child)}, nil
+	return playlistRole{address: variantURL, live: !hasEnd(child)}, nil
 }
 
 func protected(method string) error {
@@ -81,32 +84,51 @@ func hasEnd(text string) bool {
 	return strings.Contains(text, "#EXT-X-ENDLIST")
 }
 
+// hasSeparateAudioRendition reports a master that points at an audio playlist
+// through EXT-X-MEDIA. The native player opens one address, so a video variant
+// plus a separate audio rendition would silently lose the sound.
+func hasSeparateAudioRendition(text string) bool {
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "#EXT-X-MEDIA:") &&
+			strings.Contains(line, "TYPE=AUDIO") &&
+			strings.Contains(line, "URI=") {
+			return true
+		}
+	}
+	return false
+}
+
 // fetchPlaylist reads one playlist body and refuses anything that is not one,
 // so a page that answers with an error page cannot be mistaken for a stream.
-func fetchPlaylist(ctx context.Context, rawURL string) (string, error) {
+func fetchPlaylist(ctx context.Context, rawURL string) (string, string, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	request.Header.Set("Accept", "application/vnd.apple.mpegurl, application/x-mpegURL, */*")
 	client := &http.Client{Timeout: playlistTimeout}
 	response, err := client.Do(request)
 	if err != nil {
-		return "", fmt.Errorf("%s could not be read: %w", shortURI(rawURL), err)
+		return "", "", fmt.Errorf("%s could not be read: %w", shortURI(rawURL), err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode > 299 {
-		return "", fmt.Errorf("%s answered %s", shortURI(rawURL), response.Status)
+		return "", "", fmt.Errorf("%s answered %s", shortURI(rawURL), response.Status)
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, playlistReadLimit))
 	if err != nil {
-		return "", fmt.Errorf("%s stopped while being read: %w", shortURI(rawURL), err)
+		return "", "", fmt.Errorf("%s stopped while being read: %w", shortURI(rawURL), err)
 	}
 	text := strings.TrimPrefix(string(body), "\ufeff")
 	if !strings.HasPrefix(strings.TrimSpace(text), "#EXTM3U") {
-		return "", fmt.Errorf("%s answered with something that is not a playlist", shortURI(rawURL))
+		return "", "", fmt.Errorf("%s answered with something that is not a playlist", shortURI(rawURL))
 	}
-	return text, nil
+	finalURL := rawURL
+	if response.Request != nil && response.Request.URL != nil {
+		finalURL = response.Request.URL.String()
+	}
+	return text, finalURL, nil
 }
 
 // pickVariant chooses the media playlist to open from a master playlist. A

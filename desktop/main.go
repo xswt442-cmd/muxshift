@@ -259,7 +259,8 @@ func openPlayer(uri string) (*ui.VideoPlayer, error) {
 // isNetworkAddress reports whether uri is something to stream rather than a
 // file on this machine.
 func isNetworkAddress(uri string) bool {
-	return strings.HasPrefix(uri, "http://") || strings.HasPrefix(uri, "https://")
+	lower := strings.ToLower(strings.TrimSpace(uri))
+	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
 }
 
 // needsWake reports whether a source is played through a player that does not

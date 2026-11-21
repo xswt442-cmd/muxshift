@@ -24,14 +24,64 @@ func ApplyProxy() string {
 	if os.Getenv("HTTP_PROXY") != "" || os.Getenv("HTTPS_PROXY") != "" {
 		return ""
 	}
-	server, ok := windowsProxy()
+	httpProxy, httpsProxy, ok := windowsProxy()
 	if !ok {
 		return ""
 	}
-	address := "http://" + server
-	os.Setenv("HTTP_PROXY", address)
-	os.Setenv("HTTPS_PROXY", address)
-	return redactProxy(server)
+	if httpProxy != "" {
+		os.Setenv("HTTP_PROXY", proxyURL(httpProxy))
+	}
+	if httpsProxy != "" {
+		os.Setenv("HTTPS_PROXY", proxyURL(httpsProxy))
+	}
+	return redactProxy(httpProxy)
+}
+
+// proxyURL adds the missing scheme to a Windows proxy address; an address that
+// already names one is kept as written.
+func proxyURL(server string) string {
+	if strings.Contains(server, "://") {
+		return server
+	}
+	return "http://" + server
+}
+
+// pickProxyServers reads both protocol entries. Windows permits a different
+// proxy for HTTP and HTTPS, so collapsing them to one address would send one
+// protocol through the other protocol's proxy.
+func pickProxyServers(value string) (string, string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", ""
+	}
+	if !strings.Contains(value, "=") {
+		return value, value
+	}
+	httpProxy, httpsProxy := "", ""
+	for _, entry := range strings.Split(value, ";") {
+		name, address, found := strings.Cut(entry, "=")
+		if !found {
+			continue
+		}
+		address = strings.TrimSpace(address)
+		switch strings.ToLower(strings.TrimSpace(name)) {
+		case "http":
+			if httpProxy == "" {
+				httpProxy = address
+			}
+		case "https":
+			if httpsProxy == "" {
+				httpsProxy = address
+			}
+		}
+	}
+	if httpProxy == "" {
+		httpProxy = httpsProxy
+	}
+	if httpsProxy == "" {
+		httpsProxy = httpProxy
+	}
+	return httpProxy, httpsProxy
 }
 
 // pickProxyServer reads a ProxyServer value, which is either one address for

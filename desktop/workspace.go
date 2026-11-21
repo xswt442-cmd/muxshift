@@ -181,6 +181,10 @@ func (a *appState) diagnosticsPage(c *ui.Context) {
 				snapshot.Event.Round(100*1e6), snapshot.Playing, snapshot.LastCommand)).
 				FontSize(textSmall).TextColor(colorTextDim)
 		})
+		items := make(map[core.SourceID]*item, len(a.items))
+		for _, it := range a.items {
+			items[it.source.ID] = it
+		}
 		for i, source := range snapshot.Sources {
 			a.diagSection(c, fmt.Sprintf("%d · %s", i+1, shortURI(source.URI)), func() {
 				ui.Text(c, fmt.Sprintf("%s · gen %d · %s · ready %v · player %v · playing %v · %s / %s · offset %s",
@@ -189,7 +193,7 @@ func (a *appState) diagnosticsPage(c *ui.Context) {
 					source.Player, source.Playing,
 					source.Position.Round(100*1e6), source.Duration.Round(100*1e6), source.Offset)).
 					FontSize(textSmall).TextColor(colorTextDim).FontFeatures("tnum").Wrap()
-				ui.Text(c, a.sourceFacts(a.find(source.ID))).FontSize(textMicro).
+				ui.Text(c, a.sourceFacts(items[source.ID])).FontSize(textMicro).
 					TextColor(colorTextDim).FontFeatures("tnum")
 			})
 		}

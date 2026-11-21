@@ -26,7 +26,7 @@ node .github/engineering/skills/mypr/scripts/install.mjs --check .
 node .github/engineering/skills/myshuohua/scripts/install.mjs --apply .
 ```
 
-`--source` 打印这份副本来自哪个提交和日期。
+`--source` 显示当前源目录最近一次 Git 变更的提交和日期，不用于验证已安装副本的来源。
 
 ## 每个 Skill 都是自足目录
 
@@ -42,10 +42,10 @@ skills/mypr/
 
 | 源 | 目标 |
 | --- | --- |
-| `scripts/`、`repo/` 之外的所有文件 | `.agents/skills/<name>/` 下同名路径 |
-| `repo/` 下的文件 | 仓库根目录下的同名路径（mypr 用它把 PR 模板一起带过去） |
+| `repo/` 之外的所有文件（不含 `scripts/install.mjs`） | `.agents/skills/<name>/` 下同名路径；其他 `scripts/` 文件也会安装 |
+| `repo/` 下的文件 | 仓库根目录下的同名路径（`mypr` 用于安装 PR 模板） |
 
-所以改名、加 `references/`、拆文件都不用改脚本——脚本 `readdir` 自己，没有第二份路径表可维护。
+安装脚本自动遍历源目录，新增参考文件或检查脚本无需更新路径清单。安装器只同步源中存在的文件，不会自动清理旧版本留下的额外文件；清理前须由仓库维护者核对。
 
 ## 三条要求
 

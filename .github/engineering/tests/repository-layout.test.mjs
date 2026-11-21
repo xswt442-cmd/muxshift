@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -71,9 +71,29 @@ const skillFiles = {
   mydocs: ['SKILL.md', 'agents/openai.yaml', 'rules.json', 'references/file-types.md', 'scripts/lint-docs.mjs'],
   myshuohua: [
     'SKILL.md', 'CREDITS.md', 'agents/openai.yaml', 'rules.json',
-    'references/bad-good.md', 'references/language-zh.md', 'scripts/lint-shuohua.mjs',
+    'references/language-zh.md', 'scripts/lint-shuohua.mjs',
   ],
 };
+
+// The installer copies only current source files and deliberately does not delete extras.
+// Keep the canonical repository's tracked copies free of obsolete skill artifacts.
+function filesUnder(dir, prefix = '') {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = prefix + entry.name;
+    return entry.isDirectory()
+      ? filesUnder(resolve(dir, entry.name), path + '/')
+      : [path];
+  }).sort();
+}
+
+test('canonical skill copies contain no files left over from old layouts', { skip: !isCanonicalSource }, () => {
+  for (const name of Object.keys(skillFiles)) {
+    const source = fileURLToPath(new URL(`../skills/${name}/`, import.meta.url));
+    const installed = fileURLToPath(new URL(`../../../.agents/skills/${name}/`, import.meta.url));
+    const expected = filesUnder(source).filter((file) => file !== 'scripts/install.mjs' && !file.startsWith('repo/'));
+    assert.deepEqual(filesUnder(installed), expected, `${name}: installed file list must match the source manifest`);
+  }
+});
 
 test('installed skills are byte-identical to the engineering sources', () => {
   for (const [name, files] of Object.entries(skillFiles)) {

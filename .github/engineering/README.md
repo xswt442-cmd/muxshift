@@ -14,10 +14,11 @@
 - [templates/RELEASE.md](templates/RELEASE.md)：通用发行及回滚操作说明。
 - [skills/README.md](skills/README.md)：把 Skill 装进项目 `.agents/skills/` 的说明、命名与一致性要求。
 - [skills/mypr/SKILL.md](skills/mypr/SKILL.md)：按项目 PR 模板撰写内容的轻量 PR Skill；**PR 模板正文随它一起放在 `skills/mypr/repo/.github/PULL_REQUEST_TEMPLATE.md`**。
-- [skills/mydocs/SKILL.md](skills/mydocs/SKILL.md)：内容该放哪个文件、首页留什么：先按文件分档，再从事实清单重写。
-- [skills/mydocs/scripts/lint-docs.mjs](skills/mydocs/scripts/lint-docs.mjs) 与 [rules.json](skills/mydocs/rules.json)：零依赖的骨架检查器，管 README 内部话题标题、二级标题数量、中英骨架对齐。
-- [skills/myshuohua/SKILL.md](skills/myshuohua/SKILL.md)：中文的词和句式：单字动词、砍半的术语、错配的动宾、营销词、论文腔、翻译腔。
-- [skills/myshuohua/scripts/lint-shuohua.mjs](skills/myshuohua/scripts/lint-shuohua.mjs) 与 [rules.json](skills/myshuohua/rules.json)：零依赖的词句检查器，管分号密度、句长、bullet 句数、术语写法、禁止短语。
+- [skills/mydocs/SKILL.md](skills/mydocs/SKILL.md)：确定文档内容归属，核对事实保真、适用范围与全文一致性。
+- [skills/mydocs/references/whole-document-review.md](skills/mydocs/references/whole-document-review.md)：全文一致性、断言适用范围与改后事实保真的审查清单。
+- [skills/mydocs/scripts/lint-docs.mjs](skills/mydocs/scripts/lint-docs.mjs) 与 [rules.json](skills/mydocs/rules.json)：零依赖的结构检查器，检查 README 内部话题标题、二级标题数量及中英结构对应情况。
+- [skills/myshuohua/SKILL.md](skills/myshuohua/SKILL.md)：检查正式技术中文的用词、动宾搭配、术语、句式与改后复核。
+- [skills/myshuohua/scripts/lint-shuohua.mjs](skills/myshuohua/scripts/lint-shuohua.mjs) 与 [rules.json](skills/myshuohua/rules.json)：零依赖的词句检查器，覆盖分号、句长、段落长度、列表句数、完整句重复、术语写法和固定短语；另支持可选项目术语表。
 - [skills/myshuohua/references/language-zh.md](skills/myshuohua/references/language-zh.md)：lint 数不出来的毛病，分用词和句式两节，每类都给反例和改法。
 - [scripts/release-notes.mjs](scripts/release-notes.mjs)：从目标版本 Changelog 提取发行说明的无依赖脚本。
 - [scripts/skills.mjs](scripts/skills.mjs)：遍历每个 Skill 自带的安装脚本，检查或安装 `.agents/skills/`。
@@ -27,7 +28,7 @@
 ## 权责划分
 
 1. **本仓库**版本化通用原则和通用模板；只有这里的内容是规范权威源。
-2. **项目仓库**的 `AGENTS.md`、PR 模板、Skill、CHANGELOG、CI 和发行手册必须在本仓库内可独立阅读和执行；项目实现与经验证的现实情况优先于泛用样例。
+2. **项目仓库**中的 `AGENTS.md`、PR 模板、Skill、CHANGELOG、CI 和发行手册必须在该项目仓库内可独立阅读和使用；已核实的项目实际行为优先于通用示例。
 3. PR：工程规范规定原则，项目的 `.github/PULL_REQUEST_TEMPLATE.md` 规定正文结构，项目的 `.agents/skills/mypr/SKILL.md` 负责调查 Diff、解释最终实现和填写真实验证；三者不可各定义一套 PR 格式。
 4. **变更传播是显式的。** 修改本目录不自动改变产品仓库；同步后各项目独立审查、测试和提交。严禁直接修改历史 Tag 或二进制发行资产。
 

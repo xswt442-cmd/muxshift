@@ -14,7 +14,7 @@
 
 权威源集中保存在本私有维护仓库的 `.github/engineering/`。产品仓库中的 PR 模板、Skill 与工程规则是经过各项目审查的本地副本；产品文档必须可独立阅读，不要求贡献者能访问私有规范源。不要让各项目各自修改独立的“全局标准”。
 
-`.github/engineering/skills/` 只是源，Agent 读的是 `.agents/skills/` 下的副本（当前为 `mypr`、`mydocs`、`myshuohua`）：复制后逐字一致、随仓库跟踪、不用软链。装法用每个 Skill 自带的脚本或 `scripts/skills.mjs`，见 [skills/README.md](skills/README.md)；只复制快照而不安装，Skill 不会生效。
+`.github/engineering/skills/` 存放权威源，Agent 读取项目 `.agents/skills/` 中的副本（当前为 `mypr`、`mydocs`、`myshuohua`）。副本应与源文件字节一致、由 Git 跟踪，不使用软链接。使用各 Skill 的安装脚本或 `scripts/skills.mjs` 同步，详见 [skills/README.md](skills/README.md)。仅将 Skill 文件放在规范源目录或其他临时位置，并不会让项目 Agent 从约定路径加载它们。
 
 同步命令、只读检查与显式写入的边界统一记在 [工程化规范索引](README.md) 的「Skill 安装」和「社区健康文件同步」两节。同步完成后由项目维护者审查 Diff、运行检查、决定是否提交与推送。
 

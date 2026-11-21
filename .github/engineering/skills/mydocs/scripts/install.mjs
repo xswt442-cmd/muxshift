@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -68,8 +68,13 @@ function sourceRef() {
 
 function sync(repo, apply) {
   if (!existsSync(join(repo, '.git'))) throw new Error('Target is not a Git working tree');
-  const top = resolve(git(repo, ['rev-parse', '--show-toplevel']));
-  if (top.toLowerCase() !== repo.toLowerCase()) throw new Error('Target must be the repository root');
+  // On Windows the caller's path can carry an 8.3 short name (RUNNER~1) while git always
+  // reports the long one, so a string comparison rejects the correct repository. Resolve
+  // both sides to their real path first. realpathSync.native expands short names; the plain
+  // version does not.
+  const real = (path) => realpathSync.native(path);
+  const top = real(git(repo, ['rev-parse', '--show-toplevel']));
+  if (top.toLowerCase() !== real(repo).toLowerCase()) throw new Error('Target must be the repository root');
 
   const changed = [];
   for (const item of plan(repo)) {

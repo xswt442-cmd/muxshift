@@ -22,7 +22,7 @@ are one object; the files below are grouped by the job they do:
   `mixer.go`, `sourcememory.go`: playback, timing, replay and sound.
 - `settings.go`, `i18n.go`, `addsource.go`, `stage_edit*.go`: settings,
   language, the add-source chooser and the editing mode.
-- `*_scenario.go`: the scripted checks, merged by domain (align, playback,
+- `*_scenario.go`: the scripted checks, grouped by domain (align, playback,
   replay, UI, sources, Win32-only). They only run under `-scenario`.
 - `*_group_test.go`: the package tests, grouped by domain.
 - `internal/win`: Win32 registry, locale, proxy and window icon helpers.

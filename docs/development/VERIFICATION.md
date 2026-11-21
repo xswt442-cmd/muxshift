@@ -76,7 +76,7 @@ with the same script, runs `-version`, and checks the binary names the clone's
 commit, carries no path from the building machine (`-trimpath`, cgo off), carries the icon and the version block from `desktop\rsrc_windows_amd64.syso` (read from the PE resource directory, not scanned for), and that two clones in different directories build the same bytes.
 
 `desktop\rsrc_windows_amd64.syso` is generated, not written by hand:
-`scripts\winres.ps1` rebuilds it from `desktop\icon.ico` and `VERSION`, and the
+`scripts\winres.ps1` rebuilds it from `desktop\internal\win\icon.ico` and `VERSION`, and the
 result is committed so a build needs neither the tool nor a network. The steps
 from a green commit to a published tag are in
 [RELEASE.md](RELEASE.md); this section only says what the build produces.
@@ -90,6 +90,6 @@ Scenario captures, logs and notes live in the Git-ignored `testplace/` directory
 ## 5. Known gaps in coverage
 
 - CI runs both modules' checks (`go vet`, `go build` and `go test` at the root and inside `desktop/`, on Ubuntu and Windows); no scenario runs there, because they need a window and media that CI does not have.
-- No test covers a session open for hours, or a second source opened while another one is being switched. Both belong to P16's own continuous-run acceptance, not to the P16.5 hygiene phase, which only recorded the gap.
+- No test covers a session open for hours, or a second source opened while another one is being switched.
 - Windows is the only platform with real-window evidence; the other platforms are covered by package tests only.
-- Audio continuity across a replay switch is Pending under REPLAY-AUDIO-CONTINUITY and is not claimed by any state assertion.
+- Audio continuity across a replay switch is not covered by a state assertion.

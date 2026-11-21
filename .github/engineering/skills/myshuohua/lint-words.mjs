@@ -88,6 +88,16 @@ function sentences(line) {
     .filter((part) => SIZE(part) > 3);
 }
 
+// 句长按「阅读单位」量，不按标点句量。中文技术文档常写「结论：三条解释」，
+// 冒号后面本来就是另一句；把它算进前一句，33 条超长句里有 24 条是这么假出来的。
+// bullet 的句数仍用 sentences()，否则一条带冒号的 bullet 会被数成两句。
+function readingUnits(line) {
+  return line
+    .split(/[。！？!?：]+/)
+    .map((part) => part.trim())
+    .filter((part) => SIZE(part) > 3);
+}
+
 const findings = [];
 // 文档里要引用坏例子，这类地方得能关掉某条规则。写法：
 //   <!-- lint-ignore-file rule -->        整个文件不算这条
@@ -159,7 +169,7 @@ function checkFile(file, lines) {
   const lengths = [];
   body.forEach((line, index) => {
     if (!line.trim() || isTable(line)) return;
-    for (const sentence of sentences(line)) {
+    for (const sentence of readingUnits(line)) {
       const size = SIZE(sentence);
       const han = (sentence.match(/[\u4e00-\u9fff]/g) ?? []).length;
       if (size < 20 || han / size < 0.2) continue;

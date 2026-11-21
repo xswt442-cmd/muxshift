@@ -211,3 +211,18 @@ test('numbered steps are a list, not a long paragraph', () => {
   const { output } = run({ 'README.md': `## 升级\n\n${steps}\n` });
   assert.doesNotMatch(output, /paragraph-length/);
 });
+
+test('a colon starts a new reading unit, so 结论：三条解释 is not one long sentence', () => {
+  const line = '响应头有三个字段。超时时间是 30 秒，这是应用会话的默认值，配置在 Access 应用里修改，重启后仍然生效，不需要重新登录。';
+  const long = '边界是：**已经处于回放状态的舞台**可以跳转，每个目标都要单独获得该源的锚点授权；**从直播进入回放**在界面里没有入口，内部事务也没有调用方。';
+  const { output } = run({ 'README.md': `## 说明\n\n${line}\n\n${long}\n` });
+  const hits = output.split('\n').filter((item) => item.includes('sentence-length'));
+  assert.equal(hits.length, 0, 'the colon clause must be measured on its own');
+});
+
+test('a bullet with a colon is still one sentence for the bullet rule', () => {
+  const { output } = run({
+    'README.md': '## 功能\n\n- **专注模式**：隐藏工作区控件，只显示当前终端。\n',
+  });
+  assert.doesNotMatch(output, /bullet-sentences/);
+});

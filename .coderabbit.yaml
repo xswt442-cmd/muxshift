@@ -16,6 +16,12 @@ reviews:
     base_branches:
       - dev
       - main
+  path_filters:
+    - "!**/*_scenario.go"
+    - "!**/*_test.go"
+    - "!desktop/rsrc_windows_amd64.syso"
+    - "!.github/engineering/**"
+    - "!.agents/**"
   path_instructions:
     - path: "core/**"
       instructions: >-

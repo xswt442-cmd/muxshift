@@ -4,7 +4,7 @@
 
 This changelog records completed changes that matter to someone using MuxShift. GitHub Release notes come from the matching tagged section, not a separately maintained summary.
 
-## [0.0.2] - 2026-11-21
+## [0.0.2] - 2026-11-22
 
 ### 简体中文
 

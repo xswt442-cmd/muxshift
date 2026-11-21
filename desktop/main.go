@@ -810,6 +810,7 @@ func capture(window *mygo.Window, path string) (err error) {
 }
 
 func main() {
+	win.AttachConsole()
 	var media multiFlag
 	flag.Var(&media, "media", "local file or http(s) address to play; may be repeated")
 	replay := flag.String("replay", "", "play one joined recording as the only source, in a window labelled as a recording")

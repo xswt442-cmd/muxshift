@@ -38,8 +38,17 @@ if ($LASTEXITCODE -ne 0) { throw "release build failed in the clone" }
 $exe = Join-Path $clone "dist\muxshift-$Version-windows-amd64\muxshift.exe"
 if (-not (Test-Path $exe)) { throw "the release directory has no binary at $exe" }
 
-$reported = & $exe -version
-if ($LASTEXITCODE -ne 0) { throw "the built binary cannot say what it is" }
+$reportedOut = Join-Path $clone "dist\version-check.txt"
+$reportedErr = Join-Path $clone "dist\version-check.err"
+$reportedProcess = Start-Process -FilePath $exe -ArgumentList "-version" -Wait -NoNewWindow -PassThru `
+    -RedirectStandardOutput $reportedOut -RedirectStandardError $reportedErr
+$reported = (Get-Content $reportedOut -Raw -ErrorAction SilentlyContinue)
+if ($null -ne $reported) { $reported = $reported.Trim() }
+$reportedError = (Get-Content $reportedErr -Raw -ErrorAction SilentlyContinue)
+Remove-Item $reportedOut, $reportedErr -Force -ErrorAction SilentlyContinue
+if ($reportedProcess.ExitCode -ne 0) {
+    throw "the built binary cannot say what it is (exit $($reportedProcess.ExitCode)): $reportedError"
+}
 if ($reported -notmatch [regex]::Escape($commit)) {
     throw "the binary names a different commit than the clone: $reported"
 }

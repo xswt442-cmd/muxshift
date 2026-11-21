@@ -49,7 +49,7 @@ try {
     $previousCgo = $env:CGO_ENABLED
     $env:CGO_ENABLED = "0"
     try {
-        & go build -trimpath -ldflags "-X github.com/xswt442-cmd/muxshift/desktop/internal/version.BuildVersion=$stamp -X github.com/xswt442-cmd/muxshift/desktop/internal/version.BuildCommit=$commit" -o (Join-Path $out "muxshift.exe") .
+        & go build -trimpath -ldflags "-H=windowsgui -X github.com/xswt442-cmd/muxshift/desktop/internal/version.BuildVersion=$stamp -X github.com/xswt442-cmd/muxshift/desktop/internal/version.BuildCommit=$commit" -o (Join-Path $out "muxshift.exe") .
         if ($LASTEXITCODE -ne 0) { throw "go build failed" }
     }
     finally {
@@ -61,8 +61,17 @@ finally {
 }
 
 $exe = Join-Path $out "muxshift.exe"
-$reported = & $exe -version
-if ($LASTEXITCODE -ne 0) { throw "the built binary cannot say what it is" }
+$versionOut = Join-Path $out "version-check.txt"
+$versionErr = Join-Path $out "version-check.err"
+$versionProcess = Start-Process -FilePath $exe -ArgumentList "-version" -Wait -NoNewWindow -PassThru `
+    -RedirectStandardOutput $versionOut -RedirectStandardError $versionErr
+$reported = (Get-Content $versionOut -Raw -ErrorAction SilentlyContinue)
+if ($null -ne $reported) { $reported = $reported.Trim() }
+$versionError = (Get-Content $versionErr -Raw -ErrorAction SilentlyContinue)
+Remove-Item $versionOut, $versionErr -Force -ErrorAction SilentlyContinue
+if ($versionProcess.ExitCode -ne 0) {
+    throw "the built binary cannot say what it is (exit $($versionProcess.ExitCode)): $versionError"
+}
 if ($reported -notmatch [regex]::Escape($commit)) {
     throw "the binary does not name the commit it was built from: $reported"
 }
@@ -101,7 +110,8 @@ $readme = @'
 MuxShift desktop build
 ======================
 
-Run muxshift.exe with an address or a local file:
+Run muxshift.exe with an address or a local file. This is a GUI build: a normal
+start opens the window without a console.
 
     muxshift.exe -media https://example.invalid/stream.m3u8
     muxshift.exe -media "C:\videos\sample.mp4"

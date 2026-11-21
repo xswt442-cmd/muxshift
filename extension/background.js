@@ -220,6 +220,7 @@ async function resolveLive() {
   }
   const results = await chrome.scripting.executeScript({
     target: { tabId: tab.id },
+    world: "MAIN",
     func: resolveLivePage,
   });
   const found = results?.[0]?.result || { error: "the page did not answer" };
@@ -431,7 +432,10 @@ async function importAddress(url) {
     answer = await request(base(handoff.address), "/import", { url }, handoff.token);
   } catch (error) {
     if (error.status === 401 || error.status === 403) {
-      await chrome.storage.local.remove("handoff");
+      const current = await stored();
+      if (current && current.token === handoff.token && current.address === handoff.address) {
+        await chrome.storage.local.remove("handoff");
+      }
       throw new Error("this browser is no longer paired with the window; open its Diagnostics page for a new code");
     }
     if (error instanceof TypeError) {

@@ -8,6 +8,7 @@ const pairLine = document.getElementById("pair-line");
 const resolveButton = document.getElementById("resolve");
 
 let selected = null;
+let pairEpoch = 0;
 
 function setStatus(text, kind) {
   status.textContent = text;
@@ -129,7 +130,11 @@ resolveButton.addEventListener("click", () => {
 });
 
 function start() {
+  const epoch = pairEpoch;
   chrome.runtime.sendMessage({ type: "status" }, (reply) => {
+    if (pairEpoch !== epoch) {
+      return;
+    }
     if (chrome.runtime.lastError) {
       setPairLine(chrome.runtime.lastError.message);
       return;
@@ -170,6 +175,7 @@ pairButton.addEventListener("click", () => {
       return;
     }
     code.value = "";
+    pairEpoch++;
     setPairLine(`paired with ${reply.address}`);
     setStatus("paired; pick an address below", "ok");
   });

@@ -68,10 +68,10 @@ test('CHANGELOG template requires meaningful bilingual change categories without
 
 const skillFiles = {
   mypr: ['SKILL.md', 'CREDITS.md', 'agents/openai.yaml'],
-  mydocs: ['SKILL.md', 'agents/openai.yaml', 'lint-docs.mjs', 'rules.json', 'references/file-types.md'],
+  mydocs: ['SKILL.md', 'agents/openai.yaml', 'rules.json', 'references/file-types.md', 'scripts/lint-docs.mjs'],
   myshuohua: [
-    'SKILL.md', 'CREDITS.md', 'agents/openai.yaml', 'lint-words.mjs', 'rules.json',
-    'references/bad-good.md', 'references/language-zh.md',
+    'SKILL.md', 'CREDITS.md', 'agents/openai.yaml', 'rules.json',
+    'references/bad-good.md', 'references/language-zh.md', 'scripts/lint-shuohua.mjs',
   ],
 };
 
@@ -136,8 +136,8 @@ test('the two documentation skills keep their rule sets apart', () => {
 
 test('each skill names its own checker and does not ship the other one', () => {
   const pairs = [
-    ['mydocs', 'lint-docs.mjs', 'lint-words.mjs'],
-    ['myshuohua', 'lint-words.mjs', 'lint-docs.mjs'],
+    ['mydocs', 'scripts/lint-docs.mjs', 'scripts/lint-shuohua.mjs'],
+    ['myshuohua', 'scripts/lint-shuohua.mjs', 'scripts/lint-docs.mjs'],
   ];
   for (const [name, own, foreign] of pairs) {
     const body = readFileSync(new URL(`../skills/${name}/SKILL.md`, import.meta.url), 'utf8');

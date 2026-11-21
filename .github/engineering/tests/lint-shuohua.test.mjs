@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-const lint = fileURLToPath(new URL('../skills/myshuohua/lint-words.mjs', import.meta.url));
+const lint = fileURLToPath(new URL('../skills/myshuohua/scripts/lint-shuohua.mjs', import.meta.url));
 
 function run(files, args = []) {
   const dir = mkdtempSync(join(tmpdir(), 'myshuohua-lint-'));

@@ -1,24 +1,25 @@
 #!/usr/bin/env node
 // 中文词句的机械检查。零依赖，够用就好。
 //
-//   node .agents/skills/myshuohua/lint-words.mjs README.md docs
-//   node .agents/skills/myshuohua/lint-words.mjs --strict .
-//   node .agents/skills/myshuohua/lint-words.mjs --json .
-//   node .agents/skills/myshuohua/lint-words.mjs --glossary docs/wording-terms.json README.md
-//   node .agents/skills/myshuohua/lint-words.mjs --rules
+//   node .agents/skills/myshuohua/scripts/lint-shuohua.mjs README.md docs
+//   node .agents/skills/myshuohua/scripts/lint-shuohua.mjs --strict .
+//   node .agents/skills/myshuohua/scripts/lint-shuohua.mjs --json .
+//   node .agents/skills/myshuohua/scripts/lint-shuohua.mjs --glossary docs/wording-terms.json README.md
+//   node .agents/skills/myshuohua/scripts/lint-shuohua.mjs --rules
 //
 // 退出码：0 干净，1 有 error（或 --strict 下有 warning），2 用法或读文件出错。
 //
 // 机械规则检查分号、句长、段落、完整句重复、固定短语和项目首选术语。
 // 词用得对不对、句子骨架立不立得住，归 SKILL.md 和 references/。
-// 内容和文件的对应关系不在这里，那是 mydocs 的 lint-docs.mjs。
+// 内容和文件的对应关系不在这里，那是 mydocs 的 lint-docs.mjs（同在各自 skill 的 scripts/ 下）。
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const CONFIG = JSON.parse(readFileSync(join(HERE, 'rules.json'), 'utf8'));
+// rules.json 与检查器不同层：脚本在 scripts/，规则在 skill 根。
+const CONFIG = JSON.parse(readFileSync(join(HERE, '..', 'rules.json'), 'utf8'));
 const RULE = new Map(CONFIG.rules.map((rule) => [rule.id, rule]));
 
 const SKIP_DIRS = new Set([

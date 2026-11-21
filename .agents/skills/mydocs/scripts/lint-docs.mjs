@@ -1,22 +1,23 @@
 #!/usr/bin/env node
 // 文档骨架的机械检查。零依赖，够用就好。
 //
-//   node .agents/skills/mydocs/lint-docs.mjs README.md README.en.md docs
-//   node .agents/skills/mydocs/lint-docs.mjs --strict .
-//   node .agents/skills/mydocs/lint-docs.mjs --json .
-//   node .agents/skills/mydocs/lint-docs.mjs --rules
+//   node .agents/skills/mydocs/scripts/lint-docs.mjs README.md README.en.md docs
+//   node .agents/skills/mydocs/scripts/lint-docs.mjs --strict .
+//   node .agents/skills/mydocs/scripts/lint-docs.mjs --json .
+//   node .agents/skills/mydocs/scripts/lint-docs.mjs --rules
 //
 // 退出码：0 干净，1 有 error（或 --strict 下有 warning），2 用法或读文件出错。
 //
 // 这里只查内容和文件的对应关系：首页有没有装内部话题、中英两版骨架对不对得上。
-// 分号、句长、术语写法、固定短语归 myshuohua 的 lint-words.mjs。
+// 分号、句长、术语写法、固定短语归 myshuohua 的 lint-shuohua.mjs。
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const CONFIG = JSON.parse(readFileSync(join(HERE, 'rules.json'), 'utf8'));
+// rules.json 与检查器不同层：脚本在 scripts/，规则在 skill 根。
+const CONFIG = JSON.parse(readFileSync(join(HERE, '..', 'rules.json'), 'utf8'));
 const RULE = new Map(CONFIG.rules.map((rule) => [rule.id, rule]));
 
 const SKIP_DIRS = new Set([

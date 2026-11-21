@@ -26,12 +26,12 @@ node .github/engineering/skills/myshuohua/scripts/install.mjs --apply .
 
 `--check` 列出不一致的文件并以非零状态退出；`--apply` 写入，遇到有本地改动的路径直接拒绝覆盖。`--source` 打印这份副本来自哪个提交和日期。
 
-装好之后，lint 在 `.agents/skills/myshuohua/lint-words.mjs`，规则在同目录的 `rules.json`。不要改装好的副本，改源再 `--apply`。
+装好之后，lint 在 `.agents/skills/myshuohua/scripts/lint-shuohua.mjs`，规则在同目录的 `rules.json`。不要改装好的副本，改源再 `--apply`。
 
 ## 第一步：跑 lint
 
 ```sh
-node .agents/skills/myshuohua/lint-words.mjs README.md README.en.md docs
+node .agents/skills/myshuohua/scripts/lint-shuohua.mjs README.md README.en.md docs
 ```
 
 八条规则（其中术语偏好检查需要项目术语表）：
@@ -109,7 +109,7 @@ lint 报告的命中项必须处理或说明保留理由；没报告的句子也
 
 **第二遍——对照 Diff 与代码。** 对比改写前后的命令、参数、数字、接口、错误语义、兼容范围、安全约束和因果关系。无法证实的新断言不得写进文档。全文功能和限制是否互相矛盾、不同客户端能力是否混写，由 `mydocs` 做整篇核查。
 
-**第三遍——机器复检。** 在**最终文件**上重跑 `lint-words.mjs`，逐项处理 error/warning（或说明保留理由），需要时加 `--strict`；已核实的专用术语表可用 `--glossary`。改过告警句后重新读上下文，再检查是否引入重复、歧义或不符合文档语域的新词。
+**第三遍——机器复检。** 在**最终文件**上重跑 `lint-shuohua.mjs`，逐项处理 error/warning（或说明保留理由），需要时加 `--strict`；已核实的专用术语表可用 `--glossary`。改过告警句后重新读上下文，再检查是否引入重复、歧义或不符合文档语域的新词。
 
 没有完成这三遍，不能以「第一遍 lint 通过」「只改了措辞」为理由宣称审稿通过。检查器只能发现一部分问题，零告警也不能跳过人工复核。
 

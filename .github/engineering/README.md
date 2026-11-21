@@ -15,9 +15,9 @@
 - [skills/README.md](skills/README.md)：把 Skill 装进项目 `.agents/skills/` 的说明、命名与一致性要求。
 - [skills/mypr/SKILL.md](skills/mypr/SKILL.md)：按项目 PR 模板撰写内容的轻量 PR Skill；**PR 模板正文随它一起放在 `skills/mypr/repo/.github/PULL_REQUEST_TEMPLATE.md`**。
 - [skills/mydocs/SKILL.md](skills/mydocs/SKILL.md)：内容该放哪个文件、首页留什么：先按文件分档，再从事实清单重写。
-- [skills/mydocs/lint-docs.mjs](skills/mydocs/lint-docs.mjs) 与 [rules.json](skills/mydocs/rules.json)：零依赖的骨架检查器，管 README 内部话题标题、二级标题数量、中英骨架对齐。
+- [skills/mydocs/scripts/lint-docs.mjs](skills/mydocs/scripts/lint-docs.mjs) 与 [rules.json](skills/mydocs/rules.json)：零依赖的骨架检查器，管 README 内部话题标题、二级标题数量、中英骨架对齐。
 - [skills/myshuohua/SKILL.md](skills/myshuohua/SKILL.md)：中文的词和句式：单字动词、砍半的术语、错配的动宾、营销词、论文腔、翻译腔。
-- [skills/myshuohua/lint-words.mjs](skills/myshuohua/lint-words.mjs) 与 [rules.json](skills/myshuohua/rules.json)：零依赖的词句检查器，管分号密度、句长、bullet 句数、术语写法、禁止短语。
+- [skills/myshuohua/scripts/lint-shuohua.mjs](skills/myshuohua/scripts/lint-shuohua.mjs) 与 [rules.json](skills/myshuohua/rules.json)：零依赖的词句检查器，管分号密度、句长、bullet 句数、术语写法、禁止短语。
 - [skills/myshuohua/references/language-zh.md](skills/myshuohua/references/language-zh.md)：lint 数不出来的毛病，分用词和句式两节，每类都给反例和改法。
 - [scripts/release-notes.mjs](scripts/release-notes.mjs)：从目标版本 Changelog 提取发行说明的无依赖脚本。
 - [scripts/skills.mjs](scripts/skills.mjs)：遍历每个 Skill 自带的安装脚本，检查或安装 `.agents/skills/`。

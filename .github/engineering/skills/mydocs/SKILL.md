@@ -26,7 +26,7 @@ node .github/engineering/skills/mydocs/scripts/install.mjs --apply .
 
 `--check` 列出不一致的文件并以非零状态退出；`--apply` 写入，遇到有本地改动的路径直接拒绝覆盖。`repo/` 下的内容镜像到仓库根目录（本 Skill 暂无）。`--source` 打印这份副本来自哪个提交和日期。
 
-装好之后，检查器在 `.agents/skills/mydocs/lint-docs.mjs`，规则在同目录的 `rules.json`。不要改装好的副本，改源再 `--apply`。仓库自己的补充规则写进 `AGENTS.md`。
+装好之后，检查器在 `.agents/skills/mydocs/scripts/lint-docs.mjs`，规则在同目录的 `rules.json`。不要改装好的副本，改源再 `--apply`。仓库自己的补充规则写进 `AGENTS.md`。
 
 ## 第 0 步：这个文件面向谁
 
@@ -91,7 +91,7 @@ node .github/engineering/skills/mydocs/scripts/install.mjs --apply .
 内容放对之后，先确认骨架没走形：
 
 ```sh
-node .agents/skills/mydocs/lint-docs.mjs README.md README.en.md docs
+node .agents/skills/mydocs/scripts/lint-docs.mjs README.md README.en.md docs
 ```
 
 两条规则：
@@ -103,7 +103,7 @@ node .agents/skills/mydocs/lint-docs.mjs README.md README.en.md docs
 
 `--rules` 看阈值和理由，`--strict` 让 warning 也退 1，`--json` 给 CI 用。`readme-headings` 只提示不拦，命中先判断那段该不该拆进 `docs/`。中英对不上，通常是改了一份忘了另一份。
 
-检查器只管骨架。哪句话怎么写交给 `myshuohua` 的 `lint-words.mjs`：分号、句长、术语写法、固定短语。
+检查器只管骨架。哪句话怎么写交给 `myshuohua` 的 `lint-shuohua.mjs`：分号、句长、术语写法、固定短语。
 
 ## 第 6 步：交付前全文验收（必须重读成稿）
 

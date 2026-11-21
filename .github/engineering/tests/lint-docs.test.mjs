@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-const lint = fileURLToPath(new URL('../skills/mydocs/lint-docs.mjs', import.meta.url));
+const lint = fileURLToPath(new URL('../skills/mydocs/scripts/lint-docs.mjs', import.meta.url));
 
 // 首页检测只在仓库根生效，所以夹具里放一个空的 .git。
 function run(files, args = []) {

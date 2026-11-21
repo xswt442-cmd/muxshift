@@ -5,14 +5,18 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // This script ships inside the skill it installs. Everything it needs comes from its own directory:
-//   <file>          -> <repo>/.agents/skills/<skill>/
-//   repo/<path>     -> <repo>/<path>
-//   scripts/        -> the installer itself, never installed
+//   <file>                   -> <repo>/.agents/skills/<skill>/
+//   repo/<path>              -> <repo>/<path>
+//   scripts/install.mjs      -> the installer itself, never installed
+//   scripts/<other file>     -> <repo>/.agents/skills/<skill>/scripts/<other file>
 // A directory rename or a new reference file therefore needs no change here.
 
 const skillRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const skillName = skillRoot.split(/[\\/]/).pop();
-const skip = new Set(['scripts', 'repo']);
+// Only the installer stays behind. The checkers live in scripts/ too, and the
+// installed copy must keep them so `node .agents/skills/<skill>/scripts/...` works.
+const skip = new Set(['repo']);
+const isInstaller = (file) => file === 'scripts/install.mjs';
 
 function walk(dir, base = dir) {
   const files = [];
@@ -27,7 +31,7 @@ function walk(dir, base = dir) {
 function plan(repo) {
   const items = [];
   for (const file of walk(skillRoot)) {
-    if (skip.has(file.split('/')[0])) continue;
+    if (skip.has(file.split('/')[0]) || isInstaller(file)) continue;
     items.push({ path: `.agents/skills/${skillName}/${file}`, from: join(skillRoot, file) });
   }
   const mirror = join(skillRoot, 'repo');

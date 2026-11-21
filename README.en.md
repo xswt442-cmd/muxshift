@@ -81,15 +81,6 @@ Whether a page can hand anything over is up to the page. `blob:`/MSE players, pa
 | [Changelog](CHANGELOG.md) | What each version added, improved, and fixed |
 | [Release process](docs/development/RELEASE.en.md) | Maintainers: version, tag, build verification, and publishing |
 
-## Limits
-
-- **Entering a replay from live is not supported**: there is no entry point in the interface.
-- **No capture, mixing, or automatic cross-source sync**: MuxShift plays the addresses you give it. It does not record a screen or device, mix sources, or align them automatically.
-- **Only those four live pages work**: on-demand pages that feed segments to MSE, Bilibili among them, expose no single replayable address, and the YouTube sample asks for a login. A YouTube live `hlsManifestUrl` is tied to the exit IP that asked for it, so the playlist reads while media segments can be refused with `403`, and these cases only report the problem instead of bypassing the login, cross-origin rules, or DRM.
-- **Live plays only what is happening now, and the web client does less**: live has no replay buffer and no cross-source alignment, and an expired signed URL has to be fetched from the extension again. The web client does no alignment and keeps no history. Its seeks stay inside what the browser has buffered.
-- **The desktop app only advances the source it is drawing**: switching to another page stops the stage, and coming back catches up after a few seconds.
-- **The first seek at a replay edge can fail**: right after entering a replay, a jump to the very edge of the buffer sometimes fails and keeps the previous picture. The rate has not been measured.
-
 ## Layout
 
 | Path | Contents |

@@ -5,25 +5,18 @@
 1. **盘点**当前分支、Git 跟踪文件、文档、标签、发布渠道、CI 和 .gitignore。
 2. **归类**各文件内容的权威位置；找出被重复维护的说明。
 3. **清理**私人路径、环境专属状态、开发流水与未来任务；同步移除注释中的旧方案与修复经过。以当前代码和文件为准，保留真实功能及必要安全/升级限制。
-4. **统一入口**：AGENTS、PR 模板、CHANGELOG、RELEASE 操作手册及相应的语言命名。
+4. **统一入口**：AGENTS、PR 模板、CHANGELOG、RELEASE 操作手册及相应的语言命名，并把 Skill 装到 `.agents/skills/`。
 5. **改造发布**：GitHub Release 正文从 Tag 对应 CHANGELOG 自动生成，取消新版本单独手写 Release Notes。
 6. **检查**语义、文件链接、Release 生成脚本、单元测试与 CI；再根据维护者授权提交。
 7. **逐步接入其他仓库**；先治理现状，再考虑扩展检查脚本，避免一次性跨仓库大改。
 
 ## 2. 规范源与项目副本
 
-权威源集中保存在本规范源目录 `.github/engineering/`。产品仓库中的 PR 模板、PR Skill 与工程规则是经过各项目审查的本地副本；产品文档必须可独立阅读，不要求贡献者能访问规范源。不要让各项目各自修改独立的“全局标准”。
+权威源集中保存在本私有维护仓库的 `.github/engineering/`。产品仓库中的 PR 模板、Skill 与工程规则是经过各项目审查的本地副本；产品文档必须可独立阅读，不要求贡献者能访问私有规范源。不要让各项目各自修改独立的“全局标准”。
 
-对采用统一 PR 模板的仓库，可在本仓库根目录运行：
+`.github/engineering/skills/` 只是源，Agent 读的是 `.agents/skills/` 下的副本（当前为 `mypr`、`mydocs`、`myshuohua`）：复制后逐字一致、随仓库跟踪、不用软链。装法用每个 Skill 自带的脚本或 `scripts/skills.mjs`，见 [skills/README.md](skills/README.md)；只复制快照而不安装，Skill 不会生效。
 
-~~~sh
-node .github/engineering/scripts/sync-pr.mjs --check /path/to/repo
-node .github/engineering/scripts/sync-pr.mjs --apply /path/to/repo
-~~~
-
-该脚本仅同步 PR 模板与 PR Skill 的四个指定文件；只读检查发现差异时退出非零，写入必须使用 `--apply`，且拒绝覆盖目标仓库已经修改或未跟踪的文件。同步完成后仍由项目维护者审查 Diff、运行检查、决定是否提交与推送。
-
-社区健康文件另用 `sync-community.mjs` 检查位置、唯一性与必需章节，命令见 [工程化规范索引](README.md) 的「社区健康文件同步」一节。`--apply` 只补建缺失文件，已有副本一律保留；产品仓按自身信任边界和验证命令改写后，检查仍以章节为准。
+同步命令、只读检查与显式写入的边界统一记在 [工程化规范索引](README.md) 的「Skill 安装」和「社区健康文件同步」两节。同步完成后由项目维护者审查 Diff、运行检查、决定是否提交与推送。
 
 ## 3. 检查表
 
@@ -31,7 +24,7 @@ node .github/engineering/scripts/sync-pr.mjs --apply /path/to/repo
 | --- | --- |
 | 文件内容 | 没有真实个人目录、私人 SSH 别名、仅本机可用配置、秘密或一次性部署流水 |
 | README | 面向使用者，功能与支持范围真实、语言精简；无重构动机、Agent 日志、内部任务列表或未来功能宣传 |
-| CHANGELOG | 每版本双语，按变更类型分组，不预留空类别；仅记录已实现变化及必要兼容性影响 |
+| CHANGELOG | 每版本双语，按实际变化分类，不预留空类别；仅记录已实现变化及必要兼容性影响 |
 | Release | 从 Tag 的 CHANGELOG 派生正文，必要安装内容来自已验证资产 |
 | RELEASE.md | 只有可重复的发布验证和回滚步骤 |
 | ARCHITECTURE | 反映当前代码边界，没有过期环境快照 |
@@ -47,6 +40,7 @@ node .github/engineering/scripts/sync-pr.mjs --apply /path/to/repo
 | SECURITY | 位于 `.github/SECURITY.md` 等 GitHub 可识别路径；声明受支持版本、真实存在的联络方式与受理范围；公开 issue 不含复现细节 |
 | CONTRIBUTING | 位于可识别路径；写明 PR 目标分支、PR 正文结构、文档对与实际验证命令；链接到本仓 SECURITY |
 | 社区单名文件 | 由固定名称识别，全仓只保留一份；不套用 `.zh-CN.md` / `.en.md` 成对命名，不注册进 `docs:check` 文档对 |
+| Skill 安装 | `mypr`、`mydocs`、`myshuohua` 已装到 `.agents/skills/` 并被跟踪，与 `.github/engineering/skills/` 逐字一致；无软链、无用户级副本 |
 | CI / 安全 | 文档基础检查、版本对应验证、仓库 Secret Scan、真实功能测试与社区健康文件位置检查 |
 
 ## 4. 不同发行形式

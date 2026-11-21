@@ -2,7 +2,7 @@
 
 ## Branches
 
-Pull requests target the development branch recorded in the repository's `AGENTS.md`. Maintainers merge, tag, and publish. CI runs on pull requests.
+Pull requests target the development branch recorded in the repository's `AGENTS.md`. Maintainers merge, tag, and publish. Automated checks, where a project has them, run on pull requests.
 
 ## Pull request descriptions
 

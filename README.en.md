@@ -58,7 +58,7 @@ go run ./web -media-root <media dir> \
 
 It prints a `http://127.0.0.1:<port>/?token=<token>` URL. The token appears once; the page trades it for an HttpOnly cookie and removes it from the address bar.
 
-Behind a proxy: the desktop app reads `HTTP_PROXY`/`HTTPS_PROXY` first, then the Windows Internet Settings proxy. Loopback addresses are always reached directly.
+Behind a proxy: the desktop app reads `HTTP_PROXY`/`HTTPS_PROXY` first, then the Windows Internet Settings proxy, applying the HTTP and HTTPS entries separately. The `ProxyOverride` exclusion list is not applied yet; loopback addresses are always reached directly.
 
 ## Adding a source
 
@@ -68,7 +68,7 @@ Behind a proxy: the desktop app reads `HTTP_PROXY`/`HTTPS_PROXY` first, then the
 - **Media link** takes an http(s) HLS playlist or a directly readable media file. The desktop reads what the address actually serves rather than trusting its extension, so a web page, a 404, or an unsupported type is reported as an error.
 - **Website address** opens the page in the system browser. For the page's own address to reach the desktop, load the extension in `extension/` (unpacked; no Native Host): take the one-time pairing code from the Diagnostics page, paste it into the popup once, then pick the address the page has loaded.
 
-On Bilibili, Twitch, Kick, and YouTube live pages, the popup adds `Use this live stream`. The desktop receives one signed URL and no cookie; a stream with `#EXT-X-KEY` is refused, and a stream without `#EXT-X-ENDLIST` opens as live and starts on its own.
+On Bilibili, Twitch, Kick, and YouTube live pages, the popup adds `Use this live stream`. The desktop receives one signed URL and no cookie; a stream with `#EXT-X-KEY` is refused, and a stream without `#EXT-X-ENDLIST` opens as live and starts on its own. A master with a separate audio rendition is also refused, because the current player opens one address and cannot keep the video plus a second audio playlist. The extension's mirror pick is best-effort: a cross-origin opaque response cannot prove a mirror plays, so the desktop still refuses an address by its playlist contents.
 
 Whether a page can hand anything over is up to the page. `blob:`/MSE players, pages behind a login or DRM, and cross-origin restrictions are not worked around, only explained. Only http(s) addresses are accepted, and no cookies, request headers, or keys are passed on.
 

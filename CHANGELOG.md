@@ -26,12 +26,22 @@ This changelog records completed changes that matter to someone using MuxShift. 
 
 - 桌面端统一颜色、间距、字号、圆角与焦点状态；来源行、混音通道和同步卡片按类型使用不同的表面，减少悬空文字。
 - 检查器改用动作与状态的说法（`playing`、`held at 3.2s`、`muted`、`silent: volume is zero`、`not yet: no common clock found`），Core id、代次与播放器句柄移到诊断页。
+- 窄窗口的舞台角落可以直接打开属性抽屉和页面菜单；单行控制台的来源列表可以滚动，导入过程中在状态栏旁可以取消。
+- 直播 master 使用独立音频 rendition 时会明确拒绝，不再把只有视频的地址当作完整音视频来源；播放列表的相对地址按重定向后的地址解析。
+- Windows 的 HTTP 与 HTTPS 代理分别应用，已经带协议的代理地址不会重复添加协议。
 
 **修复**
 
 - 打开失败的本地或网络来源不再留下幽灵 Source/Track。
 - 引擎在打开成功之后才报告的失败会被收回，窗口不再保留一个永远不能播的源。
 - 读地址期间关闭窗口不再把结果落进会话。
+- 状态栏、错误报告和日志只显示脱敏后的地址；重试使用失败记录里的地址，不再读取后来输入的草稿。
+- 新增场景不再清空其他场景的编辑记录；删除不可达来源时同时清空它的轨道 ID。
+- 移动或锁定画面不再改变原有堆叠；媒体宽高比按舞台坐标换算；拖动后位置字段重新读取；方向键只在编辑模式下移动画面。
+
+**兼容性**
+
+- Windows 的 `ProxyOverride` 排除列表尚未应用；扩展只支持默认的 `127.0.0.1:8731` 配对端口，其他 `-handoff-port` 值会在启动时拒绝。
 
 ### English
 
@@ -53,12 +63,22 @@ This changelog records completed changes that matter to someone using MuxShift. 
 
 - The desktop uses one set of colours, spacing, type sizes, radii and focus states; source rows, mixer channels and sync cards use surfaces that match their job, so fewer labels float on the page.
 - The inspector now speaks in actions and states (`playing`, `held at 3.2s`, `muted`, `silent: volume is zero`, `not yet: no common clock found`); Core ids, generations and player handles moved to the diagnostics page.
+- A narrow stage corner opens the properties drawer and the page menu; the one-row console scrolls, and an import can be cancelled beside its status.
+- A live master with a separate audio rendition is refused instead of treating its video-only address as a complete source; relative playlist addresses resolve against the final redirect.
+- Windows HTTP and HTTPS proxies are applied separately, and an address that already has a scheme is not given a second one.
 
 **Fixed**
 
 - A source whose player cannot open no longer leaves a ghost source and track behind.
 - A failure the engine reports only after a successful open is taken back instead of keeping a source that can never play.
 - Closing the window while an address is being read no longer lands the result in the session.
+- The status bar, error report and log show only redacted addresses; Retry uses the failed record, not whatever draft was typed afterwards.
+- Creating a scene keeps the other scenes' edit records; dropping an unreachable source clears its track ids too.
+- Moving or locking a picture no longer changes the stack; the media aspect is converted to stage coordinates; dragged fields reload; arrow keys move a picture only in editing mode.
+
+**Compatibility**
+
+- The Windows `ProxyOverride` exclusion list is not applied yet; the extension supports the default `127.0.0.1:8731` pairing port only, and another `-handoff-port` value is refused at startup.
 
 
 ## [0.0.1] - 2026-11-14

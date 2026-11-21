@@ -58,7 +58,7 @@ go run ./web -media-root <媒体目录> \
 
 启动后它会打印一个带令牌的地址 `http://127.0.0.1:<端口>/?token=<令牌>`。令牌只在地址里出现一次：服务随即把它换成 HttpOnly cookie，页面立即从地址栏移除令牌。
 
-使用代理的机器：桌面端先读 `HTTP_PROXY` 和 `HTTPS_PROXY`。两个变量都没有设置时，沿用 Windows「Internet 选项」里的代理配置，本机回环地址始终直连。
+使用代理的机器：桌面端先读 `HTTP_PROXY` 和 `HTTPS_PROXY`。两个变量都没有设置时，沿用 Windows「Internet 选项」里的代理配置，HTTP 与 HTTPS 分开应用；`ProxyOverride` 排除列表尚未应用，本机回环地址始终直连。
 
 ## 添加来源
 
@@ -68,7 +68,7 @@ go run ./web -media-root <媒体目录> \
 - **媒体链接**：http(s) 的 HLS 播放列表，或可以直接读取的媒体文件。桌面端按响应内容判断类型，不看扩展名，地址返回网页、404 或不支持的类型时都会报错。
 - **网站地址**：用系统浏览器打开页面。要让页面里的地址进入桌面端，需要加载 `extension/` 里的扩展，解压加载即可，不需要 Native Host：先在诊断页读取一次性配对码，粘贴到扩展弹窗完成配对，再在弹窗里选中页面已加载的那一条地址。
 
-在 B 站、Twitch、Kick 和 YouTube 的直播页，扩展弹窗会多出 `Use this live stream`。桌面端拿到的是一条签名地址，不带 Cookie。带 `#EXT-X-KEY` 的加密流会被拒绝。播放列表没有 `#EXT-X-ENDLIST` 时，桌面端按直播打开并自动播放。
+在 B 站、Twitch、Kick 和 YouTube 的直播页，扩展弹窗会多出 `Use this live stream`。桌面端拿到的是一条签名地址，不带 Cookie。带 `#EXT-X-KEY` 的加密流会被拒绝。播放列表没有 `#EXT-X-ENDLIST` 时，桌面端按直播打开并自动播放。master 使用独立音频 rendition 时也会被拒绝，因为当前播放器只打开一个地址，无法同时保留视频与另一条音频列表。扩展的线路探测是 best-effort：跨源不透明响应无法证明线路可播放，桌面端仍会按播放列表内容拒绝不可用的地址。
 
 扩展能否取出地址取决于页面：`blob:`/MSE 地址、需要登录或受 DRM 保护的页面、受跨源规则限制的页面都无法绕过，扩展只在弹窗里说明原因。扩展只提交 http(s) 地址，不传 Cookie、请求头或密钥。
 

@@ -9,7 +9,7 @@
   </p>
   <p>
     <a href="https://github.com/xswt442-cmd/muxshift/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/xswt442-cmd/muxshift/actions/workflows/ci.yml/badge.svg?branch=dev"></a>
-    <a href="https://github.com/xswt442-cmd/muxshift/releases"><img alt="release" src="https://img.shields.io/badge/release-v0.0.2-5d77f5"></a>
+    <a href="https://github.com/xswt442-cmd/muxshift/releases"><img alt="release" src="https://img.shields.io/badge/release-v0.0.3-5d77f5"></a>
     <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-5d77f5"></a>
     <a href="go.mod"><img alt="Go 1.27" src="https://img.shields.io/badge/go-1.27-5d77f5"></a>
   </p>
@@ -17,7 +17,7 @@
 
 ## 下载
 
-[Releases](https://github.com/xswt442-cmd/muxshift/releases) 提供 Windows amd64 ZIP（`muxshift-0.0.2-windows-amd64.zip`），解压后运行 `muxshift.exe`。运行需要 Windows 10/11 和系统自带的 Media Foundation。压缩包里还有 `VERSION.txt`、`THIRD-PARTY.md` 和校验值。从源码构建见[快速开始](#快速开始)。
+[Releases](https://github.com/xswt442-cmd/muxshift/releases) 提供 Windows amd64 ZIP（`muxshift-0.0.3-windows-amd64.zip`），解压后运行 `muxshift.exe`。这是 GUI 可执行文件，正常启动不会带控制台窗口；运行需要 Windows 10/11 和系统自带的 Media Foundation。压缩包里还有 `VERSION.txt`、`THIRD-PARTY.md` 和校验值。从源码构建见[快速开始](#快速开始)。
 
 ## 能做什么
 
@@ -29,6 +29,7 @@
 - **自由摆放画面**：编辑状态下可以拖动画面、缩放、锁定宽高比、输入精确的位置数值，并调整画面的叠放顺序。位置按舞台比例保存，改变窗口大小时不会错位。
 - **四种观看方式**：编辑、影院、F11 全屏、置顶小窗，切换时不会重新加载播放器。
 - **外观**：五套配色、三档字号、字体、界面语言和紧凑间距，都在设置里选择，选定后立即预览。
+- **关于**：设置里的「关于」显示当前版本与构建提交、Windows 版本与架构、逻辑处理器、物理内存和设置文件路径；打开时会查询 GitHub 最新发布，也可以手动重试检查更新。
 - **Web 端**：只绑定本机回环地址，用 hls.js 播放，可以切换场景。
 - **浏览器扩展**：把页面里已经加载的媒体地址交给桌面端，不传 Cookie、请求头或密钥。
 

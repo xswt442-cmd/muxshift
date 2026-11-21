@@ -22,7 +22,7 @@ go vet ./...             # in each module
 | Alignment probe math | `go test ./core/align` | envelope correlation, peak/confidence thresholds, overlap reporting | passing |
 | Web session service | `go test ./web` | loopback binding, same-origin and JSON checks, path root confinement, scene rollback | passing |
 | Replay clock and replay file | `cd desktop && go test ./...` | container↔player conversion, `playerWindow`, `replayFile` refusals, ffprobe measurement against a test segment | passing |
-| Settings | `cd desktop && go test ./...` | defaults, validation ranges, save/load round trip, damaged files, live application of a draft | passing |
+| Settings | `cd desktop && go test ./...` | defaults, validation ranges, save/load round trip, damaged files, live application of a draft, and the About version comparison | passing |
 | Replay seek (P16.4a–e) | `cd desktop && go test ./...`, then the `seektxn`, `interleave`, `replayui`, `seekentry`, `seekclose`, `seekedge`, `seekrefuse`, `seekboundary` and `seekpaused` scenarios | authorisation refusals, a transaction committing and rolling back, two replays interleaved, the read-only account (including a seek while the stage is paused) of requested/reported/residual, the inspector entry's valid/out-of-window/concurrent requests, a real window close during preparation, what a fresh player does with a request at the start of a cut (`seekedge` records the measurements for P16.4e; it is evidence, not a passing target), a cut-boundary target followed through whichever account the transaction publishes on a mid-join live buffer (`seekrefuse`), and the same request followed by a valid one (`seekboundary`) | passing except audio across a switch (REPLAY-AUDIO-CONTINUITY, Pending); the entry now labels its range a candidate common replay window and says a target inside it still needs per-source anchor authorisation, because `PlanSeek` authorises each target per source (REPLAY-WINDOW-AUTHORITY-01, closed as a copy fix; the plan is unchanged, so targets can still be refused); a cut-boundary target can settle while the transaction draws, with intermittent failures remaining and no frequency measured yet (REPLAY-BOUNDARY-SETTLE-INTERMITTENT, Open / Non-blocking); entering replay from a live stage is planned and re-checked by `desktop/replay_enter.go` but has no user entry yet (P16.4f-a covers the plan, the per-source evidence and the `enter replay` account kind through unit tests only; no recording is cut and no player is opened); P16.4g closed the phase with an explicit scope: a stage already replaying can be seeked, entering replay from live is **not** a product capability (the internal transaction has no entry point and `replay_wiring_test.go` fails if any shipping file calls it), and automatic cross-source content correspondence stays **Experimental / Not Authorizing** (V1 rejected, V2-G15-L20 ObservedSupport only, experiment code only in the Git-ignored `testplace/`) |
 
 ## 2. Scenarios (real window, real media)
@@ -61,7 +61,9 @@ scripts\release.ps1
 
 The version comes from `VERSION` at the repository root; the script refuses
 anything that is not `x.y.z`, and refuses a directory whose Windows version
-block disagrees with it. The output is `dist\muxshift-<version>-windows-amd64\`
+block disagrees with it. The Windows binary is linked as a GUI subsystem
+program, so a normal start opens no console; `-version` is read through a
+redirected standard output by the release check. The output is `dist\muxshift-<version>-windows-amd64\`
 holding `muxshift.exe`, `VERSION.txt` (version, commit, build time, sha256, and
 what `-version` prints), `THIRD-PARTY.md` (the modules the binary links, with
 their licence texts, plus hls.js), `LICENSE`, `README.md`, `README.en.md` and

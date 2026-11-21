@@ -9,7 +9,7 @@
   </p>
   <p>
     <a href="https://github.com/xswt442-cmd/muxshift/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/xswt442-cmd/muxshift/actions/workflows/ci.yml/badge.svg?branch=dev"></a>
-    <a href="https://github.com/xswt442-cmd/muxshift/releases"><img alt="release" src="https://img.shields.io/badge/release-v0.0.2-5d77f5"></a>
+    <a href="https://github.com/xswt442-cmd/muxshift/releases"><img alt="release" src="https://img.shields.io/badge/release-v0.0.3-5d77f5"></a>
     <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-5d77f5"></a>
     <a href="go.mod"><img alt="Go 1.27" src="https://img.shields.io/badge/go-1.27-5d77f5"></a>
   </p>
@@ -17,7 +17,7 @@
 
 ## Download
 
-[Releases](https://github.com/xswt442-cmd/muxshift/releases) ship a Windows amd64 ZIP (`muxshift-0.0.2-windows-amd64.zip`); unzip it and run `muxshift.exe`. It needs Windows 10/11 and the Media Foundation that comes with it. The archive also carries `VERSION.txt`, `THIRD-PARTY.md`, and the checksum. Building from source is under [quick start](#quick-start).
+[Releases](https://github.com/xswt442-cmd/muxshift/releases) ship a Windows amd64 ZIP (`muxshift-0.0.3-windows-amd64.zip`); unzip it and run `muxshift.exe`. It is a GUI executable, so a normal start carries no console window; it needs Windows 10/11 and the Media Foundation that comes with it. The archive also carries `VERSION.txt`, `THIRD-PARTY.md`, and the checksum. Building from source is under [quick start](#quick-start).
 
 ## What it does
 
@@ -29,6 +29,7 @@
 - **Free placement**: in editing mode a picture can be dragged, resized, locked to its aspect ratio, placed by exact numbers, and raised or lowered in the stacking order. Positions are stored as fractions of the stage, so resizing the window keeps the arrangement.
 - **Four viewing modes**: editing, cinema, F11 full screen, and a small always-on-top window. Switching between them does not reload a player.
 - **Appearance**: five colour themes, three text sizes, font selection, interface language, and tighter spacing are chosen in settings and preview immediately.
+- **About**: the About section in settings shows the current version and build commit, Windows version and architecture, logical processors, physical memory, and the settings file path; opening it asks GitHub for the latest release, and the check can be retried manually.
 - **Web client**: binds to loopback only, plays with hls.js, and can switch scenes.
 - **Browser extension**: hands the media address a page has already loaded to the desktop app, without cookies, request headers, or keys.
 

@@ -4,6 +4,38 @@
 
 This changelog records completed changes that matter to someone using MuxShift. GitHub Release notes come from the matching tagged section, not a separately maintained summary.
 
+## [0.0.3] - 2026-11-22
+
+### 简体中文
+
+**新增**
+
+- 设置新增「关于」：显示 MuxShift 版本与构建提交、Windows 版本与架构、逻辑处理器、物理内存和设置文件路径。
+- 关于页可以检查更新：打开时查询一次 GitHub 最新发布，失败后可以手动重试；发现新版本时显示版本号与发布页入口。
+
+**变更**
+
+- Windows 发布包改用 GUI 子系统构建，正常启动不再带一个控制台窗口；从终端启动时日志仍附着到父控制台。
+
+**兼容性**
+
+- 更新检查需要访问 `api.github.com`；未登录请求受 GitHub 速率限制，检查失败不会重试或自动下载。
+
+### English
+
+**Added**
+
+- Settings now has an About section: MuxShift version and build commit, Windows version and architecture, logical processors, physical memory, and the settings file path.
+- About can check for updates: opening it asks GitHub once for the latest published release, with a manual retry after a failure; a newer version shows its number and a link to the release page.
+
+**Changed**
+
+- Windows release builds now use the GUI subsystem, so a normal start no longer carries a console window; started from a terminal, logs still attach to the parent console.
+
+**Compatibility**
+
+- Update checks need `api.github.com`; unauthenticated requests are rate-limited by GitHub, and a failed check neither retries by itself nor downloads anything.
+
 ## [0.0.2] - 2026-11-22
 
 ### 简体中文

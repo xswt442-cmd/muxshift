@@ -130,7 +130,7 @@ test('the two documentation skills keep their rule sets apart', () => {
   const docsIds = docsRules.rules.map((rule) => rule.id);
   const wordsIds = wordsRules.rules.map((rule) => rule.id);
   assert.deepEqual(docsIds.sort(), ['readme-headings', 'zh-en-parity']);
-  assert.deepEqual(wordsIds.sort(), ['banned-phrases', 'bullet-sentences', 'semicolon-density', 'sentence-length', 'term-casing']);
+  assert.deepEqual(wordsIds.sort(), ['banned-phrases', 'bullet-sentences', 'paragraph-length', 'semicolon-density', 'sentence-length', 'term-casing']);
   assert.equal(docsIds.some((id) => wordsIds.includes(id)), false, 'rule ids must not overlap');
 });
 

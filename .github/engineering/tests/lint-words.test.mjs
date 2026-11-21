@@ -181,3 +181,33 @@ test('file placement is not this linter business', () => {
   });
   assert.doesNotMatch(output, /readme-headings|zh-en-parity/);
 });
+
+test('a paragraph that carries five separate facts is reported once at its first line', () => {
+  const body = '迁移不会随 API 启动自动运行。'
+    + '升级旧库时先应用 0002，再让目标用户登录一次，建立个人工作区。'
+    + '如果仍有未归属任务，应用 0003 前要设置三个归属变量和一个确认变量。'
+    + '目标用户不匹配、被禁用或者没有工作区时，迁移失败。'
+    + '迁移只把这些任务指派给那一个工作区，不猜测，也不拆分原来的共享数据。'
+    + '已有任务、汇报内容和报告来源都会保留，旧报告的归属字段继续为空。'
+    + '之后的 0004 到 0007 依次应用，把既有工作区标记为个人空间并回填 Owner 成员。'
+    + '这些迁移不移动任务、汇报、评论、活动和密钥，也不更改已有的记录 ID。'
+    + '回退时旧后端可能忽略归档字段，把已归档任务重新显示在当前列表里，所以回退版本必须保留归档过滤和工作区隔离。';
+  const { output } = run({ 'README.md': `## 迁移\n\n${body}\n` });
+  const hits = output.split('\n').filter((line) => line.includes('paragraph-length'));
+  assert.equal(hits.length, 1);
+  assert.match(hits[0], /^\s+3\s/);
+});
+
+test('a list of short bullets is not a long paragraph', () => {
+  const bullets = ['收藏、目录历史和会话备注只存在本机 GUI', '最近目录只表示命令发了出去', 'SSH 目录按会话隔离', 'SSH 预设不存密码', 'WSL 预设不设置 Windows 启动目录']
+    .map((item) => `- ${item}`).join('\n');
+  const { output } = run({ 'README.md': `## 说明\n\n${bullets}\n` });
+  assert.doesNotMatch(output, /paragraph-length/);
+});
+
+test('numbered steps are a list, not a long paragraph', () => {
+  const steps = ['备份现有配置', '停止服务', '替换二进制', '运行迁移', '启动服务并检查健康端点', '验证旧会话仍然可以重连']
+    .map((item, index) => `${index + 1}. ${item}，确认没有报错后再进入下一步。`).join('\n');
+  const { output } = run({ 'README.md': `## 升级\n\n${steps}\n` });
+  assert.doesNotMatch(output, /paragraph-length/);
+});

@@ -77,7 +77,8 @@ function mask(lines) {
 }
 
 const SIZE = (text) => text.replace(/[\s*_`]/g, '').length;
-const isBullet = (line) => /^\s*[-*+]\s+/.test(line);
+// 有序列表也是列表。把它当正文，一个五步的部署清单会被算成一段 270 字的段落。
+const isBullet = (line) => /^\s*(?:[-*+]|\d+[.)])\s+/.test(line);
 const isTable = (line) => /^\s*\|/.test(line);
 
 function sentences(line) {
@@ -184,6 +185,33 @@ function checkFile(file, lines) {
       add(file, index + 1, 'bullet-sentences', `这条 bullet 有 ${count} 句，上限 ${RULE.get('bullet-sentences').max}`);
     }
   });
+
+  // paragraph-length：一段里塞了五六个独立事实，读者找不到主干。列表和表格各自成段，不参与。
+  const paraRule = RULE.get('paragraph-length');
+  if (paraRule) {
+    let run = [];
+    const flush = () => {
+      if (!run.length) return;
+      const han = run.reduce((total, item) => total + (item.text.match(/[\u4e00-\u9fff]/g) ?? []).length, 0);
+      if (han > paraRule.max) {
+        add(file, run[0].line, 'paragraph-length',
+          `这一段 ${han} 个汉字，上限 ${paraRule.max}。按「谁 / 做了什么 / 什么条件」分段：${run[0].text.trim().slice(0, 36)}…`);
+      }
+      run = [];
+    };
+    body.forEach((line, index) => {
+      const trimmed = line.trim();
+      const prose = trimmed
+        && !trimmed.startsWith('#')
+        && !isTable(line)
+        && !isBullet(line)
+        && !/^[-*_]{3,}$/.test(trimmed)
+        && /[\u4e00-\u9fff]/.test(line);
+      if (prose) run.push({ line: index + 1, text: line });
+      else flush();
+    });
+    flush();
+  }
 
   // term-casing：自动找同一词的不同写法。英文文档里句首大写太常见，只在中文文档里做这件事。
   const termRule = RULE.get('term-casing');

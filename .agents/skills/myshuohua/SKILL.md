@@ -34,15 +34,18 @@ node .github/engineering/skills/myshuohua/scripts/install.mjs --apply .
 node .agents/skills/myshuohua/lint-words.mjs README.md README.en.md docs
 ```
 
-五条规则：
+六条规则：
 
 | 规则 | 管什么 |
 | --- | --- |
 | `semicolon-density` | 每千字的分号数。分号是硬粘两句话的胶水 |
 | `sentence-length` | 单句上限 100 字，整篇 p90 上限 70 |
+| `paragraph-length` | 单段上限 220 个汉字。一段塞四五个事实，读者找不到主干 |
 | `bullet-sentences` | 一条 bullet 最多两句 |
 | `term-casing` | 同一个词在全篇只用一个写法 |
 | `banned-phrases` | 营销词、论文腔、翻译腔、伪口语、空话，外加几个句式正则 |
+
+`paragraph-length` 是最容易被忽略的一条。中文技术文档最常见的人机感不是某个词写错，是整段不分段：协议怎么配、谁校验、失败返回什么、谁能看见，四件事挤在同一段，读者想确认一个条件得重读整段。命中就按「谁 / 做了什么 / 什么条件」切开，一段只留一个主题。bullet 列表和表格各自成段，不参与这条。
 
 `--rules` 看阈值和理由；高置信度的营销词、伪口语和工程黑话标为 `error`，默认就会退出 1；`--strict` 还会让 warning 退出 1；`--json` 给 CI 用。现有句长与分号阈值曾用 ligule、tasklutein、muxshift、DiggerTerm 四个仓的 README 校准；扩充词表时仍需检查这些真实样本的误报，不能把命中数当作质量指标。
 

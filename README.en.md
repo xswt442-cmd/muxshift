@@ -6,7 +6,6 @@
     <a href="README.md">中文</a> ·
     <a href="https://github.com/xswt442-cmd/muxshift/releases">Download</a> ·
     <a href="CHANGELOG.md">Changelog</a> ·
-    <a href="docs/development/RELEASE.en.md">Release process</a>
   </p>
   <p>
     <a href="https://github.com/xswt442-cmd/muxshift/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/xswt442-cmd/muxshift/actions/workflows/ci.yml/badge.svg?branch=dev"></a>
@@ -15,8 +14,6 @@
     <a href="go.mod"><img alt="Go 1.27" src="https://img.shields.io/badge/go-1.27-5d77f5"></a>
   </p>
 </div>
-
-An early prototype. One window plays several media sources at once; a scene decides which picture is shown and which sound is heard; you can align two sources by hand and jump to a position inside a replay. Capture, mixing, and automatic cross-source sync are not built.
 
 ## Download
 
@@ -87,8 +84,9 @@ Whether a page can hand anything over is up to the page. `blob:`/MSE players, pa
 ## Limits
 
 - **Entering a replay from live is not supported**: there is no entry point in the interface.
-- **Only those four live pages work**: on-demand pages that feed segments to MSE, Bilibili among them, expose no single replayable address, and the YouTube sample asks for a login. A YouTube live `hlsManifestUrl` is tied to the exit IP that asked for it, so the playlist reads while media segments can be refused with `403`. All of these only report the problem; nothing bypasses the login, cross-origin rules, or DRM.
-- **Live plays only what is happening now, and the web client does less**: live has no replay buffer and no cross-source alignment, and an expired signed URL has to be fetched from the extension again. The web client does no alignment and keeps no history; its seeks stay inside what the browser has buffered.
+- **No capture, mixing, or automatic cross-source sync**: MuxShift plays the addresses you give it. It does not record a screen or device, mix sources, or align them automatically.
+- **Only those four live pages work**: on-demand pages that feed segments to MSE, Bilibili among them, expose no single replayable address, and the YouTube sample asks for a login. A YouTube live `hlsManifestUrl` is tied to the exit IP that asked for it, so the playlist reads while media segments can be refused with `403`, and these cases only report the problem instead of bypassing the login, cross-origin rules, or DRM.
+- **Live plays only what is happening now, and the web client does less**: live has no replay buffer and no cross-source alignment, and an expired signed URL has to be fetched from the extension again. The web client does no alignment and keeps no history. Its seeks stay inside what the browser has buffered.
 - **The desktop app only advances the source it is drawing**: switching to another page stops the stage, and coming back catches up after a few seconds.
 - **The first seek at a replay edge can fail**: right after entering a replay, a jump to the very edge of the buffer sometimes fails and keeps the previous picture. The rate has not been measured.
 

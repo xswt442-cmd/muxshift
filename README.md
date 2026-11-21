@@ -5,8 +5,7 @@
   <p>
     <a href="README.en.md">English</a> ·
     <a href="https://github.com/xswt442-cmd/muxshift/releases">下载</a> ·
-    <a href="CHANGELOG.md">更新记录</a> ·
-    <a href="docs/development/RELEASE.md">发版流程</a>
+    <a href="CHANGELOG.md">更新记录</a>
   </p>
   <p>
     <a href="https://github.com/xswt442-cmd/muxshift/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/xswt442-cmd/muxshift/actions/workflows/ci.yml/badge.svg?branch=dev"></a>
@@ -15,8 +14,6 @@
     <a href="go.mod"><img alt="Go 1.27" src="https://img.shields.io/badge/go-1.27-5d77f5"></a>
   </p>
 </div>
-
-早期原型。已经能在同一个窗口里同时播放多路音视频、按场景切换画面和声音、手动把两路对齐，并在回放里跳到指定时间。采集、混音和跨源自动同步还没做。
 
 ## 下载
 
@@ -87,8 +84,9 @@ B 站、Twitch、Kick 和 YouTube 的直播页，扩展弹窗会多出 `Use this
 ## 已知限制
 
 - **不支持从直播进入回放**：界面里没有入口。
-- **视频网站只有那四种直播页可用**：B 站这类把分片交给 MSE 的点播页拿不到单个可重放的地址，YouTube 的点播未登录时会要求登录；YouTube 直播的地址带着取地址时的出口 IP，播放列表能读、媒体分片可能被拒（403）。这些都只给提示，不绕过登录、跨源规则或 DRM。
-- **直播只播当下，Web 端能力更少**：直播没有回看缓冲也不做跨源对齐，签名地址过期后要从扩展重新取；Web 端不参与对轴、不保留历史，Seek 只能落在浏览器已缓冲的范围。
+- **不做采集、混音和跨源自动同步**：只播放给定的地址。不录制屏幕或设备，不混音，也不自动对齐多个来源。
+- **视频网站只有那四种直播页可用**：B 站这类把分片交给 MSE 的点播页拿不到单个可重放的地址，YouTube 的点播未登录时会要求登录。YouTube 直播的地址绑着取地址时的出口 IP，播放列表能读，媒体分片可能被拒（403），这些情况只给提示，不绕过登录、跨源规则或 DRM。
+- **直播只播当下，Web 端能力更少**：直播没有回看缓冲，也不做跨源对齐，签名地址过期后要从扩展重新取。Web 端不参与对轴，不保留历史，Seek 只能落在浏览器已缓冲的范围。
 - **桌面端只推进正在显示的那一路**：切到别的页面舞台会停，切回来几秒后追上。
 - **回看边界的第一跳可能失败**：刚进入回放时跳到缓冲区最边缘的位置会间歇失败，失败后保持原来的画面，发生频率还没统计。
 
@@ -104,4 +102,4 @@ B 站、Twitch、Kick 和 YouTube 的直播页，扩展弹窗会多出 `Use this
 
 ## 许可证
 
-MIT，见 [LICENSE](LICENSE)。
+[MIT](LICENSE)。

@@ -116,7 +116,7 @@ func (a *appState) mixerRow(c *ui.Context, index int, it *item) {
 				false, ui.Transparent, colorTextDim, func() {
 					a.report(a.runCommand(command{Kind: commandHear, Source: it.source.ID}))
 				})
-			hear.Tooltip("routes this source's sound and takes the other sources out of the scene's audio, as the Sources page does")
+			hear.Tooltip("routes this source's sound and takes the other sources out of the scene's audio")
 		})
 		ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
 			// Show the level the scene actually holds, so a slider and its label

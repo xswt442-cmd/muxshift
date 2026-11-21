@@ -458,6 +458,9 @@ func (a *appState) pruneStageEdits() {
 // The arrow keys reach it from the workbench, so a picture can be placed
 // without dragging; Shift makes the step larger.
 func (a *appState) nudgeSelected(dx, dy float32) {
+	if !a.editMode {
+		return
+	}
 	it := a.find(a.selected)
 	if it == nil {
 		return

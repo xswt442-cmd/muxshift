@@ -324,6 +324,15 @@ type appState struct {
 	handoff    *handoffServer
 	handoffErr string
 
+	// The About page's update check runs off the drawing thread; these fields
+	// are read through updateMu.
+	updateMu      sync.Mutex
+	updateBusy    bool
+	updateChecked bool
+	updateLatest  string
+	updateURL     string
+	updateErr     string
+
 	// seekText and seekNote belong to the inspector's replay seek entry: the
 	// first is what the small field holds, the second the sentence the last
 	// attempt produced. Neither is a decision; PlanSeek still decides.

@@ -530,7 +530,7 @@ func (a *appState) volumeFor(level float64) float64 {
 // Six, not eight: the master volume belongs with the other playback levels, and
 // the shortcut list is reference material for the same page that explains the
 // keys, not a destination of its own.
-var settingsSections = []string{"General", "Playback", "Appearance", "Sources", "DVR", "Diagnostics"}
+var settingsSections = []string{"General", "Playback", "Appearance", "Sources", "DVR", "Diagnostics", "About"}
 
 // settingsSectionLabel is the section's name in the window's language. The key
 // in settingsSections stays English so a settings file or a log line never
@@ -549,6 +549,8 @@ func (a *appState) settingsSectionLabel(name string) string {
 		return a.tr("DVR", "回放缓存")
 	case "Diagnostics":
 		return a.tr("Diagnostics", "诊断")
+	case "About":
+		return a.tr("About", "关于")
 	}
 	return name
 }
@@ -584,6 +586,9 @@ func (a *appState) settingsPage(c *ui.Context) {
 					a.settingsSection = name
 					a.settingsErr = ""
 					a.settingsNote = ""
+					if name == "About" && !a.updateSnapshot().checked {
+						a.checkForUpdates()
+					}
 				}
 			}
 			ui.Box(c).Grow(1)
@@ -600,61 +605,63 @@ func (a *appState) settingsPage(c *ui.Context) {
 			if a.settingsNote != "" {
 				ui.Text(c, a.settingsNote).TextColor(colorTextDim).Wrap()
 			}
-			dirty := !sameSettings(a.settingsDraft, a.settings)
-			ui.Row(c).Gap(spaceSm).Padding(0, spaceSm).Children(func() {
-				apply := ui.ButtonBase(c.Key("settings-apply")).Width(100).Height(32).
-					Padding(0, spaceMd).Radius(radiusMd).AlignItems(ui.Center)
-				applyFill, applyInk := ui.Transparent, colorDim
-				if dirty {
-					applyFill, applyInk = colorAccent, colorAccentText
-					if apply.Pressed() {
-						applyFill = colorAccentDown
-					} else if apply.Hovered() {
-						applyFill = colorAccentHi
+			if a.settingsSection != "About" {
+				dirty := !sameSettings(a.settingsDraft, a.settings)
+				ui.Row(c).Gap(spaceSm).Padding(0, spaceSm).Children(func() {
+					apply := ui.ButtonBase(c.Key("settings-apply")).Width(100).Height(32).
+						Padding(0, spaceMd).Radius(radiusMd).AlignItems(ui.Center)
+					applyFill, applyInk := ui.Transparent, colorDim
+					if dirty {
+						applyFill, applyInk = colorAccent, colorAccentText
+						if apply.Pressed() {
+							applyFill = colorAccentDown
+						} else if apply.Hovered() {
+							applyFill = colorAccentHi
+						}
+					} else {
+						apply = apply.Disabled(true)
 					}
-				} else {
-					apply = apply.Disabled(true)
-				}
-				apply = apply.Background(applyFill).TextColor(applyInk)
-				apply.Children(func() {
-					ui.Text(c, a.tr("Apply", "应用")).FontSize(textSmall).FontWeight(500).
-						TextColor(applyInk).SingleLine()
-				})
-				if apply.Clicked() {
-					a.applySettingsCommand()
-				}
-				cancel := ui.ButtonBase(c.Key("settings-cancel")).Width(100).Height(32).
-					Padding(0, spaceMd).Radius(radiusMd).AlignItems(ui.Center)
-				cancelFill, cancelInk := ui.Transparent, colorDim
-				if dirty {
-					cancelFill, cancelInk = colorPanel2, colorText
-					if cancel.Pressed() {
-						cancelFill = colorPressed
-					} else if cancel.Hovered() {
-						cancelFill = colorHover
+					apply = apply.Background(applyFill).TextColor(applyInk)
+					apply.Children(func() {
+						ui.Text(c, a.tr("Apply", "应用")).FontSize(textSmall).FontWeight(500).
+							TextColor(applyInk).SingleLine()
+					})
+					if apply.Clicked() {
+						a.applySettingsCommand()
 					}
-				} else {
-					cancel = cancel.Disabled(true)
-				}
-				cancel = cancel.Background(cancelFill).TextColor(cancelInk)
-				cancel.Children(func() {
-					ui.Text(c, a.tr("Cancel", "取消")).FontSize(textSmall).FontWeight(500).
-						TextColor(cancelInk).SingleLine()
+					cancel := ui.ButtonBase(c.Key("settings-cancel")).Width(100).Height(32).
+						Padding(0, spaceMd).Radius(radiusMd).AlignItems(ui.Center)
+					cancelFill, cancelInk := ui.Transparent, colorDim
+					if dirty {
+						cancelFill, cancelInk = colorPanel2, colorText
+						if cancel.Pressed() {
+							cancelFill = colorPressed
+						} else if cancel.Hovered() {
+							cancelFill = colorHover
+						}
+					} else {
+						cancel = cancel.Disabled(true)
+					}
+					cancel = cancel.Background(cancelFill).TextColor(cancelInk)
+					cancel.Children(func() {
+						ui.Text(c, a.tr("Cancel", "取消")).FontSize(textSmall).FontWeight(500).
+							TextColor(cancelInk).SingleLine()
+					})
+					if cancel.Clicked() {
+						a.beginDraft(a.settings)
+						a.settingsErr = ""
+						a.settingsNote = a.tr("cancelled: the draft is back to what is applied", "已取消：草稿恢复为当前生效的设置")
+					}
+					a.ghostButton(c, "settings-reset", a.tr("Reset to defaults", "恢复默认"), 160, func() {
+						a.beginDraft(defaultSettings())
+						a.settingsErr = ""
+						a.settingsNote = a.tr("defaults are in the draft; Apply writes them", "默认值已填入草稿，点击“应用”写入")
+					})
+					if dirty {
+						ui.Text(c, a.tr("unsaved changes", "有未应用的更改")).FontSize(textMicro).TextColor(colorWarn)
+					}
 				})
-				if cancel.Clicked() {
-					a.beginDraft(a.settings)
-					a.settingsErr = ""
-					a.settingsNote = a.tr("cancelled: the draft is back to what is applied", "已取消：草稿恢复为当前生效的设置")
-				}
-				a.ghostButton(c, "settings-reset", a.tr("Reset to defaults", "恢复默认"), 160, func() {
-					a.beginDraft(defaultSettings())
-					a.settingsErr = ""
-					a.settingsNote = a.tr("defaults are in the draft; Apply writes them", "默认值已填入草稿，点击“应用”写入")
-				})
-				if dirty {
-					ui.Text(c, a.tr("unsaved changes", "有未应用的更改")).FontSize(textMicro).TextColor(colorWarn)
-				}
-			})
+			}
 		})
 	})
 }
@@ -792,6 +799,8 @@ func (a *appState) settingsForm(c *ui.Context) {
 		}
 		ui.Button(c.Key("diag-capture"), a.tr("Capture a page on the next failure", "下次失败时抓取页面")).Width(260).Disabled(true).
 			Tooltip(a.tr("there is no page capture on failure yet", "尚未实现失败时抓取页面"))
+	case "About":
+		a.aboutPage(c)
 	}
 }
 

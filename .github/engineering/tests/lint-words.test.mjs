@@ -14,9 +14,9 @@ function run(files, args = []) {
   for (const [name, content] of Object.entries(files)) {
     const path = join(dir, name);
     writeFileSync(path, content);
-    paths.push(path);
+    if (/\.md$/i.test(name)) paths.push(path);
   }
-  const result = spawnSync(process.execPath, [lint, ...args, ...paths], { encoding: 'utf8' });
+  const result = spawnSync(process.execPath, [lint, ...args, ...paths], { encoding: 'utf8', cwd: dir });
   return { status: result.status, output: `${result.stdout}${result.stderr}` };
 }
 
@@ -172,6 +172,59 @@ test('JSON diagnostics preserve severe and advisory levels', () => {
   const levels = report.findings.filter((f) => f.rule === 'banned-phrases').map((f) => f.level);
   assert.ok(levels.includes('error'));
   assert.ok(levels.includes('warning'));
+});
+
+test('duplicated API sentences on the same line are caught after paragraph splitting', () => {
+  const sentence = '列表包含名称、前缀、创建时间、到期时间和撤销时间。';
+  const files = { 'API.zh-CN.md': '## 密钥元数据\n\n' + sentence + '已撤销的密钥仍会列出，直到用户删除。' + sentence + '\n' };
+  const normal = run(files);
+  assert.equal(normal.status, 0);
+  assert.match(normal.output, /duplicate-sentences/);
+  assert.match(normal.output, /重复/);
+  assert.equal(run(files, ['--strict']).status, 1);
+});
+
+test('repeated complete sentences are detected across paragraphs despite punctuation spacing', () => {
+  const { output } = run({
+    'README.md': '## 限制\n\n配置加载失败时保留已有文件，并返回具体的错误信息。\n\n配置加载失败时保留已有文件, 并返回具体的错误信息。\n',
+  });
+  assert.match(output, /duplicate-sentences/);
+});
+
+test('short formulaic sentences and quoted or coded examples are not duplicate errors', () => {
+  const { output } = run({
+    'README.md': '## 状态\n\n请求成功。请求成功。\n\n> 配置加载失败时保留已有文件，并返回具体的错误信息。\n> 配置加载失败时保留已有文件，并返回具体的错误信息。\n\n```text\n配置加载失败时保留已有文件，并返回具体的错误信息。\n配置加载失败时保留已有文件，并返回具体的错误信息。\n```\n',
+  });
+  assert.doesNotMatch(output, /duplicate-sentences/);
+});
+
+test('project glossary checks optional terminology without modifying it', () => {
+  const files = {
+    'README.md': '## 功能\n\n当前模块支持跨流对轴，手动配置偏移后执行验证。\n',
+    'terms.json': JSON.stringify({ terms: [{ preferred: '跨流时间对齐', avoid: ['跨流对轴'] }] }),
+  };
+  const normal = run(files);
+  assert.doesNotMatch(normal.output, /term-preference/);
+  const withTerms = run(files, ['--glossary', 'terms.json']);
+  assert.equal(withTerms.status, 0);
+  assert.match(withTerms.output, /term-preference/);
+  assert.match(withTerms.output, /跨流时间对齐/);
+  assert.equal(run(files, ['--strict', '--glossary', 'terms.json']).status, 1);
+});
+
+test('project glossary does not flag inline code identifiers', () => {
+  const { output } = run({
+    'README.md': '## 用法\n\n使用 `跨流对轴` 字段读取配置。\n',
+    'terms.json': JSON.stringify({ terms: [{ preferred: '跨流时间对齐', avoid: ['跨流对轴'] }] }),
+  }, ['--glossary', 'terms.json']);
+  assert.doesNotMatch(output, /term-preference/);
+});
+
+test('missing and malformed project glossary fail with a usage error', () => {
+  assert.equal(run({ 'README.md': '## 用法\n\n读取配置。\n' }, ['--glossary']).status, 2);
+  const result = run({ 'README.md': '## 用法\n\n读取配置。\n', 'terms.json': '{invalid' }, ['--glossary', 'terms.json']);
+  assert.equal(result.status, 2);
+  assert.match(result.output, /无法读取项目术语表/);
 });
 
 test('file placement is not this linter business', () => {

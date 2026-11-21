@@ -1,13 +1,13 @@
 ---
 name: mydocs
-description: "Use when organizing or rewriting repository documentation: README, docs/ guides, CHANGELOG and release runbooks. Decide reader tasks and file ownership, verify facts against code/tests, preserve existing commands, limits and safety guarantees during edits, and check README structure and zh/en parity. Do not do Chinese wording or sentence-level rewriting (myshuohua), simple typo fixes, or link repair."
+description: "Use when organizing, reviewing or rewriting GitHub repository documentation: README, guides, API/architecture references, CHANGELOG and maintenance runbooks. Check reader tasks, authoritative placement, applicability of claims, cross-section and translation consistency, preserved facts and final acceptance. Leave Chinese wording and sentence editing to myshuohua."
 ---
 
 # 仓库文档：先分层，再动笔
 
-文档难读，多数情况是这个文件里放了不该放的东西。同样的内容留在 `docs/` 里没问题，搬到首页就碍事。所以顺序固定：先定边界，再抽事实，最后才写句子。
+文档难读不只是文件放错了内容：同一事项在不同章节可能有矛盾的说法，适用于某个版本、环境或使用者的行为也可能被误写成普遍能力。即使每句话单独成立，整篇仍可能误导读者。
 
-先改词也能过去，但内部细节会换个说法继续待在首页。这份 Skill 管**读者任务、事实完整性和内容分层**，句子的用词与语序交给 `myshuohua`。整理文档不等于不断删字：先保住必要事实，再让读者更容易找到它们。
+本 Skill 管**读者任务、内容归属、断言适用范围、全文一致性和信息保真**；句子的措辞、搭配与机械重复交给 `myshuohua`。先核对事实，再组织内容，最后审查成稿。不要为了缩短篇幅删除必要的限制。
 
 ## 不适用的情况
 
@@ -37,7 +37,7 @@ node .github/engineering/skills/mydocs/scripts/install.mjs --apply .
 | `CHANGELOG.md` | 用户与维护者 | 用户能感知的新增、改进、修复、兼容性变化 |
 | `docs/development/RELEASE.md` | 维护者 | 可重复的发布、校验、回滚步骤 |
 
-细则和三组真实误放例子见 [references/file-types.md](references/file-types.md)。README 里出现 UI 控件位置、内部状态名、错误处理策略、测试覆盖细节，就是越界。移到 `docs/`，首页留一行链接。
+细则和三组真实误放例子见 [references/file-types.md](references/file-types.md)。README 不堆 UI 排布、内部状态或测试流水；但**用户操作依赖的入口、失败时是否保留数据、回退条件**应保留。判断是否越界取决于读者是否需要它来完成任务，而不是看到「错误处理」就一律删除。
 
 ## 第 1 步：抽事实，先不写句子
 
@@ -48,6 +48,8 @@ node .github/engineering/skills/mydocs/scripts/install.mjs --apply .
 - 用户会撞上的硬限制，以及触发条件
 - 已有文档的位置，哪些细节应该留在 `docs/`
 - 现有文档里仍然准确的操作步骤、默认值、失败行为、兼容/升级限制、数据安全保证及链接；标明是保留、迁移、修正还是删除
+- 关键断言的**适用对象、版本或环境、使用条件、可观察行为与限制**；区分已经面向目标读者提供的功能、仅限特定场景的行为和仍处于验证中的行为，不能把局部成立的事实写成普遍承诺
+- 原文中的关键断言对应的代码、测试或现有权威文档；缺少证据的断言不能靠语感改成肯定句
 
 不在 README 的事实清单里堆砌这些：仅实现内部有意义的函数名、分支判断顺序、测试编号和未暴露的内部状态。API/ARCHITECTURE 文档需要的符号与状态应保留；用户操作依赖的按钮名称和位置也不能无故删除。
 
@@ -60,10 +62,21 @@ node .github/engineering/skills/mydocs/scripts/install.mjs --apply .
 - 每个段落必须有信息作用：说明功能、操作、前置条件、限制或指向下一步的链接。删除空泛过渡和重复总结；必要的指路句与安全提示可以保留。
 - README 不堆读者用不到的内部标识符；接口名、命令参数、配置键和真实界面名称需要识别或操作时必须准确写出。API 和架构文档按专业读者需要保留实现标识符。
 - 不把「严格校验」「如实报错」等空泛承诺当功能。但如果失败条件、数据是否保留、是否回滚、用户是否需要重试会影响决策，就必须写清楚实际行为。
-- 不写工程自白：为什么这么设计、哪些代码没被调用、接口怎么在模块间转手。
-- 交付前删掉临时 `docs-facts.md`，把需要长期维护的事实放回对应正式文档。
+- README 不写实现过程和工程自白；架构、接口等专业文档可以说明读者需要理解的当前机制、关键取舍与职责边界，但不保存调试流水。
+- 交付前删掉临时 `docs-facts.md`，把需要长期维护的事实放回对应正式文档；不把草稿中的推断或单次调试记录直接搬进常驻文档。
 
-## 第 3 步：README 的边界
+## 第 3 步：审查整篇的声明与范围
+
+写完初稿后，**不要只逐句润色**。抽取全文中涉及「支持、可以、自动、不会、不支持、仅、必须」等肯定与否定的关键断言，按**事项 × 适用对象 × 环境/版本 × 条件 × 行为/限制**核对。不是每条断言都需要填满所有维度；只写与该项目、该读者实际相关的限定。重点跨章节比较：
+
+1. **主张与限制**：介绍、功能、用法、限制和详细说明对同一事项有无冲突；必要时区分不同平台、接口、客户端、角色、版本或实验状态，而不是擅自删除一方。无法核实时标记未解决，不宣称已核对通过。
+2. **说明与操作**：文档中的步骤、命令、文件名、依赖、接口、权限和失败语义是否有依据；不同类型的文档按各自职责判断，不要求所有仓库都有特定接口或发布流程。
+3. **全文与语言版本**：同一事项的名称、默认值、条件、失败行为在不同章节是否一致；如有多语言版本，核对实际主张、否定词、数字、平台与命令，不用标题数和条目数冒充语义对齐。
+4. **权威位置**：每项事实应在适合读者查找的文档中完整定义，其他位置给必要的摘要或链接；实验、调查过程与阶段日志不能伪装成现行能力。真实的重要限制即使尚未解决也不能隐藏。
+
+操作示例和详细交付清单见 [references/whole-document-review.md](references/whole-document-review.md)。没有证据证明某项范围时，先找证据，不能凭「上下文看起来是这样」补出不存在的行为。
+
+## 第 4 步：README 的边界
 
 - 二级标题只留这些角色：定位、下载或安装、快速开始、用法、已知限制、文档入口、目录、许可。多出来的标题，要么删，要么拆进 `docs/`。
 - 一条 bullet 不超过两句。同类限制（各站点、各平台的差异）合成一段，不要逐条列排查记录。
@@ -73,7 +86,7 @@ node .github/engineering/skills/mydocs/scripts/install.mjs --apply .
 
 不设字数上限。按角色裁剪比按字数裁剪稳，安装矩阵长的项目也不会被误伤。
 
-## 第 4 步：跑结构检查
+## 第 5 步：跑结构检查
 
 内容放对之后，先确认骨架没走形：
 
@@ -92,10 +105,13 @@ node .agents/skills/mydocs/lint-docs.mjs README.md README.en.md docs
 
 检查器只管骨架。哪句话怎么写交给 `myshuohua` 的 `lint-words.mjs`：分号、句长、术语写法、固定短语。
 
-## 交付前自检
+## 第 6 步：交付前全文验收（必须重读成稿）
 
-1. **可用**：第一次访问仓库的人能否找到项目用途、安装方法、主要用法与限制；维护者能否找到相应的内部说明。
-2. **保真**：逐项对照事实清单，检查已有的命令、限制、安全保证、适用平台、错误处理与重要链接是否被误删、偷换或错误简化。
-3. **分层**：README 是否只保留读者完成任务需要的内容，详细契约是否有稳定文档入口；ARCHITECTURE/API 是否保留必要的内部术语。
-4. **语言**：交给 `myshuohua` 清理伪口语、空泛术语和错误搭配，不在本 Skill 里复制另一套语言禁词表。
-5. **一致**：执行结构检查，并核对中英两版的行为、限制、步骤与命令，而不只比较条目数量。
+1. **任务可完成**：目标读者能找到当前项目确实提供的安装、使用、接口、配置、维护或其他所需信息；不强制轻量项目补齐无关章节。
+2. **事实保真**：以修改前的有效断言和当前实现为基准，逐一检查命令、参数、链接、默认值、权限、错误条件、安全保证和升级限制，没有无依据增删。
+3. **断言范围**：介绍、用法、限制、详细说明及现有语言版本对同一事项的适用对象、环境、条件和结果一致，局部能力不能被扩大为无条件承诺。
+4. **单一权威位置**：同一事实仅在适合检索的位置完整定义，其他位置摘要并链接；没有把研究、阶段编号、短期进度和内部实现记事搬成产品承诺。
+5. **语言复核**：由 `myshuohua` 对**最终成稿**运行 lint，再人工检查漏检的生硬搭配、残缺术语、重复句子和因扩写而降低的信息密度。修正后必须再检查被触及的段落。
+6. **实际门禁**：运行 `lint-docs.mjs`，检查 README 中英对应事实，并对未解决的告警作明确判断。**检查器输出 0 条不代表全文通过**；无法核实的矛盾不得标记为已验收。
+
+若有经核实仍不能解决的冲突，向维护者报告准确的文件与段落，不伪造一致性，也不修改当前任务范围外的仓库。

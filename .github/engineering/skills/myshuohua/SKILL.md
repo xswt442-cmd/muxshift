@@ -1,13 +1,13 @@
 ---
 name: myshuohua
-description: "Use for Chinese prose in GitHub repository documentation: README, docs/, CHANGELOG, PR descriptions, release notes, and maintenance guides. Enforce restrained technical writing: remove casual filler, truncated terminology, vague referents, incorrect verb-object pairs, marketing claims, translationese, and redundant explanations; run the bundled wording linter and review meaning manually. Do not decide document placement (mydocs), change code identifiers, or treat informal issue conversations as formal documentation."
+description: "Use when drafting, editing or auditing Chinese prose in GitHub repo docs, README, API/architecture guides, CHANGELOG, PR and release notes. Find unnatural wording, truncated terms, wrong verb-object pairs, filler, translationese and repetition; inspect untouched sentences, run lint on the final draft and check meaning against the original. mydocs owns whole-document placement and cross-section capability scope."
 ---
 
 # GitHub 仓库文档：准确、完整、克制的中文
 
 这套规则针对仓库里长期维护的正式技术文字，不把聊天口气当成「自然」，也不靠堆术语显得专业。语言必须明确说明**对象、动作、条件、结果**；没有信息的衔接词、口语填充、营销承诺和工程黑话一律优先删除。
 
-检查顺序：**先核对技术事实和术语 → 跑 lint → 逐句修正搭配与省略 → 精简重复表达 → 对照原文确认没有丢事实**。lint 只能定位线索，不能替代上下文判断；不能为了通过阈值改变产品行为或安全边界。
+检查顺序：**核对事实与项目术语 → 初次 lint → 逐句改写 → 重读整个最终文档找漏项 → 检查 Diff 的语义变化和重复 → 终稿再跑 lint**。首次 lint 只是定位问题，不是改写完成的证明；即使没有 lint 告警，也必须人工找词、搭配、逻辑和整段表达的问题。任何修改都不能无证据改变行为或安全边界。
 
 ## 不适用的情况
 
@@ -34,7 +34,7 @@ node .github/engineering/skills/myshuohua/scripts/install.mjs --apply .
 node .agents/skills/myshuohua/lint-words.mjs README.md README.en.md docs
 ```
 
-六条规则：
+八条规则（其中术语偏好检查需要项目术语表）：
 
 | 规则 | 管什么 |
 | --- | --- |
@@ -44,12 +44,16 @@ node .agents/skills/myshuohua/lint-words.mjs README.md README.en.md docs
 | `bullet-sentences` | 一条 bullet 最多两句 |
 | `term-casing` | 同一个词在全篇只用一个写法 |
 | `banned-phrases` | 营销词、论文腔、翻译腔、伪口语、空话，外加几个句式正则 |
+| `duplicate-sentences` | 识别同一文件里高置信度的重复完整句子（忽略代码、表格、示例引用） |
+| `term-preference` | 用可选项目术语表提示非首选术语；不替代源码核验 |
 
 `paragraph-length` 是最容易被忽略的一条。中文技术文档最常见的人机感不是某个词写错，是整段不分段：协议怎么配、谁校验、失败返回什么、谁能看见，四件事挤在同一段，读者想确认一个条件得重读整段。命中就按「谁 / 做了什么 / 什么条件」切开，一段只留一个主题。bullet 列表和表格各自成段，不参与这条。
 
 `--rules` 看阈值和理由；高置信度的营销词、伪口语和工程黑话标为 `error`，默认就会退出 1；`--strict` 还会让 warning 退出 1；`--json` 给 CI 用。现有句长与分号阈值曾用 ligule、tasklutein、muxshift、DiggerTerm 四个仓的 README 校准；扩充词表时仍需检查这些真实样本的误报，不能把命中数当作质量指标。
 
 英文文档也可以传入：句长只量中文句子，固定中文短语只在实际命中时报告。对代码块、行内代码和界面原文采用保留原则，必要时用单条规则的 `lint-ignore-next-line` 注释。
+
+项目术语如果有首选写法，可使用 `--glossary docs/wording-terms.json`。JSON 格式为 `{ "terms": [{ "preferred": "跨源对齐", "avoid": ["对轴", "跨源对轴"] }] }`。此文件由各项目按实际产品语义维护，**不是要求每仓新建文件**；只有明确同义、且代码标识符与界面原文不会被误改时才收录。`term-preference` 报 warning，即使命中也要按上下文复核，不自动替换。通用规范不得把某一个产品的术语硬编码到所有仓库。
 
 文档里要引用坏例子时，用 `<!-- lint-ignore-next-line banned-phrases -->` 关掉那一行，`<!-- lint-ignore-file banned-phrases -->` 关掉整个文件。不要为了过 lint 把例子改掉。
 
@@ -69,13 +73,17 @@ lint 报告的命中项必须处理或说明保留理由；没报告的句子也
 
 ## 第三步：句子与段落
 
+**逐段读正文，而不只是 lint 命中的行。** 对未命中的句子也依次问：词语是否完整、动宾是否搭配、对象是否明确、是否有无意义辅助词、改变句式是否改变了概率或承诺。可用的技术词未必是可理解的产品术语；「内部对轴」应结合项目事实解释成时间对齐，而不是只纠正大小写。
+
 - **说清主体**：说明由哪个组件执行动作；技术文档允许「请求」「服务」「处理器」作主语，前提是动作和职责准确，不要机械改成人称句。
 - 动词别变名词。「进行校验」「提供支持」「实现隔离」，删掉「进行」「提供」「实现」，名词直接当动词用。
 - 先说会发生什么，再说前提。条件是校验顺序，不是读者要的阅读顺序。
 - 同一约束中不要把「会」「可能」「请」「需要」「应该」叠加成含糊语气。分别说明已知行为、可能性和必须执行的步骤；硬性要求用「必须」「不能」，不把未证实的保证写成确定结论。
 - 分号只用于必要的并列关系。多个独立事实优先分句；不能为了拆短句丢掉前置条件或适用范围。
 - **逐句消除模糊**：遇到「相关」「部分」「一些」「支持了」「做处理」，检查是否缺少具体对象、触发条件或结果；不清楚时回查代码、接口和测试，不猜。
-- **整段去重**：同一个事实不要在标题、引言、三条 bullet 和结尾重复四遍；保留最利于检索的一处，其余删除或改为链接。
+- **整段去重**：同一个事实不要在标题、引言、三条 bullet 和结尾重复四遍；拆长段后还要核对相邻句是否被复制两次。保留最利于检索的一处，其余删除或改为链接。
+- **避免机械扩写**：为了去掉单字动词而加入三次「可以」「会」「使用」也不是合格改写；在不删掉条件和结果的前提下，选择更直接的句型。不能仅靠字数减少或增加评价质量。
+- **用词不能代替查证**：例如「会尝试重新连接」和「必然连接成功」不是同一承诺；「请求已接受」和「画面已显示」不是同一状态。改写需要保留原来的确定性和适用范围。
 
 ## 不该做的
 
@@ -95,14 +103,17 @@ lint 报告的命中项必须处理或说明保留理由；没报告的句子也
 | PR 描述 | 讲清最终实现和真实验证；不用聊天口气复述开发过程 |
 | `AGENTS.md` / 维护手册 | 按现有英文约定写 AGENTS；维护步骤使用可执行的命令、条件和判定标准 |
 
-## 改完怎么验
+## 改完怎么验（必须完成二次复核）
 
-1. 每句能否指出具体对象、动作、条件或结果；必要的限制是否保留。
-2. 是否出现无意义的聊天填充、营销词、论文腔、翻译腔、缺失限定词或错误动宾搭配；逐项修正，不将命中项无条件替换成同一个词。
-3. 对照改写前后的功能、命令、参数、错误语义、兼容范围与安全约束；如有变化必须有事实依据。
-4. 回读整段，删除重复结论和没有信息的过渡；保留必要的逻辑衔接与有实际意义的比较。
+**第一遍——独立读终稿，不看 lint 输出。** 从标题到结尾连续阅读**完整成稿和未修改的相邻段落**，逐句检查：① 半截术语、错配动宾和指代不明；② 多余的「可以」「会」「进行」「使用」以及机械排比；③ 同句、邻句、跨段落的事实重复；④ 否定、概率、前置条件、对象与操作结果是否清楚。尤其注意把很短的技术句改成累赘长句、拆段时复制同一个事实两次的情况。
+
+**第二遍——对照 Diff 与代码。** 对比改写前后的命令、参数、数字、接口、错误语义、兼容范围、安全约束和因果关系。无法证实的新断言不得写进文档。全文功能和限制是否互相矛盾、不同客户端能力是否混写，由 `mydocs` 做整篇核查。
+
+**第三遍——机器复检。** 在**最终文件**上重跑 `lint-words.mjs`，逐项处理 error/warning（或说明保留理由），需要时加 `--strict`；已核实的专用术语表可用 `--glossary`。改过告警句后重新读上下文，再检查是否引入重复、歧义或不符合文档语域的新词。
+
+没有完成这三遍，不能以「第一遍 lint 通过」「只改了措辞」为理由宣称审稿通过。检查器只能发现一部分问题，零告警也不能跳过人工复核。
 
 ## 参考
 
 - [references/language-zh.md](references/language-zh.md)：常见用词和句式问题，包含模糊指代、空泛动作和信息保真对照。
-- [references/bad-good.md](references/bad-good.md)：整段对照，取自真实 README，后面写清为什么错。
+- [references/bad-good.md](references/bad-good.md)：整段对照，含重复句、无谓扩写和语义改变的反例，说明为什么错。

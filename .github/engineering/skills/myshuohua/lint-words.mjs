@@ -4,11 +4,12 @@
 //   node .agents/skills/myshuohua/lint-words.mjs README.md docs
 //   node .agents/skills/myshuohua/lint-words.mjs --strict .
 //   node .agents/skills/myshuohua/lint-words.mjs --json .
+//   node .agents/skills/myshuohua/lint-words.mjs --glossary docs/wording-terms.json README.md
 //   node .agents/skills/myshuohua/lint-words.mjs --rules
 //
 // 退出码：0 干净，1 有 error（或 --strict 下有 warning），2 用法或读文件出错。
 //
-// 这里只检查能数的东西：分号、句长、bullet 句数、术语写法、固定短语。
+// 机械规则检查分号、句长、段落、完整句重复、固定短语和项目首选术语。
 // 词用得对不对、句子骨架立不立得住，归 SKILL.md 和 references/。
 // 内容和文件的对应关系不在这里，那是 mydocs 的 lint-docs.mjs。
 
@@ -35,9 +36,33 @@ if (args.includes('--help') || args.includes('-h')) {
   process.exit(0);
 }
 
+
 const strict = args.includes('--strict');
 const asJson = args.includes('--json');
-const targets = args.filter((arg) => !arg.startsWith('-'));
+const glossaryIndex = args.indexOf('--glossary');
+let glossaryTerms = [];
+if (glossaryIndex !== -1) {
+  const path = args[glossaryIndex + 1];
+  if (!path || path.startsWith('-')) {
+    console.error('--glossary 需要 JSON 文件路径。');
+    process.exit(2);
+  }
+  try {
+    const data = JSON.parse(readFileSync(path, 'utf8'));
+    if (!Array.isArray(data.terms) || data.terms.some((term) =>
+      !term || typeof term.preferred !== 'string' || !term.preferred.trim()
+      || !Array.isArray(term.avoid) || !term.avoid.length
+      || term.avoid.some((variant) => typeof variant !== 'string'
+        || !variant.trim() || variant === term.preferred))) {
+      throw new Error('应为 { "terms": [{ "preferred": "首选词", "avoid": ["替代词"] }] }');
+    }
+    glossaryTerms = data.terms;
+  } catch (error) {
+    console.error('无法读取项目术语表 ' + path + '：' + error.message);
+    process.exit(2);
+  }
+}
+const targets = args.filter((arg, index) => !arg.startsWith('-') && (glossaryIndex < 0 || index !== glossaryIndex + 1));
 
 function collect(target, out = []) {
   const stat = statSync(target);
@@ -221,6 +246,49 @@ function checkFile(file, lines) {
       else flush();
     });
     flush();
+  }
+
+
+  // duplicate-sentences：拆段时重复复制了较长的完整句。仅比较正文中的高置信度重复，
+  // 代码、引用、标题及表格不参与。语义相同但文字不同的内容仍需要人工审查。
+  const duplicateRule = RULE.get('duplicate-sentences');
+  if (duplicateRule) {
+    const seen = new Map();
+    body.forEach((line, index) => {
+      if (!line.trim() || /^\s*[#>|]/.test(line) || isTable(line)) return;
+      const content = line.replace(/^\s*(?:[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+)/, '');
+      const parts = content.split(/[。！？!?]+/);
+      const originalParts = lines[index].split(/[。！？!?]+/);
+      for (const [partIndex, part] of parts.entries()) {
+        const key = part.normalize('NFKC').replace(/[\s\p{P}\p{S}]/gu, '');
+        const han = (part.match(/[\u4e00-\u9fff]/g) ?? []).length;
+        if (key.length < duplicateRule.minChars || han < duplicateRule.minHan) continue;
+        const firstLine = seen.get(key);
+        if (firstLine !== undefined) {
+          const location = firstLine === index + 1 ? '本行前文' : '第 ' + firstLine + ' 行';
+          const preview = originalParts.length === parts.length
+            ? originalParts[partIndex].trim() : part.trim();
+          add(file, index + 1, 'duplicate-sentences',
+            '此句与' + location + '重复：' + preview.slice(0, 65));
+        } else {
+          seen.set(key, index + 1);
+        }
+      }
+    });
+  }
+
+  // term-preference：项目可选术语表。命中仅提示复核，不自动替换词语。
+  if (glossaryTerms.length) {
+    for (const term of glossaryTerms) {
+      const avoid = [...new Set(term.avoid)].sort((a, b) => b.length - a.length);
+      body.forEach((line, index) => {
+        const hit = avoid.find((variant) => line.includes(variant));
+        if (!hit) return;
+        add(file, index + 1, 'term-preference',
+          '「' + hit + '」不是项目首选术语「' + term.preferred + '」；确认含义相同后统一',
+          undefined, term.preferred);
+      });
+    }
   }
 
   // term-casing：自动找同一词的不同写法。英文文档里句首大写太常见，只在中文文档里做这件事。

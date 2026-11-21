@@ -15,6 +15,8 @@ param(
     [string]$Changelog = "CHANGELOG.md",
     # The archive that will be attached to the release. It must exist.
     [Parameter(Mandatory = $true)][string]$Asset,
+    # Optional installer attached beside the archive.
+    [string]$Setup = "",
     # Owner/name used in the download links, e.g. xswt442-cmd/muxshift.
     [string]$Repository = "",
     # Empty means "print to stdout"; a path writes UTF-8 without a BOM.
@@ -50,6 +52,19 @@ $assetName = $assetItem.Name
 $assetSize = $assetItem.Length
 $assetHash = (Get-FileHash $assetItem.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
 $assetUrl = "https://github.com/$Repository/releases/download/$Tag/" + [uri]::EscapeDataString($assetName)
+
+$setupName = ""
+$setupSize = 0
+$setupHash = ""
+$setupUrl = ""
+if (-not [string]::IsNullOrWhiteSpace($Setup)) {
+    if (-not (Test-Path $Setup)) { throw "no installer at $Setup" }
+    $setupItem = Get-Item $Setup
+    $setupName = $setupItem.Name
+    $setupSize = $setupItem.Length
+    $setupHash = (Get-FileHash $setupItem.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    $setupUrl = "https://github.com/$Repository/releases/download/$Tag/" + [uri]::EscapeDataString($setupName)
+}
 
 $root = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($Changelog) -or -not (Test-Path $Changelog)) {
@@ -131,9 +146,11 @@ Test-ReleaseSection -Section $en -Language 'English'
 
 # Base64 of the Chinese wording, kept out of the source so PS 5.1 can parse the
 # file as ASCII. Decode them here, next to the section they belong to.
-$zhDownloadIntro = Get-Utf8Text 'V2luZG93cyAxMC8xMSB4NjTvvIzpnIDopoHns7vnu5/mj5DkvpvnmoQgTWVkaWEgRm91bmRhdGlvbiBILjI2NCDkuI4gQUFDIOino+eggeOAguino+WOi+WQjuebtOaOpei/kOihjCBtdXhzaGlmdC5leGXvvIzkuI3pnIDopoHlronoo4XjgII='
+$zhDownloadIntroNoSetup = Get-Utf8Text 'V2luZG93cyAxMC8xMSB4NjTvvIzpnIDopoHns7vnu5/mj5DkvpvnmoQgTWVkaWEgRm91bmRhdGlvbiBILjI2NCDkuI4gQUFDIOino+eggeOAguino+WOi+WQjuebtOaOpei/kOihjCBtdXhzaGlmdC5leGXvvIzkuI3pnIDopoHlronoo4XjgII='
+$zhDownloadIntroSetup = Get-Utf8Text 'V2luZG93cyAxMC8xMSB4NjTjgILlronoo4XlmajkvJrliJvlu7rlvIDlp4voj5zljZXlv6vmjbfmlrnlvI/lkozlj6/pgInnmoTmoYzpnaLlv6vmjbfmlrnlvI/vvJvlhY3lronoo4UgWklQIOino+WOi+WNs+eUqOOAgui/kOihjOmcgOimgeezu+e7n+aPkOS+m+eahCBNZWRpYSBGb3VuZGF0aW9uIEguMjY0IOS4jiBBQUMg6Kej56CB44CC'
 $zhTableHead = Get-Utf8Text 'fCDmk43kvZzns7vnu58gfCDmoLzlvI8gfCDnlKjpgJQgfCDkuIvovb0gfAp8IC0tLSB8IC0tLSB8IC0tLSB8IC0tLSB8'
 $zhTableRow = Get-Utf8Text 'fCBXaW5kb3dzIHg2NCB8IFpJUO+8iOino+WOi+WNs+eUqO+8iSB8IOino+WOi+WQjui/kOihjCB8IFvkuIvovb1dKHswfSkgfA=='
+$zhSetupRow = Get-Utf8Text 'fCBXaW5kb3dzIHg2NCB8IOWuieijheWZqCB8IOWuieijheW5tuWIm+W7uuW/q+aNt+aWueW8jyB8IFvkuIvovb1dKHswfSkgfA=='
 $zhChecks = Get-Utf8Text '5Y+R5biD6ICF5rKh5pyJ5o+Q5L6b5pWw5a2X562+5ZCN77yb55So5LiL6Z2i55qEIFNIQS0yNTYg5qCh6aqM5paH5Lu25a6M5pW05oCn77yMVkVSU0lPTi50eHQg6K6w5b2V54mI5pys44CB5p6E5bu65o+Q5Lqk5LiOIGV4ZSDoh6rouqvnmoQgU0hBLTI1NuOAgg=='
 $zhSize = Get-Utf8Text '5aSn5bCP'
 $zhSum = Get-Utf8Text '5qCh6aqM5YC8'
@@ -142,38 +159,56 @@ function Format-Bytes([long]$Bytes) {
     return $Bytes.ToString("N0", [Globalization.CultureInfo]::InvariantCulture)
 }
 
+$zhRows = @($zhTableRow -replace '\{0\}', $assetUrl)
+if ($setupName) { $zhRows += ($zhSetupRow -replace '\{0\}', $setupUrl) }
+$zhDownload = @(
+    ("- " + $zhSize + ": " + (Format-Bytes $assetSize) + " bytes (" + $assetName + ")"),
+    ("- " + $zhSum + ": " + $assetHash)
+)
+if ($setupName) {
+    $zhDownload += @(
+        ("- " + $zhSize + ": " + (Format-Bytes $setupSize) + " bytes (" + $setupName + ")"),
+        ("- " + $zhSum + ": " + $setupHash)
+    )
+}
 $zhSection = @(
     (""),
     ("#### " + (Get-Utf8Text '5LiL6L29')),
     (""),
-    ($zhDownloadIntro),
+    $(if ($setupName) { $zhDownloadIntroSetup } else { $zhDownloadIntroNoSetup }),
     (""),
-    ($zhTableHead),
-    ($zhTableRow -replace '\{0\}', $assetUrl),
-    (""),
-    ("- " + $zhSize + ": " + (Format-Bytes $assetSize) + " bytes (" + $assetName + ")"),
-    ("- " + $zhSum + ": " + $assetHash),
-    (""),
+    $zhTableHead
+) + $zhRows + @("") + $zhDownload + @(
+    "",
     ("#### " + (Get-Utf8Text '5qCh6aqM5LiL6L29')),
-    (""),
-    ($zhChecks)
+    "",
+    $zhChecks
 )
 
+$enRows = @("| Windows x64 | ZIP (portable) | Unpack and run | [Download]($assetUrl) |")
+if ($setupName) { $enRows += "| Windows x64 | Setup (installer) | Installs with shortcuts | [Download]($setupUrl) |" }
+$enDownload = @(
+    ("- Size: " + (Format-Bytes $assetSize) + " bytes (" + $assetName + ")"),
+    ("- SHA-256: " + $assetHash)
+)
+if ($setupName) {
+    $enDownload += @(
+        ("- Size: " + (Format-Bytes $setupSize) + " bytes (" + $setupName + ")"),
+        ("- SHA-256: " + $setupHash)
+    )
+}
 $enSection = @(
     (""),
     ("#### Downloads"),
     (""),
-    ('Windows 10/11 x64. The system''s Media Foundation decoders must provide H.264 and AAC. Unpack the archive and run muxshift.exe; nothing is installed.'),
+    $(if ($setupName) { 'Windows 10/11 x64. Run the setup to install with Start Menu and optional desktop shortcuts, or unpack the ZIP and run muxshift.exe. Both use the system Media Foundation decoders for H.264 and AAC.' } else { 'Windows 10/11 x64. The system''s Media Foundation decoders must provide H.264 and AAC. Unpack the archive and run muxshift.exe; nothing is installed.' }),
     (""),
     ("| OS | Package | Use | Download |"),
-    ("| --- | --- | --- | --- |"),
-    ("| Windows x64 | ZIP (no installer) | Unpack and run | [Download]($assetUrl) |"),
-    (""),
-    ("- Size: " + (Format-Bytes $assetSize) + " bytes (" + $assetName + ")"),
-    ("- SHA-256: " + $assetHash),
-    (""),
+    ("| --- | --- | --- | --- |")
+) + $enRows + @("") + $enDownload + @(
+    "",
     ("#### Verify the download"),
-    (""),
+    "",
     ('This release carries no publisher signature. Check the file against the SHA-256 above; VERSION.txt records the version, the build commit and the SHA-256 of the executable itself.')
 )
 

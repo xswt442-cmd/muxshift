@@ -3612,3 +3612,16 @@ func TestEventFromMediaKeepsNegativeMediaOnTheClock(t *testing.T) {
 		t.Fatalf("event = %s, want 2s", event)
 	}
 }
+
+func TestShutdownDoesNotAbortACommittedTransaction(t *testing.T) {
+	// The commit owns the installed players. A shutdown that waited for its
+	// final cleanup would block the drawing thread the cleanup needs.
+	txn := &seekTxn{committed: true}
+	app := &appState{seek: txn}
+	if !app.shutdownReplayTxn() {
+		t.Fatal("a committed transaction was reported as unfinished")
+	}
+	if txn.stopped {
+		t.Fatal("shutdown marked a committed transaction as stopped")
+	}
+}

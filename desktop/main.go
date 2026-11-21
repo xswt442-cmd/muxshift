@@ -833,7 +833,7 @@ func main() {
 	flag.DurationVar(&syncAt, "at", 10*time.Second, "syncmap: the shared event time to measure")
 	flag.DurationVar(&syncOffset, "offset", 0, "syncmap: the offset applied to the measured source")
 	flag.StringVar(&dvrDir, "dvr-dir", dvrDir, "directory the replay buffer keeps its segments in")
-	handoffPort := flag.Int("handoff-port", 8731, "loopback port the browser extension pairs with")
+	handoffPort := flag.Int("handoff-port", 8731, "loopback port the browser extension pairs with; the extension supports 8731 only")
 	flag.DurationVar(&dvrRetention, "dvr-retention", dvrRetention, "how much history the replay buffer keeps")
 	flag.Int64Var(&dvrMaxBytes, "dvr-max-bytes", dvrMaxBytes, "byte limit of the replay buffer; 0 keeps only the retention limit")
 	flag.Int64Var(&dvrRecordingBytes, "dvr-recording-bytes", dvrRecordingBytes,
@@ -843,6 +843,9 @@ func main() {
 	showVersion := flag.Bool("version", false, "print the build and exit")
 	silent := flag.Bool("silent", false, "start with the master mute on, for checks that should not play sound")
 	flag.Parse()
+	if *handoffPort != 8731 {
+		log.Fatalf("handoff: the extension pairs with 127.0.0.1:8731; -handoff-port %d is not supported", *handoffPort)
+	}
 	if *showVersion {
 		// Before every other check: asking a binary what it is must not need a
 		// media address, a window, or a display.

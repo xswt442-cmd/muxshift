@@ -463,6 +463,16 @@ func (a *appState) shutdownReplayTxn() bool {
 	if txn == nil {
 		return true
 	}
+	a.seekMu.Lock()
+	committed := txn.committed
+	a.seekMu.Unlock()
+	if committed {
+		// The commit already owns the new resources. Waiting here would hold the
+		// drawing thread while the commit waits to close the previous players on
+		// that same thread; the commit finishes its own cleanup and publishes
+		// the account.
+		return true
+	}
 	a.abortSeekTxn(txn, "the session is closing")
 	start := time.Now()
 	if a.awaitSeekTxn(txn, seekShutdownWait) {

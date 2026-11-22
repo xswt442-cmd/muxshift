@@ -13,7 +13,7 @@ This changelog records completed changes that matter to someone using MuxShift. 
 - 设置新增「关于」：显示 MuxShift 版本与构建提交、Windows 版本与架构、逻辑处理器、物理内存和设置文件路径。
 - 关于页可以检查更新：打开时查询一次 GitHub 最新发布，失败后可以手动重试；发现新版本时显示版本号与发布页入口。
 
-**变更**
+**改进**
 
 - Windows 发布包改用 GUI 子系统构建，正常启动不再带一个控制台窗口；从终端启动时日志仍附着到父控制台。
 - 发布新增按当前用户安装的安装器：创建开始菜单快捷方式、可选的桌面快捷方式和卸载项，同时保留免安装 ZIP。
@@ -29,7 +29,7 @@ This changelog records completed changes that matter to someone using MuxShift. 
 - Settings now has an About section: MuxShift version and build commit, Windows version and architecture, logical processors, physical memory, and the settings file path.
 - About can check for updates: opening it asks GitHub once for the latest published release, with a manual retry after a failure; a newer version shows its number and a link to the release page.
 
-**Changed**
+**Improved**
 
 - Windows release builds now use the GUI subsystem, so a normal start no longer carries a console window; started from a terminal, logs still attach to the parent console.
 - Releases now include a per-user installer that creates Start Menu and optional desktop shortcuts and an uninstall entry, while the portable ZIP remains available.

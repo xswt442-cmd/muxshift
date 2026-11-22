@@ -454,15 +454,17 @@ func editingBody(window *mygo.Window, a *appState, dir string) {
 	// A corner resize with the ratio lock on: the picture keeps its shape and
 	// the opposite corner stays put.
 	resized := stageBox{}
+	stageW, stageH := float32(0), float32(0)
 	mygoRunOnMain(func() {
 		a.drag = dragState{}
-		w, h := a.stageFrameSize()
-		a.dragByIn(target, handleSE, -0.06, -0.04, w, h)
+		stageW, stageH = a.stageFrameSize()
+		a.dragByIn(target, handleSE, -0.06, -0.04, stageW, stageH)
 		resized, _ = a.stageBoxOf(target)
 	})
 	// The lock keeps the picture's own shape, not the slot's: a slot that
 	// started wider than the picture snaps to the picture the first time a
-	// handle is taken.
+	// handle is taken. Boxes are stage fractions, so the shape is measured in
+	// pixels on the stage before it is compared with the picture's own.
 	want := float32(0)
 	mygoRunOnMain(func() {
 		if p := rawPlayer(target.player); p != nil {
@@ -471,9 +473,15 @@ func editingBody(window *mygo.Window, a *appState, dir string) {
 			}
 		}
 	})
-	aspectAfter := resized.W / resized.H
+	pixelAspect := func(box stageBox) float32 {
+		if stageW > 0 && stageH > 0 {
+			return (box.W * stageW) / (box.H * stageH)
+		}
+		return box.W / box.H
+	}
+	aspectAfter := pixelAspect(resized)
 	if want <= 0 {
-		want = before.W / before.H
+		want = pixelAspect(before)
 	}
 	if math.Abs(float64(aspectAfter-want)) > 0.02 {
 		editingQuit(scenario, "CHECK FAILED: a ratio-locked resize changed the shape: %.3f, want %.3f", aspectAfter, want)

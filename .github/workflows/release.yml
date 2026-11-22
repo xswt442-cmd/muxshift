@@ -60,6 +60,11 @@ jobs:
           cache-dependency-path: |
             go.sum
             desktop/go.sum
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          if ($LASTEXITCODE -ne 0) { throw "installing Inno Setup failed" }
       - name: Build the release archive
         shell: pwsh
         run: ./scripts/release.ps1
@@ -71,6 +76,9 @@ jobs:
           $tree = (git status --porcelain).Length
           if ($tree -ne 0) { throw "the tree is dirty after building the release" }
           ./scripts/verify-release.ps1 -Ref "v$env:VERSION"
+      - name: Build the installer
+        shell: pwsh
+        run: ./scripts/build-installer.ps1
       - name: Extract the release notes
         shell: pwsh
         env:
@@ -78,7 +86,9 @@ jobs:
         run: |
           $dir = "dist/muxshift-$env:VERSION-windows-amd64"
           if (-not (Test-Path "$dir.zip")) { throw "$dir.zip was not built" }
-          ./scripts/release-notes.ps1 -Tag "v$env:VERSION" -Asset "$dir.zip" -Out release-notes.md
+          $setup = "dist/muxshift-$env:VERSION-windows-amd64-setup.exe"
+          if (-not (Test-Path $setup)) { throw "$setup was not built" }
+          ./scripts/release-notes.ps1 -Tag "v$env:VERSION" -Asset "$dir.zip" -Setup $setup -Out release-notes.md
       - name: Draft the release
         shell: pwsh
         env:
@@ -87,15 +97,17 @@ jobs:
         run: |
           $dir = "dist/muxshift-$env:VERSION-windows-amd64"
           if (-not (Test-Path $dir)) { throw "$dir was not built" }
+          $setup = "dist/muxshift-$env:VERSION-windows-amd64-setup.exe"
           gh release create "v$env:VERSION" `
             --draft `
             --title "MuxShift v$env:VERSION" `
             --notes-file release-notes.md `
-            "$dir.zip" "$dir/VERSION.txt"
+            "$dir.zip" "$dir/VERSION.txt" "$setup"
       - uses: actions/upload-artifact@v4
         with:
           name: muxshift-${{ inputs.version }}-windows-amd64
           path: |
             dist/*.zip
+            dist/muxshift-*-setup.exe
             dist/muxshift-*/VERSION.txt
           if-no-files-found: error

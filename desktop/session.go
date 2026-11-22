@@ -389,6 +389,13 @@ type appState struct {
 	saveSeq      atomic.Uint64
 	saveDone     atomic.Uint64
 
+	// The rename dialog edits one scene's or one source's display name. It is
+	// kept here so a redraw does not lose what was typed; see rename.go.
+	renameOpen bool
+	renameKind renameTarget
+	renameID   string
+	renameText string
+
 	// budget is the DVR budget a buffer opened now would get, and budgetFrom
 	// names the rule that produced it: the command line, the settings file or
 	// the built-in defaults. flagBudget and budgetFlags keep what the flags were
@@ -536,7 +543,7 @@ func newAppStateWithSettings(uris []string, loaded settings) (*appState, error) 
 	// The command line decides which sources exist; the settings file only
 	// carries their sound, so a remembered address never opens anything.
 	session := core.NewSession("desktop")
-	scene, err := session.AddScene("main")
+	scene, err := session.AddScene("")
 	if err != nil {
 		return nil, err
 	}
@@ -544,15 +551,7 @@ func newAppStateWithSettings(uris []string, loaded settings) (*appState, error) 
 	if err != nil {
 		return nil, err
 	}
-	app := &appState{session: session, scene: scene.ID, output: output.ID, frames: make(chan struct{}, 1), sync: newSyncState(), audible: make(map[core.TrackID]bool), settings: cloneSettings(loaded), settingsDraft: cloneSettings(loaded), settingsSection: "General"}
-	// The shell opens the way a workbench is used: scenes on the left, the
-	// console under the picture, every panel of it visible.
-	app.navWidth = 236
-	app.navUp = true
-	app.editingShell = true
-	app.dockHeight = 240
-	app.dockUp = true
-	app.dockHidden = make(map[string]bool)
+	app := newAppShell(session, scene.ID, output.ID, loaded)
 	for _, uri := range uris {
 		it, err := app.addFrom(uri, originCommandLine)
 		if err != nil {
@@ -589,6 +588,21 @@ func newAppStateWithSettings(uris []string, loaded settings) (*appState, error) 
 	}
 	app.apply()
 	return app, nil
+}
+
+// newAppShell builds the bare application around a session: the fields every
+// start needs, and the shell's opening layout (scenes on the left, the console
+// under the picture, every panel of it visible). Both the command-line start and
+// the saved-session start grow from here, so a restored window looks the same.
+func newAppShell(session *core.Session, scene core.SceneID, output core.OutputID, loaded settings) *appState {
+	app := &appState{session: session, scene: scene, output: output, frames: make(chan struct{}, 1), sync: newSyncState(), audible: make(map[core.TrackID]bool), settings: cloneSettings(loaded), settingsDraft: cloneSettings(loaded), settingsSection: "General"}
+	app.navWidth = 236
+	app.navUp = true
+	app.editingShell = true
+	app.dockHeight = 240
+	app.dockUp = true
+	app.dockHidden = make(map[string]bool)
+	return app
 }
 
 // add registers one source and the tracks its player exposes, then opens the
@@ -1080,8 +1094,9 @@ func (a *appState) closeImportTicker() {
 // addScene creates a scene and switches to it. A new scene starts empty: its
 // purpose is to hold a different arrangement of the same sources.
 func (a *appState) addScene() {
-	name := fmt.Sprintf("scene %d", len(a.session.Scenes())+1)
-	scene, err := a.session.AddScene(name)
+	// An empty name keeps the friendly "Scene N" label; only a name the person
+	// typed is stored, so a default scene is never displayed as "scene 2".
+	scene, err := a.session.AddScene("")
 	if err != nil {
 		a.lastErr = safeOpenError(err)
 		a.invalidate()
@@ -1801,9 +1816,17 @@ func (a *appState) sceneLabel() string {
 		}
 	}
 	if len(audio) == 0 {
-		return "picture " + picture + " · silent"
+		base := "picture " + picture + " · silent"
+		if name := strings.TrimSpace(scene.Name); name != "" {
+			return name + " · " + base
+		}
+		return base
 	}
-	return "picture " + picture + " · sound " + strings.Join(audio, " + ")
+	base := "picture " + picture + " · sound " + strings.Join(audio, " + ")
+	if name := strings.TrimSpace(scene.Name); name != "" {
+		return name + " · " + base
+	}
+	return base
 }
 
 // itemIndex finds the card that owns a track, so the window can name sources by
@@ -1855,4 +1878,26 @@ func shortURI(uri string) string {
 		return parts[len(parts)-2] + "/" + last
 	}
 	return last
+}
+
+// sourceDisplayName is what the window calls a source: the person's own name
+// when they set one, otherwise the short address. Keep shortURI as the fallback
+// so a source without a name reads exactly as it always did.
+func sourceDisplayName(it *item) string {
+	if it == nil {
+		return "none"
+	}
+	if name := strings.TrimSpace(it.source.Name); name != "" {
+		return name
+	}
+	return shortURI(it.uri)
+}
+
+// sceneDisplayName is what the window calls a scene: the person's own name when
+// they set one, otherwise the generated "Scene N" label.
+func (a *appState) sceneDisplayName(sc core.Scene, index int) string {
+	if name := strings.TrimSpace(sc.Name); name != "" {
+		return name
+	}
+	return fmt.Sprintf(a.tr("Scene %d", "场景 %d"), index+1)
 }

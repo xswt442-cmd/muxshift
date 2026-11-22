@@ -90,10 +90,7 @@ func (a *appState) mixerRow(c *ui.Context, index int, it *item) {
 	ui.Column(c).WidthPercent(100).Gap(spaceXs).Padding(spaceSm).
 		Background(colorPanel).Border(1, colorLineSoft).Radius(radiusMd).Children(func() {
 		ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
-			name := string(it.source.ID)
-			if len(it.source.URI) > 0 {
-				name = shortURI(it.source.URI)
-			}
+			name := sourceDisplayName(it)
 			ui.Text(c, fmt.Sprintf("%d  %s", index+1, name)).
 				FontSize(textSmall).SingleLine()
 			if soloed {

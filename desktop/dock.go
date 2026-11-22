@@ -473,7 +473,7 @@ func (a *appState) dockRowsBody(c *ui.Context) {
 					AlignItems(ui.Center).Children(func() {
 					ui.Box(c).Width(6).Height(6).Radius(3).Background(a.sourceDot(row))
 					ui.Column(c).Grow(1).MinWidth(0).Children(func() {
-						ui.Text(c, a.name(row)).FontSize(textBody).FontWeight(500).
+						ui.Text(c, sourceDisplayName(row)).FontSize(textBody).FontWeight(500).
 							TextColor(colorText).MinWidth(0).SingleLine()
 						ui.Text(c, a.rowFacts(row)).FontSize(textMicro).TextColor(colorDim).
 							MinWidth(0).SingleLine()
@@ -517,6 +517,10 @@ func (a *appState) dockRowsBody(c *ui.Context) {
 								})
 						}
 					})
+					a.quietIconButton(c, "row-rename-"+string(row.source.ID), lucide.Pencil(),
+						a.tr("rename this source", "重命名这个来源"), colorDim, func() {
+							a.openRenameSource(row.source.ID)
+						})
 					a.quietIconButton(c, "row-show-"+string(row.source.ID), a.eyeIcon(row),
 						a.eyeTip(row), a.eyeTint(row), func() {
 							a.toggleVideo(index)
@@ -591,7 +595,7 @@ func (a *appState) dockSyncBody(c *ui.Context) {
 		AlignItems(ui.Center).Children(func() {
 		label := a.tr("Reference: none", "参考：无")
 		if reference != nil {
-			label = a.tr("Reference: ", "参考：") + a.name(reference)
+			label = a.tr("Reference: ", "参考：") + sourceDisplayName(reference)
 		}
 		ui.Text(c, label).FontSize(textMicro).TextColor(colorTextDim).Grow(1).MinWidth(0).SingleLine()
 		if a.syncRef != "" {
@@ -618,7 +622,7 @@ func (a *appState) dockSyncBody(c *ui.Context) {
 			}
 			ui.Row(c).WidthPercent(100).Height(lineHeight).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, fmt.Sprintf("source %d", i+1)).FontSize(textBody).FontWeight(400).
-					TextColor(colorText).Grow(1).MinWidth(0).SingleLine().Tooltip(a.name(row))
+					TextColor(colorText).Grow(1).MinWidth(0).SingleLine().Tooltip(sourceDisplayName(row))
 				if !isRef {
 					a.iconButton(c, "sync-ref-"+string(row.source.ID), lucide.Crosshair(),
 						a.tr("make this source the reference", "把这一路设为参考"), false, func() {

@@ -49,7 +49,24 @@ const (
 type Source struct {
 	ID     SourceID
 	URI    string
+	Name   string `json:"name,omitempty"`
 	Tracks []TrackID
+}
+
+// maxNameLength caps a user-set name so a pasted wall of text cannot turn into
+// an unbounded label. It counts runes, not bytes, so wide scripts are not cut
+// mid-character.
+const maxNameLength = 80
+
+// normalizeName trims a display name and caps its length. An empty result means
+// the caller wants the automatic name, so it is stored as empty and the UI falls
+// back to its generated label.
+func normalizeName(name string) string {
+	name = strings.TrimSpace(name)
+	if runes := []rune(name); len(runes) > maxNameLength {
+		name = string(runes[:maxNameLength])
+	}
+	return name
 }
 
 // Track is one audio, video or subtitle track of a Source.
@@ -98,12 +115,14 @@ type EventKind string
 const (
 	EventSourceAdded       EventKind = "source.added"
 	EventSourceRemoved     EventKind = "source.removed"
+	EventSourceRenamed     EventKind = "source.renamed"
 	EventTrackAdded        EventKind = "track.added"
 	EventTrackRemoved      EventKind = "track.removed"
 	EventSyncGroupAdded    EventKind = "syncgroup.added"
 	EventSyncGroupRemoved  EventKind = "syncgroup.removed"
 	EventSceneAdded        EventKind = "scene.added"
 	EventSceneRemoved      EventKind = "scene.removed"
+	EventSceneRenamed      EventKind = "scene.renamed"
 	EventSceneVideoSet     EventKind = "scene.video-set"
 	EventSceneAudioSet     EventKind = "scene.audio-set"
 	EventSceneAudioRemoved EventKind = "scene.audio-removed"
@@ -196,6 +215,22 @@ func (s *Session) RemoveSource(id SourceID) error {
 	}
 	s.sources = removeByID(s.sources, func(v *Source) bool { return v.ID == id })
 	s.record(EventSourceRemoved, string(id))
+	return nil
+}
+
+// RenameSource gives a source a user-set display name. The name is trimmed and
+// capped; an empty name clears it, so the UI falls back to the address's short
+// form. Only a successful rename records an event.
+func (s *Session) RenameSource(id SourceID, name string) error {
+	if err := s.requireOpen("rename source"); err != nil {
+		return err
+	}
+	src, ok := s.source(id)
+	if !ok {
+		return fmt.Errorf("rename source %s: %w", id, ErrNotFound)
+	}
+	src.Name = normalizeName(name)
+	s.record(EventSourceRenamed, string(id))
 	return nil
 }
 
@@ -317,6 +352,22 @@ func (s *Session) RemoveScene(id SceneID) error {
 	}
 	s.scenes = removeByID(s.scenes, func(v *Scene) bool { return v.ID == id })
 	s.record(EventSceneRemoved, string(id))
+	return nil
+}
+
+// RenameScene gives a scene a user-set display name. The name is trimmed and
+// capped; an empty name clears it, so the UI falls back to the generated
+// "Scene N" label. Only a successful rename records an event.
+func (s *Session) RenameScene(id SceneID, name string) error {
+	if err := s.requireOpen("rename scene"); err != nil {
+		return err
+	}
+	scene, ok := s.scene(id)
+	if !ok {
+		return fmt.Errorf("rename scene %s: %w", id, ErrNotFound)
+	}
+	scene.Name = normalizeName(name)
+	s.record(EventSceneRenamed, string(id))
 	return nil
 }
 

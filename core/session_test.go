@@ -759,6 +759,73 @@ func TestKindNames(t *testing.T) {
 	}
 }
 
+// TestRenameSourceAndScene checks the naming rules: names are trimmed, an empty
+// name falls back to the automatic label, an overlong name is capped by runes,
+// unknown ids are reported, and only successful renames record an event.
+func TestRenameSourceAndScene(t *testing.T) {
+	s := NewSession("renames")
+	src, _, _ := addCamera(t, s)
+	scene, err := s.AddScene("")
+	if err != nil {
+		t.Fatalf("add scene: %v", err)
+	}
+
+	if err := s.RenameSource(src.ID, "  Camera A  "); err != nil {
+		t.Fatalf("rename source: %v", err)
+	}
+	if got, err := s.Source(src.ID); err != nil {
+		t.Fatalf("read source: %v", err)
+	} else if got.Name != "Camera A" {
+		t.Fatalf("source name = %q, want %q", got.Name, "Camera A")
+	}
+
+	before := len(s.Events())
+	if err := s.RenameSource(src.ID, ""); err != nil {
+		t.Fatalf("clear source name: %v", err)
+	}
+	if got, err := s.Source(src.ID); err != nil {
+		t.Fatalf("read source: %v", err)
+	} else if got.Name != "" {
+		t.Fatalf("cleared source name = %q, want empty", got.Name)
+	}
+	if got := len(s.Events()); got != before+1 {
+		t.Fatalf("rename events = %d, want %d", got, before+1)
+	}
+
+	long := ""
+	for i := 0; i < maxNameLength+20; i++ {
+		long += "字"
+	}
+	if err := s.RenameScene(scene.ID, long); err != nil {
+		t.Fatalf("rename scene: %v", err)
+	}
+	if got, err := s.Scene(scene.ID); err != nil {
+		t.Fatalf("read scene: %v", err)
+	} else if want := maxNameLength; len([]rune(got.Name)) != want {
+		t.Fatalf("capped scene name has %d runes, want %d", len([]rune(got.Name)), want)
+	}
+
+	if err := s.RenameSource(SourceID("source-999"), "x"); err == nil {
+		t.Fatal("renaming an unknown source was accepted")
+	} else if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown source rename error = %v, want ErrNotFound", err)
+	}
+	if err := s.RenameScene(SceneID("scene-999"), "x"); err == nil {
+		t.Fatal("renaming an unknown scene was accepted")
+	} else if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown scene rename error = %v, want ErrNotFound", err)
+	}
+
+	if err := s.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if err := s.RenameSource(src.ID, "after close"); err == nil {
+		t.Fatal("renaming on a closed session was accepted")
+	} else if !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed rename error = %v, want ErrClosed", err)
+	}
+}
+
 // addCamera adds a camera source with a video and an audio track.
 func addCamera(t *testing.T, s *Session) (Source, Track, Track) {
 	t.Helper()

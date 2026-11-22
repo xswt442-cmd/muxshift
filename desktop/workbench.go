@@ -187,6 +187,9 @@ func (a *appState) shell(c *ui.Context, width, height float32) {
 		if a.addOpen {
 			a.addSourceDialog(c)
 		}
+		if a.renameOpen {
+			a.renameDialog(c)
+		}
 	})
 }
 
@@ -218,7 +221,7 @@ func (a *appState) pageBody(c *ui.Context, width, height float32) {
 func (a *appState) sceneLabelText() string {
 	for i, scene := range a.session.Scenes() {
 		if scene.ID == a.scene {
-			return fmt.Sprintf(a.tr("Scene %d", "场景 %d"), i+1)
+			return a.sceneDisplayName(scene, i)
 		}
 	}
 	return a.tr("Scene", "场景")
@@ -294,7 +297,7 @@ func (a *appState) sourceEntry(c *ui.Context, it *item, index int, compact bool)
 		ui.Column(c).Grow(1).Gap(0).Children(func() {
 			ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
 				ui.Box(c).Width(5).Height(5).Radius(2.5).Background(a.sourceDot(it))
-				ui.Text(c, shortURI(it.uri)).FontSize(nameSize).FontWeight(nameWeight).
+				ui.Text(c, sourceDisplayName(it)).FontSize(nameSize).FontWeight(nameWeight).
 					TextColor(colorText).SingleLine()
 				if !compact {
 					a.sourceMarks(c, it)
@@ -307,6 +310,7 @@ func (a *appState) sourceEntry(c *ui.Context, it *item, index int, compact bool)
 			}
 		})
 		if compact {
+			a.sourceRenameButton(c, it)
 			a.sourceEye(c, it, index)
 			return
 		}
@@ -339,9 +343,21 @@ func (a *appState) sourceEye(c *ui.Context, it *item, index int) {
 		})
 }
 
+// sourceRenameButton is the pencil each source row carries, so a person can give
+// a source their own name without leaving the list.
+func (a *appState) sourceRenameButton(c *ui.Context, it *item) {
+	a.quietIconButton(c, "sc-rename-"+string(it.source.ID), lucide.Pencil(),
+		a.tr("Rename", "重命名"), colorDim, func() {
+			a.openRenameSource(it.source.ID)
+		})
+}
+
 // sourceActions is the card density's control row.
 func (a *appState) sourceActions(c *ui.Context, it *item, index int) {
 	ui.Row(c).Gap(spaceXs).Children(func() {
+		if ui.Button(c.Key("card-rename-"+string(it.source.ID)), a.tr("Rename", "重命名")).Height(28).Clicked() {
+			a.openRenameSource(it.source.ID)
+		}
 		show := a.tr("Hide", "隐藏")
 		if !it.shown {
 			show = a.tr("Show", "显示")
@@ -383,7 +399,7 @@ func (a *appState) sceneColumnBody(c *ui.Context, expanded bool) {
 					}
 					for _, it := range a.items {
 						if ui.Button(c.Key("rail-src-"+string(it.source.ID)), "▢").Width(28).Height(26).
-							Tooltip(shortURI(it.uri)).Clicked() {
+							Tooltip(sourceDisplayName(it)).Clicked() {
 							a.selected = it.source.ID
 							a.invalidate()
 						}
@@ -456,7 +472,7 @@ func (a *appState) sceneList(c *ui.Context) {
 				if current {
 					bar = bar.Background(colorSelectedText)
 				}
-				label := ui.Text(c, a.tr("Scene ", "场景 ")+itoa(i+1)).FontSize(textBody).
+				label := ui.Text(c, a.sceneDisplayName(sc, i)).FontSize(textBody).
 					FontWeight(500)
 				if current {
 					label = label.TextColor(colorSelectedText)
@@ -466,6 +482,10 @@ func (a *appState) sceneList(c *ui.Context) {
 				ui.Box(c).Grow(1)
 				ui.Text(c, itoa(len(sc.Video))).FontSize(textMicro).TextColor(colorDim).
 					FontFeatures("tnum")
+				a.iconButton(c, "scene-rename-"+string(sc.ID), lucide.Pencil(),
+					a.tr("rename this scene", "重命名这个场景"), false, func() {
+						a.openRenameScene(sc.ID)
+					})
 				if len(scenes) > 1 {
 					a.iconButton(c, "scene-drop-"+string(sc.ID), lucide.X(),
 						a.tr("remove this scene", "删除这个场景"), false, func() {
@@ -922,7 +942,7 @@ func (a *appState) transportBar(c *ui.Context) {
 				})
 				ui.Box(c).Width(1).Height(20).Background(colorLineSoft)
 				if first != nil {
-					ui.Text(c, a.name(first)).FontSize(textCaption).TextColor(colorTextDim).
+					ui.Text(c, sourceDisplayName(first)).FontSize(textCaption).TextColor(colorTextDim).
 						MaxWidth(220).SingleLine().Padding(spaceSm, 0)
 				}
 				// The event clock only means something once the shared timeline
@@ -1124,7 +1144,7 @@ func (a *appState) mixerChannel(c *ui.Context, it *item) {
 		AlignItems(ui.Center)
 	row.Children(func() {
 		ui.Box(c).Width(6).Height(6).Radius(3).Background(colorSound)
-		ui.Text(c, shortURI(it.uri)).FontSize(textSmall).FontWeight(400).TextColor(colorText).
+		ui.Text(c, sourceDisplayName(it)).FontSize(textSmall).FontWeight(400).TextColor(colorText).
 			Grow(1).MinWidth(0).SingleLine()
 		muted := a.sourceMuted(it)
 		icon := lucide.Volume2()
@@ -1176,7 +1196,7 @@ func (a *appState) mixerStrip(c *ui.Context) {
 		ui.Column(c).WidthPercent(100).Padding(0, spaceMd).Gap(2).Children(func() {
 			for _, it := range a.items {
 				ui.Row(c).WidthPercent(100).Height(26).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, shortURI(it.uri)).FontSize(textMicro).TextColor(colorText).Width(90).SingleLine()
+					ui.Text(c, sourceDisplayName(it)).FontSize(textMicro).TextColor(colorText).Width(90).SingleLine()
 					if ui.Slider(c, &it.volume, 0, 1).Grow(1).Height(16).Changed() {
 						a.runCommand(command{Kind: commandVolume, Source: it.source.ID, Volume: it.volume})
 					}

@@ -3,7 +3,13 @@
 `muxshift.iss` is the per-user Inno Setup script. It installs the files from an
 already built release directory under `%LocalAppData%\Programs\MuxShift`,
 creates Start Menu shortcuts and an optional desktop shortcut, and registers an
-uninstall entry.
+uninstall entry. The release directory carries the browser extension under
+`extension\` and the documents under `docs\`, so an installed copy has the same
+layout as the portable ZIP.
+
+The script refuses to compile (`#error`) when the release directory has no
+`extension\manifest.json`, so a setup cannot be built from a release that
+forgot to package the extension the desktop window pairs with.
 
 Build the release first, then the setup:
 
@@ -20,5 +26,5 @@ The installer does not download or replace an existing copy; it writes only the
 release directory it is given. Silent installation for a check:
 
 ```powershell
-dist\muxshift-0.0.3-windows-amd64-setup.exe /VERYSILENT /NORESTART /DIR=C:\Temp\MuxShift-Test
+dist\muxshift-<version>-windows-amd64-setup.exe /VERYSILENT /NORESTART /DIR=C:\Temp\MuxShift-Test
 ```

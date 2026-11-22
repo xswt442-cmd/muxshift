@@ -9,7 +9,7 @@
   </p>
   <p>
     <a href="https://github.com/xswt442-cmd/muxshift/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/xswt442-cmd/muxshift/actions/workflows/ci.yml/badge.svg?branch=dev"></a>
-    <a href="https://github.com/xswt442-cmd/muxshift/releases"><img alt="release" src="https://img.shields.io/badge/release-v0.0.3-5d77f5"></a>
+    <a href="https://github.com/xswt442-cmd/muxshift/releases"><img alt="release" src="https://img.shields.io/badge/release-v0.0.4-5d77f5"></a>
     <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-5d77f5"></a>
     <a href="go.mod"><img alt="Go 1.27" src="https://img.shields.io/badge/go-1.27-5d77f5"></a>
   </p>
@@ -17,7 +17,7 @@
 
 ## Download
 
-[Releases](https://github.com/xswt442-cmd/muxshift/releases) ship a Windows amd64 installer (`muxshift-0.0.3-windows-amd64-setup.exe`) and a portable ZIP (`muxshift-0.0.3-windows-amd64.zip`). The installer installs per user, creates Start Menu and optional desktop shortcuts, and registers an uninstall entry; the ZIP runs `muxshift.exe` after unpacking. Both are GUI programs, so a normal start carries no console window; they need Windows 10/11 and the Media Foundation that comes with it. The archive also carries `VERSION.txt`, `THIRD-PARTY.md`, and the checksum. Building from source is under [quick start](#quick-start).
+[Releases](https://github.com/xswt442-cmd/muxshift/releases) ship a Windows amd64 installer (`muxshift-0.0.4-windows-amd64-setup.exe`) and a portable ZIP (`muxshift-0.0.4-windows-amd64.zip`). The installer installs per user, creates Start Menu and optional desktop shortcuts, and registers an uninstall entry; the ZIP runs `muxshift.exe` after unpacking. Both give the same layout: the program and `VERSION.txt` at the top, the browser extension under `extension\`, and the documents under `docs\`. Both are GUI programs, so a normal start carries no console window; they need Windows 10/11 and the Media Foundation that comes with it. Building from source is under [quick start](#quick-start).
 
 ## What it does
 
@@ -67,7 +67,7 @@ Behind a proxy: the desktop app reads `HTTP_PROXY`/`HTTPS_PROXY` first, then the
 
 - **Local file** opens the system file picker and adds the chosen file to the current session; cancelling changes nothing.
 - **Media link** takes an http(s) HLS playlist or a directly readable media file. The desktop reads what the address actually serves rather than trusting its extension, so a web page, a 404, or an unsupported type is reported as an error.
-- **Website address** opens the page in the system browser. For the page's own address to reach the desktop, load the extension in `extension/` (unpacked; no Native Host): take the one-time pairing code from the Diagnostics page, paste it into the popup once, then pick the address the page has loaded.
+- **Website address** opens the page in the system browser. For the page's own address to reach the desktop, load the browser extension shipped with the program: open Settings → About → Browser extension and press "Open the folder", or open the `extension` folder in the install directory, then load it unpacked in the browser (`edge://extensions` or `chrome://extensions` → developer mode → Load unpacked). No Native Host is needed: take the one-time pairing code from the Diagnostics page, paste it into the popup once, then pick the address the page has loaded.
 
 On Bilibili, Twitch, Kick, and YouTube live pages, the popup adds `Use this live stream`. The desktop receives one signed URL and no cookie; a stream with `#EXT-X-KEY` is refused, and a stream without `#EXT-X-ENDLIST` opens as live and starts on its own. A master with a separate audio rendition is also refused, because the current player opens one address and cannot keep the video plus a second audio playlist. The extension's mirror pick is best-effort: a cross-origin opaque response cannot prove a mirror plays, so the desktop still refuses an address by its playlist contents.
 

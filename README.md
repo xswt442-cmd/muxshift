@@ -9,7 +9,7 @@
   </p>
   <p>
     <a href="https://github.com/xswt442-cmd/muxshift/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/xswt442-cmd/muxshift/actions/workflows/ci.yml/badge.svg?branch=dev"></a>
-    <a href="https://github.com/xswt442-cmd/muxshift/releases"><img alt="release" src="https://img.shields.io/badge/release-v0.0.3-5d77f5"></a>
+    <a href="https://github.com/xswt442-cmd/muxshift/releases"><img alt="release" src="https://img.shields.io/badge/release-v0.0.4-5d77f5"></a>
     <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-5d77f5"></a>
     <a href="go.mod"><img alt="Go 1.27" src="https://img.shields.io/badge/go-1.27-5d77f5"></a>
   </p>
@@ -17,7 +17,7 @@
 
 ## 下载
 
-[Releases](https://github.com/xswt442-cmd/muxshift/releases) 提供 Windows amd64 安装器（`muxshift-0.0.3-windows-amd64-setup.exe`）和便携 ZIP（`muxshift-0.0.3-windows-amd64.zip`）。安装器按当前用户安装，创建开始菜单快捷方式与可选的桌面快捷方式，并注册卸载项；ZIP 解压后直接运行 `muxshift.exe`。两者都是 GUI 程序，正常启动不会带控制台窗口；运行需要 Windows 10/11 和系统自带的 Media Foundation。压缩包里还有 `VERSION.txt`、`THIRD-PARTY.md` 和校验值。从源码构建见[快速开始](#快速开始)。
+[Releases](https://github.com/xswt442-cmd/muxshift/releases) 提供 Windows amd64 安装器（`muxshift-0.0.4-windows-amd64-setup.exe`）和便携 ZIP（`muxshift-0.0.4-windows-amd64.zip`）。安装器按当前用户安装，创建开始菜单快捷方式与可选的桌面快捷方式，并注册卸载项；ZIP 解压后直接运行 `muxshift.exe`。两种方式得到同一套目录：程序与 `VERSION.txt` 在顶层，浏览器扩展在 `extension\`，文档在 `docs\`。两者都是 GUI 程序，正常启动不会带控制台窗口；运行需要 Windows 10/11 和系统自带的 Media Foundation。从源码构建见[快速开始](#快速开始)。
 
 ## 能做什么
 
@@ -67,7 +67,7 @@ go run ./web -media-root <媒体目录> \
 
 - **本地文件**：用系统文件选择器选择文件，选中后加入当前会话。取消选择时，会话保持不变。
 - **媒体链接**：http(s) 的 HLS 播放列表，或可以直接读取的媒体文件。桌面端按响应内容判断类型，不看扩展名，地址返回网页、404 或不支持的类型时都会报错。
-- **网站地址**：用系统浏览器打开页面。要让页面里的地址进入桌面端，需要加载 `extension/` 里的扩展，解压加载即可，不需要 Native Host：先在诊断页读取一次性配对码，粘贴到扩展弹窗完成配对，再在弹窗里选中页面已加载的那一条地址。
+- **网站地址**：用系统浏览器打开页面；要让页面里的地址进入桌面端，需要加载随程序附带的浏览器扩展，在 设置 → 关于 → 浏览器扩展 点「打开目录」（或打开安装目录下的 `extension` 文件夹），再在浏览器里以未打包方式加载。然后从诊断页取一次性配对码、在扩展弹窗里粘贴完成配对，最后在弹窗里选中页面已加载的那一条地址，不需要 Native Host。
 
 在 B 站、Twitch、Kick 和 YouTube 的直播页，扩展弹窗会多出 `Use this live stream`。桌面端拿到的是一条签名地址，不带 Cookie。带 `#EXT-X-KEY` 的加密流会被拒绝。播放列表没有 `#EXT-X-ENDLIST` 时，桌面端按直播打开并自动播放。master 使用独立音频 rendition 时也会被拒绝，因为当前播放器只打开一个地址，无法同时保留视频与另一条音频列表。扩展的线路探测是 best-effort：跨源不透明响应无法证明线路可播放，桌面端仍会按播放列表内容拒绝不可用的地址。
 

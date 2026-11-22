@@ -14,7 +14,7 @@
 | `core/hls/` | HLS 元信息读取 | 读播放列表、轨道与首个样本时间，不转码、不对外供流 |
 | `desktop/` | MyGo 桌面实验应用 | 场景栏、画布与控制台；把多个媒体源登记进一个 Core 会话，按场景显示画面与听见声音，并管理播放器生命周期；不承载共享业务逻辑 |
 | `web/` | Web 客户端（hls.js 与 MSE） | 只监听本机的会话服务与静态页面；播放能力受浏览器限制，不假装等同桌面 |
-| `extension/` | 浏览器扩展与本机 Host | 把用户点击后选中的那一个页面地址交给正在运行的会话；不复制 Cookie、请求头或密钥 |
+| `extension/` | 浏览器扩展 | 把用户点击后选中的那一个页面地址交给正在运行的会话；不复制 Cookie、请求头或密钥 |
 | `tools/separate/` | 实验脚本 | 用自带权重把一段录音分成人声与非人声两份 WAV；不在播放路径上，模型权重不随仓库发布 |
 | `design/`、`tools/designtokens/` | 设计基础值与生成器 | `design/tokens.json` 保存共享的颜色、圆角、间距与字号基础值，生成 `web/tokens.css`；桌面端在 `desktop/tokens.go` 中维护同一套基础值，并提供午夜、石墨、日光、青瓷、纯黑五套运行时配色 |
 | `testplace/` | 本地忽略目录 | 实验、临时记录、Agent 工作文件 |
@@ -273,15 +273,15 @@ dock 是会话「真正知道什么」的只读视图，每个源一行：Track 
 
 浏览器与桌面端的支持范围不同，不做等价假设：Web 端不参与跨源对轴，不保留历史窗口，Seek 只能落在已缓冲范围内，直播播放列表从直播边缘开始。浏览器要求用户交互后才允许出声，因此所有源一开始静音，第一次点击后才放开场景里被听见的那一路。播放失败以 hls.js 的错误类型或媒体元素错误码显示，不隐藏也不假装播放成功。
 
-## 浏览器扩展与本机 Host
+## 浏览器扩展
 
-`extension/` 是一个 Manifest V3 扩展，权限只有 `activeTab`、`scripting` 与 `nativeMessaging`，没有主机权限，因此用户不点击就无法读取任何页面。用户点击后，后台脚本在被激活的标签页里执行一次只读扫描：收集 `video`、`audio`、`source` 的 `src` 与 `currentSrc`，以及看起来像媒体的资源条目。`blob:` 与 `mediasource:` 地址属于页面自身，会被拒绝并说明「页面自己持有分片、没有可导入地址」，带凭据的地址直接拒绝。
+`extension/` 是一个 Manifest V3 扩展，权限只有 `activeTab`、`scripting` 与 `storage`，主机权限只有 `http://127.0.0.1:8731/*`，因此用户不点击就无法读取任何页面。用户点击后，后台脚本在被激活的标签页里执行一次只读扫描：收集 `video`、`audio`、`source` 的 `src` 与 `currentSrc`，以及看起来像媒体的资源条目。`blob:` 与 `mediasource:` 地址属于页面自身，会被拒绝并说明「页面自己持有分片、没有可导入地址」，带凭据的地址直接拒绝。
 
-用户确认其中一个地址后，扩展用 `chrome.runtime.sendNativeMessage` 调用本机 Host `com.muxshift.bridge`。Native Messaging 只传这条控制消息，不传媒体。Host 是 `extension/host/` 里的 Go 程序，它首先核对第一个参数里的调用方 origin 必须等于 `manifest.json` 中固定 `key` 推出的扩展 ID（`chrome-extension://agacmebmmcbkblmekgdkfcehehccl/`），然后读取会话写下的 `%LOCALAPPDATA%\MuxShift\bridge.json`（地址与桥接令牌，权限 0600），用该令牌以 `X-MuxShift-Bridge` 头调用 `POST /api/import`。桥接令牌与页面令牌是两个不同的值：前者只存在于本机文件与 Host 之间，后者只到页面，因此页面即使带着自己的 Cookie 也导入不了任何东西。日志只记录导入地址的 scheme、主机名与路径，带签名参数的地址不会把凭据写进日志。
+用户确认其中一个地址后，扩展把 `{url}` POST 到桌面窗口自己的回环监听 `http://127.0.0.1:8731/import`，请求头带 `X-MuxShift-Handoff` 令牌。这一版不引入 Native Host：诊断页显示一个六位一次性配对码，扩展弹窗首次输入该码时调用 `POST /pair` 换回令牌并存在 `chrome.storage.local`。配对码用过即废、由窗口轮换；令牌与配对码只活在窗口内存里，关闭窗口即结束配对，下次启动显示新码。监听只接受自己的 `Host`、空 `Origin` 或以 `chrome-extension://` 开头的 `Origin`，以及小于 8 KiB 的 JSON 请求体。这些不是对本机其他进程的身份认证，真正拦住它的是它拿不到的令牌。日志只记录导入地址的 scheme、主机名与路径，带签名参数的地址不会把凭据写进日志。
 
-需要说明的是，`allowed_origins` 与第一个参数里的 origin 是浏览器在扩展与 Host 之间执行的约束，不是对本机其他进程的强身份认证——那类进程可以自己启动 Host，真正拦住它的是它拿不到的桥接令牌。
+会话对导入地址做同样严格的检查：只接受 `http(s)`、必须有主机、拒绝带凭据的 URL、拒绝重复登记。然后走与其它源相同的 `AddSource` 与 `AddTrack`，所以扩展无法直接改时间轴或碰桌面端私有实现。跨源地址按目标站点的 CORS 规则播放，本地服务不做代理，受保护媒体一律不碰。扩展不提供标签页采集：采集得到的是只有浏览器能解码的实时流，而本地会话接收的是可播放地址或文件，因此在弹窗里直接说明这一点而不是假装能捕获。
 
-会话对导入地址做同样严格的检查：只接受 `http(s)`、必须有主机、拒绝带凭据的 URL、拒绝重复登记。然后走与其它源相同的 `AddSource` 与 `AddTrack`，所以扩展无法直接改时间轴或碰桌面端私有实现。页面每两秒读一次会话，导入的源无需刷新就出现。跨源地址按目标站点的 CORS 规则播放，本地服务不做代理，受保护媒体一律不碰。扩展不提供标签页采集：采集得到的是只有浏览器能解码的实时流，而本地会话接收的是可播放地址或文件，因此在弹窗里直接说明这一点而不是假装能捕获。
+正式发布把扩展放在 `muxshift.exe` 旁边的 `extension\` 目录，设置 → 关于的「浏览器扩展」小节显示该目录并可在文件管理器里打开；加载解包扩展与配对都由用户完成，程序不替浏览器安装任何东西。`extension/host/` 里的旧 Native Messaging 程序这一版不被扩展使用，仅保留给 Web 会话的 `bridge.json` 导入路径。
 
 ## 人声分离实验
 
@@ -315,4 +315,4 @@ dock 是会话「真正知道什么」的只读视图，每个源一行：Track 
 - Go Core 与 MyGo 的 UI 生命周期分离。桌面端当前用 MyGo 的原生播放，其它媒体引擎、音频推理与传输协议尚未确定，不把候选技术写成已集成依赖。
 - `testplace/` 不进入版本控制；正式文档仅维护稳定且可验证的仓库事实。
 
-可执行的验证入口、每项检查覆盖什么、哪些只能在真窗口里跑，见[验证索引](VERIFICATION.md)。要点：仓库根目录与 `desktop/` 是两个 Go module，各自跑 `go test ./...`。桌面端的播放、切换、回看与布局结果不进入单元测试，由 `desktop` 的场景脚本在 Windows 的真实窗口里测量。Web 客户端的真实播放要在浏览器里核对（Chromium 与 Edge 实测通过，未安装的浏览器记为 not_run）。本机 Host 与扩展的桥接在 Edge 里以未打包方式手工验证。人声分离与自动对轴脚本不属于 Go 模块，各自的数字见 `tools/separate/README.md` 与 `tools/align/README.md`。
+可执行的验证入口、每项检查覆盖什么、哪些只能在真窗口里跑，见[验证索引](VERIFICATION.md)。要点：仓库根目录与 `desktop/` 是两个 Go module，各自跑 `go test ./...`。桌面端的播放、切换、回看与布局结果不进入单元测试，由 `desktop` 的场景脚本在 Windows 的真实窗口里测量。Web 客户端的真实播放要在浏览器里核对（Chromium 与 Edge 实测通过，未安装的浏览器记为 not_run）。扩展的加载与一次性配对在 Edge 里以未打包方式手工验证。。人声分离与自动对轴脚本不属于 Go 模块，各自的数字见 `tools/separate/README.md` 与 `tools/align/README.md`。

@@ -63,6 +63,11 @@ not answering; a new window shows a new code, so pair again.
 
 ## Loading the extension
 
+In a release the extension sits in an `extension\` folder beside `muxshift.exe`.
+Open Settings → About in the desktop window and press **Open the folder** under
+"Browser extension" to reach it, or open that folder by hand after unpacking the
+ZIP.
+
 Edge and Chrome load an unpacked extension from `edge://extensions` or
 `chrome://extensions` with developer mode on, or Playwright can start a browser
 with `--load-extension` (see `testplace/.playwright/cli-ext.config.json`).

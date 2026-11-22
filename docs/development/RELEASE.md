@@ -7,15 +7,15 @@ MuxShift 只有一个发行产品：Windows amd64 桌面版 ZIP。版本、更�
 | 版本来源 | 仓库根目录 `VERSION`（`x.y.z`），`CHANGELOG.md` 的同名版本章节 |
 | 标签 | annotated tag `vX.Y.Z` |
 | 发布渠道 | GitHub Releases |
-| 正式资产 | `muxshift-<version>-windows-amd64.zip`，内含 `VERSION.txt`、`THIRD-PARTY.md` 与校验值 |
+| 正式资产 | `muxshift-<version>-windows-amd64.zip`（便携 ZIP）与 `muxshift-<version>-windows-amd64-setup.exe`（按用户安装器）；两者携带同一套目录：`muxshift.exe`、`LICENSE`、`VERSION.txt` 在顶层，浏览器扩展在 `extension\`，文档在 `docs\` |
 
 ## 发行流程
 
 1. **版本准备随功能或修复的 PR 一起完成，不单独提交版本 PR。** 同一提交里更新 `VERSION`、`CHANGELOG.md` 的双语条目，版本号变化时还要运行 `scripts\winres.ps1` 重新生成并提交 `desktop\rsrc_windows_amd64.syso`；合入 `dev`、再经审查合入 `main` 后，该提交才具备发布资格。
 2. **打标签是独立的一步：手动触发 `tag.yml`，输入精确版本。** 它只核对并打标签，不构建任何产物，检查项有四项：`VERSION` 与输入一致、目标标签不存在、提交等于当前 `main` 头部、`main` push CI 已经通过；任一项不满足就以失败状态结束，不自动提交版本、不强制打标签、不跳过检查。
-3. **发布是另一个独立步骤：标签存在后，手动触发 `release.yml` 并输入同一版本，`release.yml` 从不创建或移动标签。** 它先确认标签已经存在、`VERSION` 与标签一致，再检出该标签构建并运行 `scripts\verify-release.ps1`：该脚本从两个不同目录各克隆一次仓库并在两边构建，要求两次产出的字节一致（构建使用 `-trimpath` 并关闭 cgo），同时检查二进制自述的提交与标签提交相同、不含构建机器的路径、PE 资源里有图标与版本块、版本块与 `VERSION` 一致。
-4. **生成 Release 正文，中文在前、English 在后，末尾不追加中英混排的内容。** 正文由 `scripts\release-notes.ps1 -Tag vX.Y.Z -Asset <zip>` 生成：版本章节从 `CHANGELOG.md` 提取，标题只写 `MuxShift vX.Y.Z`，随后按实际产出的 ZIP 追加「下载」与「校验下载」两节，列出文件名、大小、SHA-256 和下载链接。
-5. **创建 Release 草稿并核对后再公开。** 草稿里应当只有本次实际产出的 ZIP 与 `VERSION.txt`，SHA-256 与文件一致；公开后不移动标签、不替换二进制，说明有误时只修改正文。
+3. **发布是另一个独立步骤：标签存在后，手动触发 `release.yml` 并输入同一版本，`release.yml` 从不创建或移动标签。** 它先确认标签存在、`VERSION` 与标签一致，再检出该标签构建并运行 `scripts\verify-release.ps1`。该脚本从两个不同目录各克隆一次仓库并在两边构建，要求两次产出的字节一致（`-trimpath` 并关闭 cgo）。它还检查二进制自述的提交与标签提交相同、不含构建机器的路径、PE 资源里有图标与版本块、版本块与 `VERSION` 一致，并确认发布目录带上 `extension\` 与 `docs\`。随后 `release.yml` 调用 `scripts\build-installer.ps1` 生成安装器；`installer\muxshift.iss` 用 `#error` 拒绝缺少 `extension\manifest.json` 的发布目录，因而不会产出装好却没有扩展的安装包。
+4. **生成 Release 正文，中文在前、English 在后，末尾不追加中英混排的内容。** 正文由 `scripts\release-notes.ps1 -Tag vX.Y.Z -Asset <zip> -Setup <setup.exe>` 生成：版本章节从 `CHANGELOG.md` 提取，标题只写 `MuxShift vX.Y.Z`，随后按实际产出的 ZIP 与安装器追加「下载」与「校验下载」两节，列出文件名、大小、SHA-256 和下载链接。
+5. **创建 Release 草稿并核对后再公开。** 草稿里应当只有本次实际产出的 ZIP、安装器与 `VERSION.txt`，SHA-256 与文件一致；公开后不移动标签、不替换二进制，说明有误时只修改正文。
 
 ## 更新记录规则
 
@@ -31,6 +31,7 @@ MuxShift 只有一个发行产品：Windows amd64 桌面版 ZIP。版本、更�
 scripts\winres.ps1          # 版本变了才需要，产物要提交
 scripts\release.ps1         # 产出 dist\muxshift-<version>-windows-amd64
 scripts\verify-release.ps1  # 干净克隆、双目录构建、资源与路径检查
+scripts\build-installer.ps1 # 在发布目录外包一层按用户安装器（需要 Inno Setup 6）
 ```
 
 工作树有未提交的改动时，`release.ps1` 拒绝构建，传入 `-AllowDirty` 才会继续，并把产物的版本号标成 `+dirty`。版本块与 `VERSION` 不一致时，`release.ps1` 同样拒绝构建。

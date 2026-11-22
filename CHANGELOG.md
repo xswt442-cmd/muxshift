@@ -4,6 +4,36 @@
 
 This changelog records completed changes that matter to someone using MuxShift. GitHub Release notes come from the matching tagged section, not a separately maintained summary.
 
+## [0.0.4] - 2026-11-22
+
+### 简体中文
+
+**新增**
+
+- 设置 → 关于新增「浏览器扩展」小节：显示随程序打包的扩展目录，一键在文件管理器中打开，并给出加载解包扩展与配对的操作步骤。
+
+**改进**
+
+- 安装目录重整为三段：`muxshift.exe`、许可证与 `VERSION.txt` 在顶层，浏览器扩展归入 `extension\`，用户文档归入 `docs\`。安装器与便携 ZIP 采用同一结构。
+
+**修复**
+
+- 安装器与便携 ZIP 现在真正带上浏览器扩展（`extension\`）。此前发布产物没有任何扩展文件，README 让用户加载 `extension\` 却无处可找，网页地址因此无法导入桌面端。
+
+### English
+
+**Added**
+
+- Settings → About has a new "Browser extension" section: it shows the extension folder shipped beside the program, opens that folder in the file manager, and lists the steps to load the unpacked extension and pair.
+
+**Improved**
+
+- The install layout is now three parts: `muxshift.exe` with the licence and `VERSION.txt` at the top, the browser extension under `extension\`, and the user documents under `docs\`. The installer and the portable ZIP share this layout.
+
+**Fixed**
+
+- The installer and the portable ZIP now actually carry the browser extension (`extension\`). Earlier releases shipped no extension files at all while the README told users to load `extension\`, so a website address could never reach the desktop window.
+
 ## [0.0.3] - 2026-11-22
 
 ### 简体中文

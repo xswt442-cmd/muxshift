@@ -97,14 +97,13 @@ func (a *appState) fontFamily() string {
 // syncAppearance rebuilds the token vars when the applied settings name a
 // different theme, scale or font. It runs at the top of view, before the theme
 // is handed to the window, so the first frame already uses the saved look.
+//
+// Appearance is applied the moment a control changes (applyAppearanceNow), so
+// the live settings always name the look to draw; there is no draft preview to
+// undo when the page is left. An unapplied Reset must likewise not repaint the
+// window, which is why the draft is not read here.
 func (a *appState) syncAppearance() {
-	// The Appearance page previews its draft, so a theme or a size can be seen
-	// before Apply. Leaving the page or undoing the draft asks for the applied
-	// settings again and the preview goes away with it.
 	theme, scale := a.settings.Theme, a.settings.TextScale
-	if a.workspace == workspaceSettings {
-		theme, scale = a.settingsDraft.Theme, a.settingsDraft.TextScale
-	}
 	if a.appliedTheme != theme {
 		applyPalette(themePack(theme))
 		a.appliedTheme = theme

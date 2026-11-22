@@ -223,8 +223,8 @@ func (a *appState) extensionBlock(c *ui.Context) {
 	dir, err := a.extensionFolder()
 	if err != nil {
 		ui.Text(c, err.Error()).FontSize(textSmall).TextColor(colorBad).Wrap()
-		ui.Text(c, a.tr("a release puts the extension in an extension folder beside muxshift.exe; this build has none",
-			"正式发布包会把扩展放在 muxshift.exe 旁边的 extension 目录；这个构建没有该目录")).
+		ui.Text(c, a.tr("a release ships the extension beside muxshift.exe; this build has none",
+			"正式发布包会把扩展放在 muxshift.exe 旁边；这个构建没有")).
 			FontSize(textMicro).TextColor(colorTextDim).Wrap()
 		return
 	}
@@ -236,11 +236,11 @@ func (a *appState) extensionBlock(c *ui.Context) {
 		if ui.Button(c.Key("about-open-extension"), a.tr("Open the folder", "打开目录")).Height(30).Clicked() {
 			a.report(a.runCommand(command{Kind: commandOpenExtension}))
 		}
-		ui.Text(c, a.tr("then load it unpacked: edge://extensions or chrome://extensions, turn on developer mode, Load unpacked, choose this folder",
-			"再在浏览器里加载：edge://extensions 或 chrome://extensions → 开发人员模式 → 加载解压缩的扩展 → 选这个目录")).
+		ui.Text(c, a.tr("load it unpacked: edge://extensions or chrome://extensions → developer mode → Load unpacked",
+			"加载：edge://extensions 或 chrome://extensions → 开发人员模式 → 加载解压缩的扩展")).
 			FontSize(textMicro).TextColor(colorTextDim).Wrap()
 	})
-	ui.Text(c, a.tr("pair once with the code on Diagnostics; the pairing ends when this window closes",
-		"在诊断页取一次配对码完成配对；窗口关闭后需要重新配对")).
+	ui.Text(c, a.tr("pair once on Diagnostics; the pairing ends when this window closes",
+		"在诊断页配对一次；窗口关闭后失效")).
 		FontSize(textMicro).TextColor(colorTextDim).Wrap()
 }

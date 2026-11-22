@@ -86,6 +86,7 @@ func (a *appState) confirmRename() {
 	}
 	a.closeRename()
 	a.apply()
+	a.saveSession()
 	a.invalidate()
 }
 

@@ -110,6 +110,17 @@ func (a *appState) itemBySource(id core.SourceID) (*item, int, error) {
 	return nil, -1, fmt.Errorf("%w: %s", UnknownSourceError, id)
 }
 
+// commandChangesSession reports whether a successful command changed something
+// the session snapshot keeps, so the change is written once instead of on every
+// command (a pause or a nudge does not change the saved arrangement).
+func commandChangesSession(kind commandKind) bool {
+	switch kind {
+	case commandShow, commandHear, commandAllow, commandVolume, commandMute, commandRemove:
+		return true
+	}
+	return false
+}
+
 // runCommand is the one door a button uses. It must be called on the drawing
 // thread: it touches players and the window's items.
 func (a *appState) runCommand(cmd command) commandResult {
@@ -120,6 +131,10 @@ func (a *appState) runCommand(cmd command) commandResult {
 		a.lastCommand = result
 		if err != nil {
 			a.lastErr = safeOpenError(err)
+		} else if commandChangesSession(cmd.Kind) {
+			// A command that changed what the session holds is worth saving:
+			// the next start should come back to this arrangement.
+			a.saveSession()
 		}
 		return result
 	}

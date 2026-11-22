@@ -545,6 +545,7 @@ func (a *appState) removeScene(id core.SceneID) {
 	a.pruneStageEdits()
 	a.apply()
 	a.invalidate()
+	a.saveSession()
 }
 
 // sceneRow is the single-line scene label used where only the current scene

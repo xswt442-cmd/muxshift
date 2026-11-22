@@ -389,6 +389,11 @@ type appState struct {
 	saveSeq      atomic.Uint64
 	saveDone     atomic.Uint64
 
+	// sessionPath is where the session snapshot lives, derived from the settings
+	// path so the two files sit together; empty when there is nowhere to write.
+	// See session_store.go.
+	sessionPath string
+
 	// The rename dialog edits one scene's or one source's display name. It is
 	// kept here so a redraw does not lose what was typed; see rename.go.
 	renameOpen bool
@@ -883,6 +888,7 @@ func (a *appState) landImport(token int, uri string, stream hls.Stream, mode imp
 				}
 			}
 			a.apply()
+			a.saveSession()
 			if live {
 				// A live stream arrives without a timeline to align against:
 				// the picture is already moving, so the shared clock starts
@@ -1105,6 +1111,7 @@ func (a *appState) addScene() {
 	a.scene = scene.ID
 	a.apply()
 	a.invalidate()
+	a.saveSession()
 }
 
 func (a *appState) apply() {

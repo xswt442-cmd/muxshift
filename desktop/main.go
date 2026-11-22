@@ -920,12 +920,27 @@ func main() {
 	// and a failed read never becomes a write.
 	path := settingsPath(*settingsFile)
 	loaded, note := loadSettings(path)
-	s, err := newAppStateWithSettings(media, loaded)
+	sessionPath := sessionStorePath(path)
+	// The command line wins when it names sources: those are what the run is
+	// about. Without it the saved arrangement comes back, and one source that
+	// cannot reopen keeps its error instead of stopping the start.
+	var s *appState
+	var err error
+	if len(media) > 0 {
+		s, err = newAppStateWithSettings(media, loaded)
+	} else {
+		snap, storeNote := loadSessionStore(sessionPath)
+		if storeNote != "" {
+			log.Printf("session: %s", storeNote)
+		}
+		s, err = newAppStateFromStore(loaded, snap)
+	}
 	if err != nil {
 		log.Fatalf("muxshift-desktop: %v", err)
 	}
 	s.settingsPath = path
 	s.settingsTrusted = note == ""
+	s.sessionPath = sessionPath
 	// A check that takes pictures should not take sound with it: the same master
 	// mute the overlay offers is switched on before the first source is opened,
 	// so nothing has to be turned down on the machine that runs it.
@@ -986,6 +1001,10 @@ func main() {
 		log.Fatalf("muxshift-desktop: %v", err)
 	}
 	s.apply()
+	// A command-line start still writes the arrangement, so the next start
+	// without -media comes back to it. A restored start rewrites the same
+	// snapshot, which is harmless and keeps it current.
+	s.saveSession()
 	log.Printf("settings: start page %q, file %s", loaded.StartPage, s.settingsPath)
 	for i, it := range s.items {
 		log.Printf("source %d: %s · video=%q audio=%q open=%v", i+1, shortURI(it.uri), it.video, it.audio, errorString(it.openErr))
@@ -1106,6 +1125,9 @@ func main() {
 			// its bounds can be read; a scripted run leaves the file alone.
 			if *scenario == "" {
 				s.saveWorkspaceOnExit(window)
+				// Save the arrangement last, while the session and the players
+				// are still alive, so the next start comes back to it.
+				s.saveSession()
 			}
 			s.release()
 		})

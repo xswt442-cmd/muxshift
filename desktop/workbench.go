@@ -240,8 +240,8 @@ func (a *appState) stripStatus() string {
 			ready++
 		}
 	}
-	snap := a.snapshot()
-	return fmt.Sprintf("%s · %s · %s", playing, formatEvent(snap.Event), itoa(len(a.items))+" "+a.tr("sources", "个来源"))
+	snap := a.eventTime()
+	return fmt.Sprintf("%s · %s · %s", playing, formatEvent(snap), itoa(len(a.items))+" "+a.tr("sources", "个来源"))
 }
 
 // sceneColumn is the left column: the scene list, the source list and the page
@@ -886,7 +886,7 @@ func (a *appState) layoutNote() string {
 // modes. The position is read back from the player rather than from the shared
 // clock: this row is about the picture in front of you.
 func (a *appState) transportBar(c *ui.Context) {
-	snap := a.snapshot()
+	event := a.eventTime()
 	first := a.firstShown()
 	ui.Row(c).WidthPercent(100).Height(44).Padding(0, spaceSm).Gap(spaceSm).
 		Background(colorBg).Border(0, colorBg).
@@ -950,8 +950,8 @@ func (a *appState) transportBar(c *ui.Context) {
 				// has been started. A window opened straight onto a file has not
 				// started one, and printing 0.0s beside a player at 0:14 would
 				// read as a stuck clock rather than as "there is no timeline yet".
-				if snap.Event > 0 {
-					ui.Text(c, formatEvent(snap.Event)).FontSize(textBody).TextColor(colorText).
+				if event > 0 {
+					ui.Text(c, formatEvent(event)).FontSize(textBody).TextColor(colorText).
 						FontFeatures("tnum").Padding(spaceXs, 0)
 				}
 				if first != nil {

@@ -375,35 +375,11 @@ func (a *appState) snapshot() sessionSnapshot {
 			})
 		}
 	}
+	if n := len(a.items); n > 0 {
+		out.Sources = make([]sourceSnapshot, 0, n)
+	}
 	for _, it := range a.items {
-		entry := sourceSnapshot{
-			ID:         it.source.ID,
-			URI:        it.uri,
-			Video:      it.video,
-			Audio:      it.audio,
-			Generation: it.generation,
-			Shown:      it.shown,
-			Volume:     it.volume,
-			OpenErr:    errorString(it.openErr),
-		}
-		if track := it.audio; track != "" {
-			entry.Aligned = a.sync.timeline.Aligned(track)
-			if shift, ok := a.sync.timeline.Shift(track); ok {
-				entry.Offset = shift.Offset
-			}
-		}
-		if it.player != nil {
-			state := readPlayer(rawPlayer(it.player))
-			entry.Player = true
-			entry.Ready = state.Ready
-			entry.Playing = state.Playing
-			entry.Buffering = state.Buf
-			entry.Muted = state.Muted
-			entry.Volume = state.Volume
-			entry.Position = state.Pos
-			entry.Duration = state.Dur
-		}
-		out.Sources = append(out.Sources, entry)
+		out.Sources = append(out.Sources, a.snapshotEntry(it))
 	}
 	out.Event = a.sync.playhead.Event()
 	out.Playing = a.sync.playhead.Playing()
@@ -424,6 +400,40 @@ func (a *appState) snapshot() sessionSnapshot {
 		out.LastCommand = "none yet"
 	}
 	return out
+}
+
+// snapshotEntry is the snapshot row for one source. snapshot builds a whole
+// frame's worth by calling it per item, and entryOf asks for a single row, so
+// a draw path that needs one row no longer has to rebuild every row first.
+func (a *appState) snapshotEntry(it *item) sourceSnapshot {
+	entry := sourceSnapshot{
+		ID:         it.source.ID,
+		URI:        it.uri,
+		Video:      it.video,
+		Audio:      it.audio,
+		Generation: it.generation,
+		Shown:      it.shown,
+		Volume:     it.volume,
+		OpenErr:    errorString(it.openErr),
+	}
+	if track := it.audio; track != "" {
+		entry.Aligned = a.sync.timeline.Aligned(track)
+		if shift, ok := a.sync.timeline.Shift(track); ok {
+			entry.Offset = shift.Offset
+		}
+	}
+	if it.player != nil {
+		state := readPlayer(rawPlayer(it.player))
+		entry.Player = true
+		entry.Ready = state.Ready
+		entry.Playing = state.Playing
+		entry.Buffering = state.Buf
+		entry.Muted = state.Muted
+		entry.Volume = state.Volume
+		entry.Position = state.Pos
+		entry.Duration = state.Dur
+	}
+	return entry
 }
 
 // report writes a command's outcome where a scenario and a reader of the log

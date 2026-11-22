@@ -30,19 +30,31 @@ func (a *appState) layoutLine(width, height float32) string {
 		a.dock.shown(a.settings.DockOpen && height >= dockAutoHeight))
 }
 
-// entryOf is the snapshot row for one source, or the zero row when the source
-// has no player yet. Callers that need "is there a player" check Player.
+// entryOf is the snapshot row for one source. It is built for that one source
+// rather than searched out of a fresh whole-session snapshot, so asking for a
+// row costs one row instead of every row on the stage.
 func (a *appState) entryOf(it *item) sourceSnapshot {
-	for _, source := range a.snapshot().Sources {
-		if source.ID == it.source.ID {
-			return source
-		}
+	if it == nil {
+		return sourceSnapshot{}
 	}
-	return sourceSnapshot{}
+	return a.snapshotEntry(it)
 }
 
 func (a *appState) playing() bool {
-	return a.snapshot().Playing
+	if a.sync == nil || a.sync.playhead == nil {
+		return false
+	}
+	return a.sync.playhead.Playing()
+}
+
+// eventTime is the shared timeline's position, the value the event clock shows.
+// Reading it straight from the playhead keeps a bar that only needs the clock
+// from building a whole session snapshot.
+func (a *appState) eventTime() time.Duration {
+	if a.sync == nil || a.sync.playhead == nil {
+		return 0
+	}
+	return a.sync.playhead.Event()
 }
 
 // sourceMuted reports whether the audio overlay is keeping this source quiet.

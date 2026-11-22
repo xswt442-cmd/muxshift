@@ -58,6 +58,11 @@ type Source struct {
 // mid-character.
 const maxNameLength = 80
 
+// maxEventHistory bounds the recorded changes a Session keeps. A long-running
+// session keeps the newest events only, so the timeline read by diagnostics and
+// scenarios cannot grow without limit or slow every read.
+const maxEventHistory = 1000
+
 // normalizeName trims a display name and caps its length. An empty result means
 // the caller wants the automatic name, so it is stored as empty and the UI falls
 // back to its generated label.
@@ -156,6 +161,9 @@ type Session struct {
 	outputN int
 
 	eventSeq uint64
+	// eventHead is the ring slot of the oldest kept event once events is full;
+	// it stays zero until the list first reaches maxEventHistory.
+	eventHead int
 
 	sources []*Source
 	tracks  []*Track
@@ -565,9 +573,15 @@ func (s *Session) Outputs() []Output {
 	return out
 }
 
-// Events returns every applied change in order.
+// Events returns the most recent applied changes in order. The list is bounded:
+// a long-running session keeps at most maxEventHistory events, the newest ones,
+// so its size and read cost cannot grow without limit.
 func (s *Session) Events() []Event {
-	return append([]Event(nil), s.events...)
+	n := len(s.events)
+	out := make([]Event, n)
+	copied := copy(out, s.events[s.eventHead:])
+	copy(out[copied:], s.events[:s.eventHead])
+	return out
 }
 
 // requireOpen reports a mutation attempted on a closed Session.
@@ -673,7 +687,15 @@ func (s *Session) output(id OutputID) (*Output, bool) {
 
 func (s *Session) record(kind EventKind, object string) {
 	s.eventSeq++
-	s.events = append(s.events, Event{Seq: s.eventSeq, Kind: kind, Object: object})
+	ev := Event{Seq: s.eventSeq, Kind: kind, Object: object}
+	if len(s.events) < maxEventHistory {
+		s.events = append(s.events, ev)
+		return
+	}
+	// The ring is full: overwrite the oldest slot and move the head forward so
+	// the newest event is kept and the oldest is dropped.
+	s.events[s.eventHead] = ev
+	s.eventHead = (s.eventHead + 1) % maxEventHistory
 }
 
 func copyScene(scene *Scene) Scene {

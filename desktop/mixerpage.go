@@ -128,9 +128,7 @@ func (a *appState) mixerRow(c *ui.Context, index int, it *item) {
 				// to route a source that is not in the scene yet.
 				a.report(a.runCommand(command{Kind: commandVolume, Source: it.source.ID, Volume: level}))
 			}
-			ui.Text(c, fmt.Sprintf("%.0f%%", level*100)).Width(46).
-				FontSize(textSmall).FontWeight(500).TextColor(colorTextDim).TextAlign(ui.End).
-				FontFeatures("tnum")
+			a.numericReadout(c, fmt.Sprintf("%.0f%%", level*100), 46)
 		})
 		ui.Text(c, a.mixerLine(it)).FontSize(textMicro).TextColor(colorTextDim).Wrap()
 	})

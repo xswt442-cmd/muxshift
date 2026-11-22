@@ -74,6 +74,20 @@ const (
 	spaceXxl   = 32
 )
 
+// Control geometry. One definition per control kind, so every button, field,
+// segmented option and numeric readout shares a corner and a padding. Heights
+// are deliberately absent: they come from controlHeight()/rowHeight(), so the
+// Compact setting still tightens them, but the shape is identical at every
+// scale and in every corner of the window.
+const (
+	controlPadX      = 12 // horizontal padding inside a standard button
+	controlPadXDense = 8  // horizontal padding for a menu, ghost or segment option
+	fieldPadX        = 10 // a text field reads one notch tighter than a button
+	segmentPad       = 2  // inset of a segmented trough around its options
+	segmentGap       = 2  // between two options in a trough
+	readoutGap       = 6  // between a slider and its numeric readout
+)
+
 // Text sizes are vars because the Appearance page scales them. Six roles, three
 // scales; nothing else in the window hard-codes a font size. The steps are the
 // five the interface actually needs: title, heading, body, control, caption.

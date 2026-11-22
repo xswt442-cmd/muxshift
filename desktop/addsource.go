@@ -270,32 +270,14 @@ func (a *appState) addSourcePanel(c *ui.Context) {
 	ui.Column(c).Gap(spaceSm).MinWidth(412).MaxWidth(440).Children(func() {
 		ui.Text(c, a.tr("Add a source", "添加来源")).FontSize(textTitle).FontWeight(600).
 			TextColor(colorText)
-		ui.Row(c).Gap(spaceSm).WidthPercent(100).Children(func() {
+		track := a.segmentTrack(c)
+		track.WidthPercent(100).Children(func() {
 			for _, choice := range []addChoice{addChoiceFile, addChoiceMedia, addChoiceSite} {
-				selected := a.addChoice == choice
-				button := ui.ButtonBase(c.Key("add-"+choice.key())).Grow(1).Height(32).
-					Padding(0, spaceSm).Radius(radiusMd).AlignItems(ui.Center)
-				fill, ink := colorBg, colorTextDim
-				if selected {
-					fill, ink = colorSelected, colorSelectedText
-				}
-				if button.Pressed() {
-					fill, ink = colorPressed, colorText
-				} else if button.Hovered() {
-					ink = colorText
-					if !selected {
-						fill = colorHover
-					}
-				}
-				button = button.Background(fill).TextColor(ink)
-				button.Children(func() {
-					ui.Text(c, a.addChoiceLabel(choice)).FontSize(textSmall).
-						FontWeight(500).TextColor(ink).SingleLine()
-				})
-				if button.Clicked() {
-					a.addChoice = choice
+				ch := choice
+				a.segmentedOption(c, "add-"+ch.key(), a.addChoiceLabel(ch), a.addChoice == ch, true, func() {
+					a.addChoice = ch
 					a.addNote, a.addNoteBad = "", false
-				}
+				})
 			}
 		})
 		if a.addChoice != addChoiceNone {
@@ -304,17 +286,13 @@ func (a *appState) addSourcePanel(c *ui.Context) {
 		}
 		switch a.addChoice {
 		case addChoiceMedia:
-			ui.TextInput(c, &a.importText).WidthPercent(100).Height(32).
-				Padding(0, 10).Radius(radiusMd).Background(colorInput).
-				Border(1, colorLine).PlaceholderColor(colorDim).
+			a.field(c, &a.importText).WidthPercent(100).
 				Placeholder(`https://… .m3u8  or  C:\path\file.mp4`).
 				Invalid(a.addNoteBad)
 			ui.Text(c, a.tr("the media address or file path to read", "要读取的媒体地址或文件路径")).
 				FontSize(textMicro).FontWeight(400).TextColor(colorDim)
 		case addChoiceSite:
-			ui.TextInput(c, &a.addSiteText).WidthPercent(100).Height(32).
-				Padding(0, 10).Radius(radiusMd).Background(colorInput).
-				Border(1, colorLine).PlaceholderColor(colorDim).
+			a.field(c, &a.addSiteText).WidthPercent(100).
 				Placeholder("https://example.com/watch?v=…").
 				Invalid(a.addNoteBad)
 			ui.Text(c, a.tr("the page to open in your browser", "要在浏览器里打开的页面")).
@@ -329,53 +307,22 @@ func (a *appState) addSourcePanel(c *ui.Context) {
 		}
 		ui.Row(c).Gap(spaceSm).WidthPercent(100).AlignItems(ui.Center).Children(func() {
 			ui.Box(c).Grow(1)
-			cancel := ui.ButtonBase(c.Key("add-cancel")).Width(88).Height(32).
-				Padding(0, spaceMd).Radius(radiusMd).AlignItems(ui.Center)
-			cancelFill, cancelInk := colorBg, colorTextDim
-			if cancel.Pressed() {
-				cancelFill, cancelInk = colorPressed, colorText
-			} else if cancel.Hovered() {
-				cancelFill, cancelInk = colorHover, colorText
-			}
-			cancel = cancel.Background(cancelFill).TextColor(cancelInk)
-			cancel.Children(func() {
-				ui.Text(c, a.tr("Cancel", "取消")).FontSize(textSmall).FontWeight(500).
-					TextColor(cancelInk).SingleLine()
-			})
-			if cancel.Clicked() {
+			a.secondaryButton(c, "add-cancel", a.tr("Cancel", "取消"), 88, true, func() {
 				a.closeAddSource()
-			}
+			})
 			enabled := a.addChoice != addChoiceNone
-			submit := ui.ButtonBase(c.Key("add-submit")).Width(116).Height(32).
-				Padding(0, spaceMd).Radius(radiusMd).AlignItems(ui.Center)
-			submitFill, submitInk := ui.Transparent, colorDim
-			if enabled {
-				submitFill, submitInk = colorAccent, colorAccentText
-				if submit.Pressed() {
-					submitFill = colorAccentDown
-				} else if submit.Hovered() {
-					submitFill = colorAccentHi
-				}
-			} else {
-				submit = submit.Disabled(true)
-			}
-			submit = submit.Background(submitFill).TextColor(submitInk)
-			submit.Children(func() {
-				ui.Text(c, a.addSubmitLabel()).FontSize(textSmall).FontWeight(500).
-					TextColor(submitInk).SingleLine()
+			submit := a.primaryButton(c, "add-submit", a.addSubmitLabel(), 116, enabled, func() {
+				a.submitAddSource()
 			})
 			switch a.addChoice {
 			case addChoiceMedia:
-				submit = submit.Tooltip(a.tr("read this address and add it to the session", "读取这个地址并加入本次会话"))
+				submit.Tooltip(a.tr("read this address and add it to the session", "读取这个地址并加入本次会话"))
 			case addChoiceSite:
-				submit = submit.Tooltip(a.tr("open the page; the extension hands the media back", "打开页面，由扩展把媒体交回来"))
+				submit.Tooltip(a.tr("open the page; the extension hands the media back", "打开页面，由扩展把媒体交回来"))
 			case addChoiceFile:
-				submit = submit.Tooltip(a.tr("open the desktop file picker", "打开系统文件选择器"))
+				submit.Tooltip(a.tr("open the desktop file picker", "打开系统文件选择器"))
 			default:
-				submit = submit.Tooltip(a.tr("choose one of the three first", "先选这三者之一"))
-			}
-			if submit.Clicked() {
-				a.submitAddSource()
+				submit.Tooltip(a.tr("choose one of the three first", "先选这三者之一"))
 			}
 		})
 	})

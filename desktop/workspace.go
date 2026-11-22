@@ -87,7 +87,7 @@ func (a *appState) importRow(c *ui.Context) {
 	ui.Column(c).WidthPercent(100).Gap(spaceXs).Children(func() {
 		ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).WidthPercent(100).Children(func() {
 			c.Key("import-url")
-			field := ui.TextInput(c, &a.importText).Grow(1).Height(a.controlHeight()).
+			field := a.field(c, &a.importText).Grow(1).
 				Placeholder(`https://… .m3u8  or  C:\path\file.mp4`).
 				Description(a.tr("a media address or an absolute file path", "媒体地址或绝对文件路径"))
 			if field.Submitted() && a.importing == "" {
@@ -98,21 +98,19 @@ func (a *appState) importRow(c *ui.Context) {
 			if a.importing != "" {
 				label = fmt.Sprintf(a.tr("Reading… %.0fs", "读取中… %.0f 秒"), time.Since(a.importSince).Seconds())
 			}
-			add := ui.Button(c.Key("import-add"), label).Width(96).Height(a.controlHeight()).
-				Tooltip(a.tr("add a file, a media address or a website", "添加文件、媒体地址或网页"))
-			if a.importing != "" {
-				add.Disabled(true).Tooltip(a.tr("the read is in flight; Cancel stops it", "正在读取；按取消可以停下"))
-			}
-			if add.Clicked() {
+			add := a.primaryButton(c, "import-add", label, 96, a.importing == "", func() {
 				a.openAddSource()
+			})
+			if a.importing != "" {
+				add.Tooltip(a.tr("the read is in flight; Cancel stops it", "正在读取；按取消可以停下"))
+			} else {
+				add.Tooltip(a.tr("add a file, a media address or a website", "添加文件、媒体地址或网页"))
 			}
 			if a.importing != "" {
-				if ui.Button(c.Key("import-cancel"), a.tr("Cancel", "取消")).Width(76).
-					Height(a.controlHeight()).
-					Tooltip(a.tr("stop reading; nothing is added", "停止读取，不会添加") + " " + shortURI(a.importing)).
-					Clicked() {
+				cancel := a.secondaryButton(c, "import-cancel", a.tr("Cancel", "取消"), 76, true, func() {
 					a.report(a.runCommand(command{Kind: commandCancelImport}))
-				}
+				})
+				cancel.Tooltip(a.tr("stop reading; nothing is added", "停止读取，不会添加") + " " + shortURI(a.importing))
 			}
 		})
 		failed := a.lastCommand.Command.Kind == commandAdd && a.lastCommand.Err != nil
@@ -120,14 +118,12 @@ func (a *appState) importRow(c *ui.Context) {
 			ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).WidthPercent(100).Children(func() {
 				ui.Text(c, a.errorShort()).FontSize(textMicro).TextColor(colorBad).
 					Grow(1).SingleLine().Tooltip(a.lastCommand.Err.Error())
-				if ui.Button(c.Key("import-retry"), a.tr("Retry", "重试")).Width(76).
-					Height(26).Clicked() {
+				a.secondaryButton(c, "import-retry", a.tr("Retry", "重试"), 76, true, func() {
 					a.report(a.runCommand(command{Kind: commandAdd, URI: a.lastCommand.Command.URI}))
-				}
-				if ui.Button(c.Key("import-error-open"), a.tr("Details", "详情")).Width(76).
-					Height(26).Clicked() {
+				})
+				a.secondaryButton(c, "import-error-open", a.tr("Details", "详情"), 76, true, func() {
 					a.errorOpen = true
-				}
+				})
 			})
 		}
 	})
@@ -274,8 +270,7 @@ func (a *appState) diagnosticsPage(c *ui.Context) {
 // diagButton is the diagnostics page's one secondary action: raised, quiet,
 // and warning-tinted only while the pointer is on a destructive one.
 func (a *appState) diagButton(c *ui.Context, key, label string, width float32, warning bool, onClick func()) ui.Element {
-	button := ui.ButtonBase(c.Key(key)).Width(width).Height(28).
-		Padding(0, spaceSm).Radius(radiusMd).AlignItems(ui.Center)
+	button := a.controlFrame(c, key, width)
 	fill, ink := colorPanel2, colorText
 	if button.Pressed() {
 		fill, ink = colorPressed, colorText
@@ -287,7 +282,7 @@ func (a *appState) diagButton(c *ui.Context, key, label string, width float32, w
 	}
 	button = button.Background(fill).TextColor(ink)
 	button.Children(func() {
-		ui.Text(c, label).FontSize(textMicro).FontWeight(500).TextColor(ink).SingleLine()
+		ui.Text(c, label).FontSize(textSmall).FontWeight(500).TextColor(ink).SingleLine()
 	})
 	if button.Clicked() && onClick != nil {
 		onClick()
@@ -300,7 +295,7 @@ func (a *appState) diagButton(c *ui.Context, key, label string, width float32, w
 // single quiet rule.
 func (a *appState) diagSection(c *ui.Context, title string, body func()) {
 	ui.Column(c).WidthPercent(100).Gap(spaceXs).Padding(spaceSm, 0).Children(func() {
-		ui.Text(c, title).FontSize(textBody).FontWeight(600).TextColor(colorText).SingleLine()
+		a.sectionTitle(c, title)
 		body()
 	})
 	ui.Box(c).WidthPercent(100).Height(1).Background(colorLineSoft)

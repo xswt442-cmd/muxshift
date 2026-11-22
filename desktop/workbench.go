@@ -831,7 +831,7 @@ func (a *appState) toolbar(c *ui.Context, width float32) {
 		if note := a.layoutNote(); note != "" {
 			ui.Text(c, note).FontSize(textMicro).TextColor(colorDim).SingleLine()
 		}
-		edit := ui.Button(c.Key("stage-edit"), a.tr("Edit", "编辑")).Height(28).Padding(0, spaceSm)
+		edit := ui.Button(c.Key("stage-edit"), a.tr("Edit", "编辑")).Height(a.controlHeight()).Padding(0, spaceSm)
 		if a.editMode {
 			edit = edit.Background(colorAccentSoft).TextColor(colorAccent)
 		}
@@ -842,7 +842,7 @@ func (a *appState) toolbar(c *ui.Context, width float32) {
 			}
 		}
 		if width < 900 {
-			if ui.Button(c.Key("stage-props"), a.tr("Properties", "属性")).Height(28).Padding(0, spaceSm).Clicked() {
+			if ui.Button(c.Key("stage-props"), a.tr("Properties", "属性")).Height(a.controlHeight()).Padding(0, spaceSm).Clicked() {
 				a.drawerOpen = !a.drawerOpen
 			}
 		}
@@ -898,8 +898,8 @@ func (a *appState) transportBar(c *ui.Context) {
 				if !playing {
 					play = a.tr("Play", "播放")
 				}
-				playButton := ui.ButtonBase(c.Key("transport-play")).Width(88).Height(32).
-					Padding(0, spaceMd).Radius(radiusMd).AlignItems(ui.Center).Shrink(0).AlignSelf(ui.Center)
+				playButton := ui.ButtonBase(c.Key("transport-play")).Width(88).Height(a.controlHeight()).
+					Padding(0, controlPadX).Radius(radiusMd).AlignItems(ui.Center).Shrink(0).AlignSelf(ui.Center)
 				fill, ink := colorEnabled, colorSelectedText
 				if len(a.items) == 0 {
 					fill, ink = colorPanel2, colorDim
@@ -978,15 +978,13 @@ func (a *appState) transportBar(c *ui.Context) {
 // place on the timeline.
 func (a *appState) propertiesTabs(c *ui.Context) {
 	labels := [3]string{a.tr("Picture", "画面"), a.tr("Sound", "音频"), a.tr("Time", "时间")}
-	ui.Row(c).WidthPercent(100).Padding(0, spaceSm).Gap(spaceXs).Children(func() {
+	track := a.segmentTrack(c)
+	track.WidthPercent(100).Children(func() {
 		for i, label := range labels {
-			tab := ui.Button(c.Key("props-tab-"+itoa(i)), label).Grow(1).Height(28).Padding(0, 4)
-			if a.propsTab == i {
-				tab = tab.Background(colorPanel2).Border(1, colorLine)
-			}
-			if tab.Clicked() {
-				a.propsTab = i
-			}
+			idx := i
+			a.segmentedOption(c, "props-tab-"+itoa(idx), label, a.propsTab == idx, true, func() {
+				a.propsTab = idx
+			})
 		}
 	})
 }
@@ -1161,9 +1159,7 @@ func (a *appState) mixerChannel(c *ui.Context, it *item) {
 		if a.volumeSlider(c, "mix-vol-"+string(it.source.ID), &it.volume, 84) {
 			a.runCommand(command{Kind: commandVolume, Source: it.source.ID, Volume: it.volume})
 		}
-		ui.Text(c, fmt.Sprintf("%.0f%%", it.volume*100)).Width(42).PaddingStart(6).
-			FontSize(textSmall).FontWeight(500).TextColor(colorTextDim).TextAlign(ui.End).
-			FontFeatures("tnum").SingleLine()
+		a.numericReadout(c, fmt.Sprintf("%.0f%%", it.volume*100), 42)
 	})
 }
 
@@ -1280,20 +1276,20 @@ func (a *appState) errorReport(c *ui.Context, width, height float32) {
 				})
 			}
 			ui.Row(c).Gap(spaceSm).Children(func() {
-				if ui.Button(c.Key("err-diagnostics"), a.tr("Open diagnostics", "打开诊断")).Height(30).Clicked() {
+				a.secondaryButton(c, "err-diagnostics", a.tr("Open diagnostics", "打开诊断"), 0, true, func() {
 					a.workspace = workspaceDiagnostics
 					a.errorOpen = false
-				}
+				})
 				if a.importRetryTarget() != "" {
-					if ui.Button(c.Key("err-retry"), a.tr("Retry", "重试")).Height(30).Clicked() {
+					a.secondaryButton(c, "err-retry", a.tr("Retry", "重试"), 0, true, func() {
 						a.retryImport()
 						a.errorOpen = false
-					}
+					})
 				}
 				ui.Box(c).Grow(1)
-				if ui.Button(c.Key("err-close"), a.tr("Close", "关闭")).Height(30).Padding(0, spaceMd).Clicked() {
+				a.primaryButton(c, "err-close", a.tr("Close", "关闭"), 0, true, func() {
 					a.errorOpen = false
-				}
+				})
 			})
 		})
 	})
@@ -1325,7 +1321,7 @@ func (a *appState) pageMenuPanel(c *ui.Context, width float32) {
 		Shadow(0, 8, 24, 0, shadowFloat).Children(func() {
 		for _, page := range []workspace{workspaceStage, workspaceSources, workspaceDiagnostics, workspaceSettings, workspaceMixer} {
 			p := page
-			button := ui.Button(c.Key("menu-"+itoa(int(p))), a.pageLabel(p)).Height(32).Padding(0, spaceSm)
+			button := ui.Button(c.Key("menu-"+itoa(int(p))), a.pageLabel(p)).Height(a.controlHeight()).Padding(0, spaceSm)
 			if p == a.workspace {
 				button = button.Background(colorSelected).TextColor(colorSelectedText)
 			}
@@ -1335,7 +1331,7 @@ func (a *appState) pageMenuPanel(c *ui.Context, width float32) {
 			}
 		}
 		ui.Box(c).WidthPercent(100).Height(1).Background(colorLine)
-		if ui.Button(c.Key("menu-quit"), a.tr("Quit MuxShift", "退出 MuxShift")).Height(32).
+		if ui.Button(c.Key("menu-quit"), a.tr("Quit MuxShift", "退出 MuxShift")).Height(a.controlHeight()).
 			Padding(0, spaceSm).TextColor(colorBad).Clicked() {
 			a.release()
 			a.closes++
@@ -1351,11 +1347,11 @@ func (a *appState) sceneMenuPanel(c *ui.Context, width float32) {
 	ui.Column(c).Absolute().Top(a.barHeight()+4).Left(sceneWidth+spaceMd).Width(220).
 		Padding(4).Gap(2).Radius(radiusCard).Background(colorPanel2).Border(1, colorLineSoft).
 		ZIndex(20).Shadow(0, 8, 24, 0, shadowFloat).Children(func() {
-		ui.Row(c).Height(32).Padding(0, spaceSm).Gap(spaceXs).AlignItems(ui.Center).
+		ui.Row(c).Height(a.controlHeight()).Padding(0, spaceSm).Gap(spaceXs).AlignItems(ui.Center).
 			Background(colorSelected).Children(func() {
 			ui.Text(c, a.sceneLabelText()).FontSize(textBody).TextColor(colorSelectedText)
 		})
-		ui.Button(c.Key("scene-new"), a.tr("New scene…", "新建场景…")).Height(32).Padding(0, spaceSm).Disabled(true).
+		ui.Button(c.Key("scene-new"), a.tr("New scene…", "新建场景…")).Height(a.controlHeight()).Padding(0, spaceSm).Disabled(true).
 			Tooltip(a.tr("this build has one scene", "此版本只有一个场景"))
 	})
 }

@@ -109,9 +109,7 @@ func (a *appState) renamePanel(c *ui.Context) {
 	submit := func() { a.confirmRename() }
 	ui.Column(c).Gap(spaceSm).MinWidth(360).MaxWidth(420).Children(func() {
 		ui.Text(c, title).FontSize(textTitle).FontWeight(600).TextColor(colorText)
-		field := ui.TextInput(c, &a.renameText).WidthPercent(100).Height(32).
-			Padding(0, 10).Radius(radiusMd).Background(colorInput).
-			Border(1, colorLine).PlaceholderColor(colorDim).
+		field := a.field(c, &a.renameText).WidthPercent(100).
 			Placeholder(a.tr("leave empty for the automatic name", "留空则使用自动名称")).
 			MaxLength(200)
 		field.OnTextKey(func(k ui.TextKey) bool {
@@ -126,14 +124,12 @@ func (a *appState) renamePanel(c *ui.Context) {
 			FontSize(textMicro).FontWeight(400).TextColor(colorDim)
 		ui.Row(c).Gap(spaceSm).WidthPercent(100).AlignItems(ui.Center).Children(func() {
 			ui.Box(c).Grow(1)
-			if ui.Button(c.Key("rename-cancel"), a.tr("Cancel", "取消")).Height(32).Width(88).
-				Padding(0, spaceMd).Clicked() {
+			a.secondaryButton(c, "rename-cancel", a.tr("Cancel", "取消"), 88, true, func() {
 				a.closeRename()
-			}
-			if ui.Button(c.Key("rename-confirm"), a.tr("OK", "确定")).Height(32).Width(88).
-				Padding(0, spaceMd).Clicked() {
+			})
+			a.primaryButton(c, "rename-confirm", a.tr("OK", "确定"), 88, true, func() {
 				submit()
-			}
+			})
 		})
 	})
 }

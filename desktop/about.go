@@ -172,13 +172,9 @@ func (a *appState) aboutPage(c *ui.Context) {
 		if view.busy {
 			label = a.tr("Checking…", "检查中…")
 		}
-		button := ui.Button(c.Key("about-update"), label).Height(30)
-		if view.busy {
-			button = button.Disabled(true)
-		}
-		if button.Clicked() {
+		a.secondaryButton(c, "about-update", label, 0, !view.busy, func() {
 			a.checkForUpdates()
-		}
+		})
 		switch {
 		case view.err != "":
 			ui.Text(c, view.err).FontSize(textSmall).TextColor(colorBad).Wrap()
@@ -191,21 +187,20 @@ func (a *appState) aboutPage(c *ui.Context) {
 		}
 	})
 	if view.url != "" && !versionsEqual(view.latest, version.BuildVersion) {
-		ui.Button(c.Key("about-open-release"), a.tr("Open release page", "打开发布页")).Height(30).Width(180).
-			OnClick(func() {
-				opener := a.openURL
-				if opener == nil {
-					opener = a.contextOpenURL
-				}
-				if opener != nil {
-					opener(view.url, func(err error) {
-						if err != nil {
-							a.lastErr = err
-							a.invalidate()
-						}
-					})
-				}
-			})
+		a.secondaryButton(c, "about-open-release", a.tr("Open release page", "打开发布页"), 180, true, func() {
+			opener := a.openURL
+			if opener == nil {
+				opener = a.contextOpenURL
+			}
+			if opener != nil {
+				opener(view.url, func(err error) {
+					if err != nil {
+						a.lastErr = err
+						a.invalidate()
+					}
+				})
+			}
+		})
 	}
 }
 

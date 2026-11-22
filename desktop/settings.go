@@ -601,12 +601,12 @@ type choiceOption struct {
 func (a *appState) settingsPage(c *ui.Context) {
 	ui.Row(c).WidthPercent(100).AlignItems(ui.Start).Gap(spaceLg).Padding(spaceMd).Children(func() {
 		ui.Column(c).Width(190).Gap(spaceXs).Padding(spaceSm).Children(func() {
-			ui.Text(c, a.tr("settings", "设置")).FontSize(textCaption).FontWeight(600).TextColor(colorTextDim)
+			a.overlineLabel(c, a.tr("settings", "设置"))
 			for _, section := range settingsSections {
 				name := section
 				selected := name == a.settingsSection
-				row := ui.ButtonBase(c.Key("settings-tab-"+name)).Width(170).Height(34).
-					Padding(0, spaceSm).Gap(spaceSm).Radius(radiusMd).Justify(ui.Start)
+				row := ui.ButtonBase(c.Key("settings-tab-"+name)).Width(170).Height(a.controlHeight()).
+					Padding(0, controlPadX).Gap(spaceSm).Radius(radiusMd).Justify(ui.Start)
 				row = row.Background(stateFill(row.Hovered(), row.Pressed(), selected))
 				ink := colorTextDim
 				if selected {
@@ -646,50 +646,14 @@ func (a *appState) settingsPage(c *ui.Context) {
 			if a.settingsSection != "About" {
 				dirty := !sameSettings(a.settingsDraft, a.settings)
 				ui.Row(c).Gap(spaceSm).Padding(0, spaceSm).Children(func() {
-					apply := ui.ButtonBase(c.Key("settings-apply")).Width(100).Height(32).
-						Padding(0, spaceMd).Radius(radiusMd).AlignItems(ui.Center)
-					applyFill, applyInk := ui.Transparent, colorDim
-					if dirty {
-						applyFill, applyInk = colorAccent, colorAccentText
-						if apply.Pressed() {
-							applyFill = colorAccentDown
-						} else if apply.Hovered() {
-							applyFill = colorAccentHi
-						}
-					} else {
-						apply = apply.Disabled(true)
-					}
-					apply = apply.Background(applyFill).TextColor(applyInk)
-					apply.Children(func() {
-						ui.Text(c, a.tr("Apply", "应用")).FontSize(textSmall).FontWeight(500).
-							TextColor(applyInk).SingleLine()
-					})
-					if apply.Clicked() {
+					a.primaryButton(c, "settings-apply", a.tr("Apply", "应用"), 100, dirty, func() {
 						a.applySettingsCommand()
-					}
-					cancel := ui.ButtonBase(c.Key("settings-cancel")).Width(100).Height(32).
-						Padding(0, spaceMd).Radius(radiusMd).AlignItems(ui.Center)
-					cancelFill, cancelInk := ui.Transparent, colorDim
-					if dirty {
-						cancelFill, cancelInk = colorPanel2, colorText
-						if cancel.Pressed() {
-							cancelFill = colorPressed
-						} else if cancel.Hovered() {
-							cancelFill = colorHover
-						}
-					} else {
-						cancel = cancel.Disabled(true)
-					}
-					cancel = cancel.Background(cancelFill).TextColor(cancelInk)
-					cancel.Children(func() {
-						ui.Text(c, a.tr("Cancel", "取消")).FontSize(textSmall).FontWeight(500).
-							TextColor(cancelInk).SingleLine()
 					})
-					if cancel.Clicked() {
+					a.secondaryButton(c, "settings-cancel", a.tr("Cancel", "取消"), 100, dirty, func() {
 						a.beginDraft(a.settings)
 						a.settingsErr = ""
 						a.settingsNote = a.tr("cancelled: the draft is back to what is applied", "已取消：草稿恢复为当前生效的设置")
-					}
+					})
 					a.ghostButton(c, "settings-reset", a.tr("Reset to defaults", "恢复默认"), 160, func() {
 						a.beginDraft(defaultSettings())
 						a.settingsErr = ""
@@ -835,36 +799,13 @@ func (a *appState) settingsForm(c *ui.Context) {
 func (a *appState) choiceRow(c *ui.Context, label, key string, current *string, options []choiceOption) {
 	ui.Column(c).Gap(spaceXs).WidthPercent(100).Children(func() {
 		ui.Text(c, label).FontSize(textMicro).TextColor(colorDim)
-		ui.Row(c).Height(32).Padding(3).Gap(2).Radius(9).Background(colorBg).
-			AlignSelf(ui.Start).AlignItems(ui.Center).Children(func() {
+		track := a.segmentTrack(c)
+		track.AlignSelf(ui.Start).Children(func() {
 			for _, option := range options {
-				selected := *current == option.value
-				button := ui.ButtonBase(c.Key(key+"-"+option.value)).Height(26).
-					Padding(0, spaceMd).Radius(radiusSm).AlignItems(ui.Center)
-				fill, ink := ui.Transparent, colorTextDim
-				if selected {
-					fill, ink = colorSegment, colorText
-				}
-				if button.Pressed() {
-					fill, ink = colorPressed, colorText
-				} else if button.Hovered() {
-					ink = colorText
-					if !selected {
-						fill = colorHover
-					}
-				}
-				button = button.Background(fill).TextColor(ink)
-				button.Children(func() {
-					weight := 400
-					if selected {
-						weight = 500
-					}
-					ui.Text(c, option.label).FontSize(textSmall).FontWeight(weight).
-						TextColor(ink).SingleLine()
+				opt := option
+				a.segmentedOption(c, key+"-"+opt.value, opt.label, *current == opt.value, false, func() {
+					*current = opt.value
 				})
-				if button.Clicked() {
-					*current = option.value
-				}
 			}
 		})
 	})
@@ -908,13 +849,9 @@ func (a *appState) dvrStepper(c *ui.Context, name, lessKey, lessLabel, moreKey, 
 	ui.Column(c).Gap(spaceXs).WidthPercent(100).Children(func() {
 		ui.Text(c, name).FontSize(textMicro).TextColor(colorDim)
 		ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
-			if ui.Button(c.Key(lessKey), lessLabel).Width(84).Clicked() {
-				adjust(-1)
-			}
-			ui.Text(c, value).Width(96)
-			if ui.Button(c.Key(moreKey), moreLabel).Width(84).Clicked() {
-				adjust(1)
-			}
+			a.secondaryButton(c, lessKey, lessLabel, 84, true, func() { adjust(-1) })
+			a.numericReadout(c, value, 96)
+			a.secondaryButton(c, moreKey, moreLabel, 84, true, func() { adjust(1) })
 		})
 	})
 }
@@ -925,7 +862,8 @@ func (a *appState) settingsSlider(c *ui.Context, label string, value *float64, l
 	ui.Row(c).Gap(spaceSm).Padding(0, spaceSm).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, label).FontSize(textBody).TextColor(colorText)
 		ui.Box(c).Grow(1)
-		ui.Text(c, fmt.Sprintf("%.2f", *value)).Width(64)
+		ui.Text(c, fmt.Sprintf("%.2f", *value)).Width(64).FontSize(textSmall).
+			FontWeight(500).TextColor(colorTextDim).TextAlign(ui.End).FontFeatures("tnum").SingleLine()
 	})
 	a.rangeSlider(c, "settings-"+label, value, lo, hi, 0)
 }

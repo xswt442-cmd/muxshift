@@ -149,32 +149,13 @@ func (a *appState) dockBody(c *ui.Context) {
 					if a.dockTab < 0 || a.dockTab >= len(ids) {
 						a.dockTab = 0
 					}
-					ui.Row(c).Padding(2).Gap(2).Radius(14).Background(colorBgSoft).
-						Border(1, colorLineSoft).AlignItems(ui.Center).Children(func() {
+					track := a.segmentTrack(c)
+					track.Children(func() {
 						for i, label := range labels {
-							selected := a.dockTab == i
-							tab := ui.ButtonBase(c.Key("dock-tab-"+ids[i])).Height(28).
-								Padding(0, spaceMd).Radius(12).AlignItems(ui.Center)
-							fill, ink := ui.Transparent, colorDim
-							if selected {
-								fill, ink = colorSelected, colorSelectedText
-							}
-							if tab.Pressed() {
-								fill, ink = colorPressed, colorText
-							} else if tab.Hovered() {
-								ink = colorText
-								if !selected {
-									fill = colorHover
-								}
-							}
-							tab = tab.Background(fill).TextColor(ink)
-							tab.Children(func() {
-								ui.Text(c, label).FontSize(textSmall).FontWeight(500).
-									TextColor(ink).SingleLine()
+							idx := i
+							a.segmentedOption(c, "dock-tab-"+ids[idx], label, a.dockTab == idx, false, func() {
+								a.dockTab = idx
 							})
-							if tab.Clicked() {
-								a.dockTab = i
-							}
 						}
 					})
 					ui.Box(c).Grow(1)
@@ -202,33 +183,13 @@ func (a *appState) dockBody(c *ui.Context) {
 			// Panel switches are chip-shaped and quiet: they sit on the same
 			// surface as the row, and only a shown panel carries the accent.
 			if !a.narrowDock() {
-				ui.Row(c).Height(28).Padding(2).Gap(2).Radius(14).
-					Background(colorBgSoft).Border(1, colorLineSoft).
-					AlignItems(ui.Center).Children(func() {
+				track := a.segmentTrack(c)
+				track.Children(func() {
 					for _, id := range dockOrder {
-						label := a.dockTitle(id)
-						shown := a.dockShown(id)
-						chip := ui.ButtonBase(c.Key("dock-toggle-"+id)).Height(24).
-							Padding(0, 10).Radius(12).AlignItems(ui.Center)
-						fill, ink := ui.Transparent, colorDim
-						if shown {
-							fill, ink = colorEnabled, colorSelectedText
-						}
-						if chip.Pressed() {
-							fill, ink = colorPressed, colorText
-						} else if chip.Hovered() {
-							ink = colorText
-							if !shown {
-								fill = colorHover
-							}
-						}
-						chip = chip.Background(fill).TextColor(ink)
-						chip.Children(func() {
-							ui.Text(c, label).FontSize(textSmall).FontWeight(500).TextColor(ink).SingleLine()
+						pid := id
+						a.segmentedOption(c, "dock-toggle-"+pid, a.dockTitle(pid), a.dockShown(pid), false, func() {
+							a.toggleDockPanel(pid)
 						})
-						if chip.Tooltip(a.tr("show or hide this panel", "显示或隐藏这块面板")).Clicked() {
-							a.toggleDockPanel(id)
-						}
 					}
 				})
 			}
@@ -311,7 +272,7 @@ func (a *appState) dockPanel(c *ui.Context, id string) {
 				Shadow(0, 2, 8, 0, shadowCard).Children(func() {
 				ui.Row(c).WidthPercent(100).Height(22).Gap(spaceXs).
 					AlignItems(ui.Center).Children(func() {
-					ui.Text(c, a.dockTitle(id)).FontSize(textBody).FontWeight(600).TextColor(colorText)
+					a.sectionTitle(c, a.dockTitle(id))
 					ui.Box(c).Grow(1)
 				})
 				ui.Box(c).WidthPercent(100).Height(1).Background(colorLineSoft)
@@ -501,9 +462,7 @@ func (a *appState) dockRowsBody(c *ui.Context) {
 						if a.volumeSlider(c, "row-vol-"+string(row.source.ID), &row.volume, 84) {
 							a.runCommand(command{Kind: commandVolume, Source: row.source.ID, Volume: row.volume})
 						}
-						ui.Text(c, fmt.Sprintf("%.0f%%", row.volume*100)).Width(42).PaddingStart(6).
-							FontSize(textSmall).FontWeight(500).TextColor(colorTextDim).
-							TextAlign(ui.End).FontFeatures("tnum")
+						a.numericReadout(c, fmt.Sprintf("%.0f%%", row.volume*100), 42)
 					})
 					ui.Row(c).Width(190).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
 						a.offsetStepper(c, "row-step-"+string(row.source.ID), a.entryOf(row).Offset,

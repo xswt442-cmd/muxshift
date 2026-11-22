@@ -241,11 +241,10 @@ type appState struct {
 
 	// The panels the shell can show without a page change: the error report, the
 	// page menu, the scene menu and the narrow window's properties drawer.
-	errorOpen     bool
-	pageMenu      bool
-	sceneMenu     bool
-	drawerOpen    bool
-	leftCollapsed bool
+	errorOpen  bool
+	pageMenu   bool
+	sceneMenu  bool
+	drawerOpen bool
 
 	// The shell's three parts are sized by the person using them: the scene
 	// column keeps its own width, the console keeps its own height, and each

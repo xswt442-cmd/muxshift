@@ -127,6 +127,7 @@ func (a *appState) rowHeight() float32 {
 func (a *appState) shell(c *ui.Context, width, height float32) {
 	narrow := width < 900
 	a.winW = width
+	a.frameWidth, a.frameHeight = width, height
 	if !narrow {
 		a.drawerOpen = false
 	}
@@ -145,11 +146,13 @@ func (a *appState) shell(c *ui.Context, width, height float32) {
 			// has one: it starts open, keeps its own width, and folds to icons.
 			if !narrow && a.editingShell {
 				layout.DraggableSideNav(c, &a.navWidth, &a.navUp, layout.DraggableSideNavProps{
-					MinWidth: 64, MaxWidth: 360, NoHandle: true, Background: colorPanel,
+					MinWidth: 64, MaxWidth: 360, ShowHandleWhenCollapsed: true, Background: colorPanel,
 					// Settings and Diagnostics belong under the scene list, and
 					// the nav's own footer row is the place that reaches the
-					// bottom: a plain Grow spacer inside the body does not.
-					Footer: func(nav layout.SideNavState) { a.columnFooter(c) },
+					// bottom: a plain Grow spacer inside the body does not. The
+					// footer folds with the rail, so it is told whether the nav
+					// is expanded (questions-v4 P1-6, P5.3).
+					Footer: func(nav layout.SideNavState) { a.columnFooter(c, nav.Expanded) },
 				}, func(nav layout.SideNavState) {
 					a.sceneColumnBody(c, nav.Expanded)
 				})
@@ -206,74 +209,6 @@ func (a *appState) pageBody(c *ui.Context, width, height float32) {
 	})
 }
 
-// topBar carries five things only: the name, the scene, what the session is
-// doing, adding a source, and the way into watching and pages. Every other
-// switch moved to the column it acts on.
-func (a *appState) topBar(c *ui.Context, width float32) {
-	a.frameWidth, a.frameHeight = width, a.lastHeight
-	ui.Row(c).Height(a.barHeight()).WidthPercent(100).Padding(0, spaceLg).
-		Gap(spaceSm).AlignItems(ui.Center).Background(colorBg).Children(func() {
-		a.sceneChip(c)
-		if width >= 900 {
-			label := "‹"
-			tip := a.tr("hide the scene and source list", "收起场景与来源列表")
-			if a.leftCollapsed {
-				label, tip = "›", a.tr("show the scene and source list", "展开场景与来源列表")
-			}
-			if ui.Button(c.Key("top-left"), label).Width(32).Height(a.controlHeight()).
-				Tooltip(tip).Clicked() {
-				a.leftCollapsed = !a.leftCollapsed
-			}
-		}
-		ui.Box(c).Grow(1)
-		if a.lastErr != nil {
-			label := a.tr("Error", "错误")
-			ui.Button(c.Key("top-error"), label).Height(24).Padding(0, spaceSm).
-				Border(1, colorBad).TextColor(colorBad).
-				Tooltip(a.tr("what failed, and what to do about it", "哪里失败了，以及该怎么做")).
-				OnClick(func() { a.errorOpen = true })
-		}
-		if width >= 560 {
-			primary := ui.Button(c.Key("top-add"), a.tr("+ Source", "＋ 来源")).
-				Height(a.controlHeight()).Padding(0, spaceMd).
-				Background(colorAccent).TextColor(colorAccentText)
-			if primary.Clicked() {
-				a.openAddSource()
-			}
-			if ui.Button(c.Key("top-settings"), a.tr("Settings", "设置")).Height(a.controlHeight()).Padding(0, spaceSm).
-				Tooltip(a.tr("appearance, language and the other settings", "外观、语言与其他设置")).Clicked() {
-				a.workspace = workspaceSettings
-			}
-		}
-		editLabel := a.tr("Edit", "编辑")
-		if a.editingShell {
-			editLabel = a.tr("Watch", "观看")
-		}
-		// This button is a mode switch, so it shows which mode is on: filled
-		// while the editing shell is mounted, plain while the stage has the
-		// window to itself. The label names the mode it will switch to.
-		editBackground := colorPanel
-		editText := colorText
-		if !a.editingShell {
-			editText = colorDim
-		}
-		if ui.Button(c.Key("top-edit"), editLabel).Height(a.controlHeight()).Padding(0, spaceMd).
-			Background(editBackground).TextColor(editText).Clicked() {
-			a.editingShell = !a.editingShell
-			if !a.editingShell {
-				a.workspace = workspaceStage
-			}
-			a.invalidate()
-		}
-		if ui.Button(c.Key("top-pages"), a.tr("Pages", "页面")).Height(a.controlHeight()).Padding(0, spaceSm).Clicked() {
-			a.pageMenu = !a.pageMenu
-		}
-	})
-	ui.Box(c).WidthPercent(100).Height(1).Background(colorLine)
-}
-
-// sceneChip names the scene the window shows. This build has one scene, and the
-// chip says so instead of pretending a menu of scenes exists.
 // sceneLabelText is the core's scene name in the window's language. The name is
 // a description, not data: "picture 1 · sound 1 at 0.30" reads as gibberish to a
 // Chinese user, so the three words are translated while the numbers stay.
@@ -287,14 +222,6 @@ func (a *appState) sceneLabelText() string {
 		}
 	}
 	return a.tr("Scene", "场景")
-}
-
-func (a *appState) sceneChip(c *ui.Context) {
-	chip := ui.Button(c.Key("scene-chip"), a.sceneLabelText()).Height(28).Padding(0, spaceSm).
-		Tooltip(a.tr("the scene this window shows", "此窗口显示的场景"))
-	if chip.Clicked() {
-		a.sceneMenu = !a.sceneMenu
-	}
 }
 
 // stripStatus is the one-line account of the session in the bar and the status
@@ -632,7 +559,47 @@ func (a *appState) sourceSub(it *item) string {
 
 // columnFooter is the page shortcut strip. The pages moved out of the top bar,
 // so this is where they stay one press away while the picture is visible.
-func (a *appState) columnFooter(c *ui.Context) {
+func (a *appState) columnFooter(c *ui.Context, expanded bool) {
+	if !expanded {
+		// The rail is 64 DIPs: only icons fit, and every page stays one press
+		// away, so folding the sidebar does not hide navigation (P5.3).
+		ui.Column(c).WidthPercent(100).Padding(spaceXs, spaceXs).Gap(spaceXs).
+			AlignItems(ui.Center).Children(func() {
+			iconRow := func(key string, icon *ui.SVG, label string, on bool, click func()) {
+				b := ui.ButtonBase(c.Key(key)).Size(30, 30).Radius(radiusSm).Justify(ui.Center).
+					Tooltip(label)
+				b = b.Background(stateFill(b.Hovered(), b.Pressed(), on))
+				ink := colorTextDim
+				if on {
+					ink = colorSelectedText
+				}
+				b = b.TextColor(ink)
+				b.Children(func() { ui.Icon(c, icon).Size(16, 16) })
+				if b.Clicked() {
+					click()
+				}
+			}
+			sourcesOn := a.dockUp && !a.dockHidden[dockSources] && a.workspace == workspaceStage
+			iconRow("foot-sources", lucide.SquareStack(), a.pageLabel(workspaceSources), sourcesOn, func() {
+				delete(a.dockHidden, dockSources)
+				a.dockUp = true
+				a.workspace = workspaceStage
+			})
+			iconRow("foot-"+itoa(int(workspaceDiagnostics)), lucide.Activity(),
+				a.pageLabel(workspaceDiagnostics), a.workspace == workspaceDiagnostics, func() {
+					a.workspace = workspaceDiagnostics
+				})
+			iconRow("foot-"+itoa(int(workspaceSettings)), lucide.Settings(),
+				a.pageLabel(workspaceSettings), a.workspace == workspaceSettings, func() {
+					a.workspace = workspaceSettings
+				})
+			iconRow("foot-stage", lucide.Clapperboard(), a.tr("Stage", "舞台"),
+				a.workspace == workspaceStage, func() {
+					a.workspace = workspaceStage
+				})
+		})
+		return
+	}
 	ui.Row(c).WidthPercent(100).Padding(spaceSm, spaceSm).Gap(spaceXs).Wrap().Children(func() {
 		navRow := func(key string, icon *ui.SVG, label string, on bool, click func()) {
 			button := ui.ButtonBase(c.Key(key)).Height(30).Padding(0, spaceSm).Gap(spaceSm).
@@ -983,32 +950,6 @@ func (a *appState) transportBar(c *ui.Context) {
 				})
 			})
 		})
-	})
-}
-
-// propertiesColumn is the right column: the selected source's properties, then
-// the audio levels. The mixer keeps its place at the bottom so a level change is
-// one press from anything the properties show.
-func (a *appState) propertiesColumn(c *ui.Context, height float32) {
-	ui.Column(c).Width(propertiesWidth).Background(colorBgSoft).Children(func() {
-		ui.Column(c).Grow(1).MinWidth(0).Children(func() {
-			ui.Row(c).Padding(spaceSm, spaceMd).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, a.tr("Properties", "属性")).FontSize(textMicro).TextColor(colorDim)
-				ui.Box(c).Grow(1)
-				if it, index, ok := a.selectedSource(); ok {
-					ui.Text(c, itoa(index+1)+" · "+shortURI(it.uri)).FontSize(textMicro).
-						TextColor(colorDim).SingleLine()
-				}
-			})
-			a.propertiesTabs(c)
-			ui.Scroll(c).Grow(1).WidthPercent(100).Children(func() {
-				ui.Column(c).WidthPercent(100).Padding(0, spaceMd).Gap(spaceSm).Children(func() {
-					a.propertiesBody(c)
-				})
-			})
-		})
-		ui.Box(c).WidthPercent(100).Height(1).Background(colorLine)
-		a.mixerPanel(c, height)
 	})
 }
 

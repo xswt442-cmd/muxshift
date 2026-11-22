@@ -793,13 +793,14 @@ func (a *appState) settingsForm(c *ui.Context) {
 		}
 		a.settingsHint(c, a.tr("an explicit command line flag wins over these numbers", "命令行显式给出的参数优先"))
 	case "Diagnostics":
+		// The full diagnostics page is the one place with the per-source state,
+		// the browser pairing code and the event log. This section used to
+		// repeat a subset of it; it now only points there, so there is a single
+		// diagnostics destination (questions-v4 P1-4).
 		ui.Text(c, strconv.Itoa(a.eventCount())+a.tr(" event(s) in the session, ", " 个事件，")+strconv.Itoa(len(a.items))+a.tr(" source(s)", " 个来源"))
-		ui.Text(c, a.tr("settings file: ", "设置文件：")+a.settingsPath).Wrap()
-		if ui.Button(c.Key("diag-log-state"), a.tr("Write the current state to the log", "把当前状态写入日志")).Width(260).Clicked() {
-			a.logState()
+		if ui.Button(c.Key("diag-open-page"), a.tr("Open the diagnostics page", "打开诊断页")).Width(260).Clicked() {
+			a.workspace = workspaceDiagnostics
 		}
-		ui.Button(c.Key("diag-capture"), a.tr("Capture a page on the next failure", "下次失败时抓取页面")).Width(260).Disabled(true).
-			Tooltip(a.tr("there is no page capture on failure yet", "尚未实现失败时抓取页面"))
 	case "About":
 		a.aboutPage(c)
 	}

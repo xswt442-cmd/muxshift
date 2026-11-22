@@ -667,11 +667,13 @@ func (a *appState) columnFooter(c *ui.Context) {
 			a.pageLabel(workspaceSettings), a.workspace == workspaceSettings, func() {
 				a.workspace = workspaceSettings
 			})
-		if a.workspace != workspaceStage {
-			navRow("foot-stage", lucide.Clapperboard(), a.tr("Stage", "舞台"), false, func() {
+		// The stage is always one of the four, so the strip never grows or
+		// shrinks as pages change (questions-v4 P1-3: entering settings used to
+		// make a "舞台" button appear out of nowhere).
+		navRow("foot-stage", lucide.Clapperboard(), a.tr("Stage", "舞台"),
+			a.workspace == workspaceStage, func() {
 				a.workspace = workspaceStage
 			})
-		}
 	})
 }
 

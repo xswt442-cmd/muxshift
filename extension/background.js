@@ -1,6 +1,6 @@
 // The service worker talks to the desktop window over a loopback address. No
 // native host is installed: the window prints a pairing code and this extension
-// is given a token for it, once. Media never travels this way 鈥?only the address
+// is given a token for it, once. Media never travels this way — only the address
 // the user selected.
 const PORT = 8731;
 const FALLBACK_BASE = `http://127.0.0.1:${PORT}`;
@@ -131,12 +131,6 @@ function collectMedia() {
       detail: "No importable address was found. A player that keeps its segments in a blob, or one whose media is protected, cannot be handed over.",
     });
   }
-  if (document.querySelector("video[src^='blob:'], video source[src^='blob:']")) {
-    notes.push({
-      kind: "blob",
-      detail: "This page plays through Media Source: the picture is presented, but there are no original segments to import.",
-    });
-  }
   return { sources, notes, page: { title: document.title, url: location.href } };
 }
 
@@ -158,11 +152,23 @@ function base(address) {
 async function request(base, path, body, token) {
   const headers = { "Content-Type": "application/json" };
   if (token) headers["X-MuxShift-Handoff"] = token;
-  const response = await fetch(`${base}${path}`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body || {}),
-  });
+  let response;
+  try {
+    response = await fetch(`${base}${path}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body || {}),
+    });
+  } catch (error) {
+    // A TypeError here means fetch could not reach the loopback address: the
+    // window is not running or is not listening. Say what to do instead of
+    // surfacing the browser's raw "Failed to fetch". HTTP status semantics
+    // (401/403/400/202) are unaffected and still arrive from the code below.
+    if (error instanceof TypeError) {
+      throw new Error("无法连接本机 MuxShift，请确认桌面端已运行并已配对");
+    }
+    throw error;
+  }
   const text = await response.text();
   let parsed = {};
   try {

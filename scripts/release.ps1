@@ -96,9 +96,28 @@ Set-Content -Path (Join-Path $out "VERSION.txt") -Encoding utf8 -Value @(
 )
 
 Copy-Item (Join-Path $root "LICENSE") (Join-Path $out "LICENSE") -Force
-Copy-Item (Join-Path $root "README.md") (Join-Path $out "README.md") -Force
-Copy-Item (Join-Path $root "README.en.md") (Join-Path $out "README.en.md") -Force
-& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "scripts\thirdparty.ps1") -Out (Join-Path $OutRoot "$name\THIRD-PARTY.md") | Out-Null
+
+# What a person opens after unpacking or installing keeps the program at the
+# top and groups the rest: the extension the window pairs with, and the
+# documents. The About page finds extension\ beside muxshift.exe.
+$extension = Join-Path $root "extension"
+$extensionOut = Join-Path $out "extension"
+New-Item -ItemType Directory -Force -Path $extensionOut | Out-Null
+foreach ($file in @("manifest.json", "background.js", "popup.html", "popup.js")) {
+    Copy-Item (Join-Path $extension $file) (Join-Path $extensionOut $file) -Force
+}
+Copy-Item (Join-Path $extension "icons") (Join-Path $extensionOut "icons") -Recurse -Force
+# host\ is the older native-messaging program. This version of the extension
+# pairs over loopback and never starts a host, so it is not shipped.
+if (-not (Test-Path (Join-Path $extensionOut "manifest.json"))) {
+    throw "the release has no extension\manifest.json; without it a website address could never reach the window"
+}
+
+$docs = Join-Path $out "docs"
+New-Item -ItemType Directory -Force -Path $docs | Out-Null
+Copy-Item (Join-Path $root "README.md") (Join-Path $docs "README.md") -Force
+Copy-Item (Join-Path $root "README.en.md") (Join-Path $docs "README.en.md") -Force
+& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "scripts\thirdparty.ps1") -Out (Join-Path $OutRoot "$name\docs\THIRD-PARTY.md") | Out-Null
 if ($LASTEXITCODE -ne 0) {
     # A release without an accurate notice is not a release: the generator
     # names the modules the binary links, and a failure there leaves the file
@@ -120,6 +139,19 @@ The window opens on the stage. Sources, Diagnostics, Settings and Mixer are the
 other pages; Ctrl+1..5 jump between them, Ctrl+S shows the selected source,
 Ctrl+H hears it, Ctrl+R retries a source that failed.
 
+This directory
+--------------
+* muxshift.exe is the program.
+* extension\ is the browser extension that hands one website address to the
+  window. Load it unpacked: open edge://extensions or chrome://extensions, turn
+  on developer mode, choose "Load unpacked" and pick this folder. Then pair once
+  with the six-digit code on the Diagnostics page. It is on no extension store,
+  and nothing loads it for you; Settings > About shows this folder and opens it.
+* docs\ holds README.md (Chinese), README.en.md (English), this file and the
+  third-party notice.
+* VERSION.txt names the version, the build commit and the SHA-256 of
+  muxshift.exe; LICENSE is the MIT licence.
+
 What this build needs from the machine
 --------------------------------------
 * Windows 10 or 11.
@@ -128,16 +160,17 @@ What this build needs from the machine
   as missing rather than guessed at.
 * The Microsoft Edge WebView2 runtime only if the optional web control panel is
   started (not part of a normal start).
+* Edge or Chrome for the extension; no other feature needs a browser.
 
 What it does not ship
 ---------------------
 * No media, no sample streams, and no vocal-separation weights.
-* The third-party notice beside this file lists the Go modules the binary links
-  and the licences of the copies it was built from.
-* README.md is the Chinese README; README.en.md is the English one. Both are the
-  repository's, not a version written for the release.
+* The third-party notice in docs\ lists the Go modules the binary links and the
+  licences of the copies it was built from.
+* README.md and README.en.md are the repository's, not a version written for the
+  release.
 '@
-[IO.File]::WriteAllText((Join-Path $out "RUNNING.txt"), $readme, (New-Object Text.UTF8Encoding($false)))
+[IO.File]::WriteAllText((Join-Path $docs "RUNNING.txt"), $readme, (New-Object Text.UTF8Encoding($false)))
 
 # The release asset is the archive, not the loose directory: the directory is
 # what was built, the zip is what a user downloads.

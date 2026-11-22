@@ -18,6 +18,14 @@
 #define MyAppPublisher "MuxShift contributors"
 #define MyAppURL "https://github.com/xswt442-cmd/muxshift"
 
+; The window reaches a website address only through the extension that ships
+; beside it. A release directory built before the extension was packaged would
+; install a window whose About page points at nothing, so refuse to build it
+; rather than hand out a setup that cannot do what the README says.
+#if !FileExists(AddBackslash(MySourceDir) + "extension\manifest.json")
+  #error MySourceDir carries no extension\manifest.json; build the release directory with scripts\release.ps1 first
+#endif
+
 [Setup]
 AppId={{15A6423E-2ACC-4222-839A-EE78D68D7D21}
 AppName={#MyAppName}

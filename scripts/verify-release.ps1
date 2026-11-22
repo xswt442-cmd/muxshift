@@ -38,6 +38,19 @@ if ($LASTEXITCODE -ne 0) { throw "release build failed in the clone" }
 $exe = Join-Path $clone "dist\muxshift-$Version-windows-amd64\muxshift.exe"
 if (-not (Test-Path $exe)) { throw "the release directory has no binary at $exe" }
 
+# The window takes a website address only through the extension beside it, and
+# the About page points at that folder. A release without it is missing a
+# documented feature, so a build that produces this directory has to carry it.
+$releaseDir = Join-Path $clone "dist\muxshift-$Version-windows-amd64"
+foreach ($required in @("extension\manifest.json", "extension\background.js", "extension\popup.html",
+        "docs\README.md", "docs\README.en.md", "docs\RUNNING.txt", "docs\THIRD-PARTY.md",
+        "LICENSE", "VERSION.txt")) {
+    if (-not (Test-Path (Join-Path $releaseDir $required))) {
+        throw "the release directory has no $required"
+    }
+}
+Write-Output "ok: the release carries the extension and its documents"
+
 $reportedOut = Join-Path $clone "dist\version-check.txt"
 $reportedErr = Join-Path $clone "dist\version-check.err"
 $reportedProcess = Start-Process -FilePath $exe -ArgumentList "-version" -Wait -NoNewWindow -PassThru `

@@ -51,6 +51,10 @@ const (
 	commandMute       commandKind = "mute"
 	commandSolo       commandKind = "solo"
 	commandMasterMute commandKind = "master-mute"
+	// commandOpenExtension shows the folder the browser extension ships in. It
+	// changes no source, track, scene or player; the outcome says which folder
+	// the shell was asked to show.
+	commandOpenExtension commandKind = "open-extension"
 )
 
 // UnknownSourceError names a source that is not in the session any more, which
@@ -174,6 +178,16 @@ func (a *appState) runCommand(cmd command) commandResult {
 	case commandMasterMute:
 		result.Message = a.toggleMasterMute()
 		return finish(nil, result.Message)
+
+	case commandOpenExtension:
+		dir, err := a.extensionFolder()
+		if err != nil {
+			return finish(err, "")
+		}
+		if err := a.openExtensionFolder(dir); err != nil {
+			return finish(err, "")
+		}
+		return finish(nil, dir)
 
 	case commandAdd:
 		uri := strings.TrimSpace(cmd.URI)

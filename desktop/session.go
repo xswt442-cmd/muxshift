@@ -318,6 +318,13 @@ type appState struct {
 	// its place, and contextOpenURL is what the panel hands over each frame.
 	openURL        func(string, func(error))
 	contextOpenURL func(string, func(error))
+	// openFolder shows the browser extension's directory in the shell. It is a
+	// test seam like openURL; exeDir overrides where this build says it runs
+	// from, which only a test needs, and extensionDir caches the folder once it
+	// has been found so the About page need not stat the disk every frame.
+	openFolder   func(string) error
+	exeDir       string
+	extensionDir string
 
 	// handoff is the loopback listener a browser extension pairs with; it is
 	// nil when that listener could not start, and handoffErr says why (P5).

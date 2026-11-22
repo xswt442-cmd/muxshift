@@ -164,6 +164,8 @@ func (a *appState) aboutPage(c *ui.Context) {
 		})
 	}
 	ui.Box(c).WidthPercent(100).Height(1).Background(colorLineSoft)
+	a.extensionBlock(c)
+	ui.Box(c).WidthPercent(100).Height(1).Background(colorLineSoft)
 	view := a.updateSnapshot()
 	ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
 		label := a.tr("Check for updates", "检查更新")
@@ -210,4 +212,35 @@ func (a *appState) aboutPage(c *ui.Context) {
 func versionsEqual(a, b string) bool {
 	n, err := compareVersions(a, b)
 	return err == nil && n == 0
+}
+
+// extensionBlock is the About page's browser-extension section: the folder the
+// release put the extension in, a button that opens it, and the loading steps.
+// Loading an unpacked extension is a browser action, so the block shows the
+// path and the steps rather than a button that would claim to install it.
+func (a *appState) extensionBlock(c *ui.Context) {
+	ui.Text(c, a.tr("Browser extension", "浏览器扩展")).FontSize(textSmall).FontWeight(500).TextColor(colorText)
+	dir, err := a.extensionFolder()
+	if err != nil {
+		ui.Text(c, err.Error()).FontSize(textSmall).TextColor(colorBad).Wrap()
+		ui.Text(c, a.tr("a release puts the extension in an extension folder beside muxshift.exe; this build has none",
+			"正式发布包会把扩展放在 muxshift.exe 旁边的 extension 目录；这个构建没有该目录")).
+			FontSize(textMicro).TextColor(colorTextDim).Wrap()
+		return
+	}
+	ui.Row(c).WidthPercent(100).Gap(spaceMd).Children(func() {
+		ui.Text(c, a.tr("Folder", "目录")).Width(150).FontSize(textMicro).TextColor(colorDim)
+		ui.Text(c, dir).FontSize(textSmall).TextColor(colorText).Wrap()
+	})
+	ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
+		if ui.Button(c.Key("about-open-extension"), a.tr("Open the folder", "打开目录")).Height(30).Clicked() {
+			a.report(a.runCommand(command{Kind: commandOpenExtension}))
+		}
+		ui.Text(c, a.tr("then load it unpacked: edge://extensions or chrome://extensions, turn on developer mode, Load unpacked, choose this folder",
+			"再在浏览器里加载：edge://extensions 或 chrome://extensions → 开发人员模式 → 加载解压缩的扩展 → 选这个目录")).
+			FontSize(textMicro).TextColor(colorTextDim).Wrap()
+	})
+	ui.Text(c, a.tr("pair once with the code on Diagnostics; the pairing ends when this window closes",
+		"在诊断页取一次配对码完成配对；窗口关闭后需要重新配对")).
+		FontSize(textMicro).TextColor(colorTextDim).Wrap()
 }

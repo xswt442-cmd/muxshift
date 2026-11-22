@@ -31,8 +31,9 @@ type settings struct {
 	NudgeStep float64 `json:"nudgeStep"`
 
 	// MuteUnaligned keeps the sound of a source whose place on the shared
-	// timeline is unknown off until a person allows it. Turning it off is a
-	// deliberate choice, not a default.
+	// timeline is unknown off until a person allows it. It is off by default so
+	// a freshly added source can be heard; turning it on is a deliberate
+	// protection for spoiler-sensitive setups (questions-v4 P0-1).
 	MuteUnaligned bool `json:"muteUnaligned"`
 
 	// MasterVolume multiplies every source's scene level at the player.
@@ -173,7 +174,7 @@ func defaultSettings() settings {
 		StartPage:     "stage",
 		DefaultVolume: 1,
 		NudgeStep:     0.1,
-		MuteUnaligned: true,
+		MuteUnaligned: false,
 		MasterVolume:  1,
 		DockOpen:      true,
 		ConsoleLayout: consolePanels,

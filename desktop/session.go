@@ -577,14 +577,15 @@ func newAppStateWithSettings(uris []string, loaded settings) (*appState, error) 
 	}
 	for _, it := range app.items {
 		if it.audio != "" {
-			// The first level comes from the source itself, which is where a
+			// Each source is routed at its own level, which is where a
 			// remembered preference already sits. Routing at 1 here would make
 			// the memory a decoration: the scene would say 100% and the player
-			// would be told 100%, whatever the file remembered.
-			if _, err := session.SetSceneAudio(app.scene, it.audio, it.volume, false); err != nil {
+			// would be told 100%, whatever the file remembered. Every source is
+			// routed, not just the first, so several command-line sources mix
+			// together instead of only the first one being heard (P0-1).
+			if _, err := session.SetSceneAudio(app.scene, it.audio, it.volume, it.muted); err != nil {
 				app.lastErr = safeOpenError(err)
 			}
-			break
 		}
 	}
 	app.apply()
@@ -856,6 +857,18 @@ func (a *appState) landImport(token int, uri string, stream hls.Stream, mode imp
 			wakeNetworkPlayer(it.uri, rawPlayer(player), a.generationIs(it, it.generation))
 			a.items = append(a.items, it)
 			a.selected = it.source.ID
+			// A source the user just imported is audible by default: route its
+			// audio into the scene at its own level, exactly the way a source
+			// given on the command line is routed at startup. Without this the
+			// scene held no level for the track and apply() muted a source the
+			// user had just added, which is the "没有声音" in questions-v4 P0-1.
+			if it.audio != "" {
+				if _, routed := a.sceneLevel(it); !routed {
+					if _, err := a.session.SetSceneAudio(a.scene, it.audio, it.volume, it.muted); err != nil {
+						a.lastErr = safeOpenError(err)
+					}
+				}
+			}
 			a.apply()
 			if live {
 				// A live stream arrives without a timeline to align against:

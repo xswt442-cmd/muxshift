@@ -22,6 +22,7 @@
 ## What it does
 
 - **Several sources in one session**: each source keeps its own audio and video tracks, and a scene picks which picture is shown and which sound is played. Volume is set per source.
+- A normal desktop launch reopens saved sources and restores the scene, layout, and volume levels. A temporary launch with `-media` preserves the saved session.
 - **Manual alignment**: nudge one source against another in steps of 0.1 s. A playlist that carries PDT also yields a cross-source suggestion; the automatic result is only a suggestion and never writes the timeline.
 - **Replay of a live stream**: live segments stay in a bounded directory, the remaining range is reported, and one span can be cut into a recording you can play back.
 - **Seeking inside a replay**: a stage that is already replaying can request one position by its second inside the common window. Each source is authorized separately, and an out-of-window request or a second one before the first finishes is refused.
@@ -67,9 +68,13 @@ Behind a proxy: the desktop app reads `HTTP_PROXY`/`HTTPS_PROXY` first, then the
 
 - **Local file** opens the system file picker and adds the chosen file to the current session; cancelling changes nothing.
 - **Media link** takes an http(s) HLS playlist or a directly readable media file. The desktop reads what the address actually serves rather than trusting its extension, so a web page, a 404, or an unsupported type is reported as an error.
-- **Website address** opens the page in the system browser. For the page's own address to reach the desktop, load the browser extension shipped with the program: open Settings → About → Browser extension and press "Open the folder", or open the `extension` folder in the install directory, then load it unpacked in the browser (`edge://extensions` or `chrome://extensions` → developer mode → Load unpacked). No Native Host is needed: take the one-time pairing code from the Diagnostics page, paste it into the popup once, then pick the address the page has loaded.
+- **Website address** opens the page in the system browser. Once paired, the browser extension can hand media addresses on the page to the desktop.
 
-On Bilibili, Twitch, Kick, and YouTube live pages, the popup adds `Use this live stream`. The desktop receives one signed URL and no cookie; a stream with `#EXT-X-KEY` is refused, and a stream without `#EXT-X-ENDLIST` opens as live and starts on its own. A master with a separate audio rendition is also refused, because the current player opens one address and cannot keep the video plus a second audio playlist. The extension's mirror pick is best-effort: a cross-origin opaque response cannot prove a mirror plays, so the desktop still refuses an address by its playlist contents.
+In Settings → About → Browser extension, choose "Open the folder", or open the `extension` folder in the install directory. Enable developer mode in `edge://extensions` or `chrome://extensions` and load the unpacked extension. Enter the one-time code from the desktop's Diagnostics page in the popup to pair without a Native Host.
+
+Ordinary candidates appear in the popup's main view and can be selected with the keyboard before sending. Supported live pages offer "Resolve and send". Clicking it authorizes sending the address resolved for that request.
+
+On Bilibili, Twitch, Kick, and YouTube live pages, the popup adds a “Resolve and send” action. The desktop receives one signed URL and no cookie; a stream with `#EXT-X-KEY` is refused, and a stream without `#EXT-X-ENDLIST` opens as live and starts on its own. A master with a separate audio rendition is also refused, because the current player opens one address and cannot keep the video plus a second audio playlist. The extension's mirror pick is best-effort: a cross-origin opaque response cannot prove a mirror plays, so the desktop still refuses an address by its playlist contents. After the popup says the desktop accepted the request, the desktop's Sources page remains the source of truth for media opening and failure status.
 
 Whether a page can hand anything over is up to the page. `blob:`/MSE players, pages behind a login or DRM, and cross-origin restrictions are not worked around, only explained. Only http(s) addresses are accepted, and no cookies, request headers, or keys are passed on.
 

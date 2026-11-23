@@ -5,9 +5,49 @@
 package main
 
 import (
+	"strings"
+
 	"github.com/egoist/mygo/ui"
 	"github.com/xswt442-cmd/muxshift/core"
 )
+
+const maxDisplayNameRunes = 80
+
+func cappedDisplayName(name string) string {
+	name = strings.TrimSpace(name)
+	runes := []rune(name)
+	if len(runes) > maxDisplayNameRunes {
+		return string(runes[:maxDisplayNameRunes])
+	}
+	return name
+}
+
+func (a *appState) sourceNameConflict(id core.SourceID, draft string) bool {
+	draft = cappedDisplayName(draft)
+	if draft == "" {
+		return false
+	}
+	for _, it := range a.items {
+		if it.source.ID == id {
+			continue
+		}
+		name := it.source.Name
+		if name == "" {
+			name = it.persistedName
+		}
+		if name != "" && strings.EqualFold(cappedDisplayName(name), draft) {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *appState) renameFeedback() string {
+	if a.renameKind == renameSource && a.sourceNameConflict(core.SourceID(a.renameID), a.renameText) {
+		return a.tr("Another source already has this name.", "另一来源已使用此名称。")
+	}
+	return ""
+}
 
 // renameTarget says which kind of object the rename dialog edits.
 type renameTarget int
@@ -66,6 +106,10 @@ func (a *appState) refreshItemSource(id core.SourceID) {
 // confirmRename applies the field. An empty field clears the name, so the
 // display falls back to the automatic label; Core does the trimming and capping.
 func (a *appState) confirmRename() {
+	if feedback := a.renameFeedback(); feedback != "" {
+		a.invalidate()
+		return
+	}
 	var err error
 	switch a.renameKind {
 	case renameScene:
@@ -111,7 +155,7 @@ func (a *appState) renamePanel(c *ui.Context) {
 		ui.Text(c, title).FontSize(textTitle).FontWeight(600).TextColor(colorText)
 		field := a.field(c, &a.renameText).WidthPercent(100).
 			Placeholder(a.tr("leave empty for the automatic name", "留空则使用自动名称")).
-			MaxLength(200)
+			MaxLength(maxDisplayNameRunes)
 		field.OnTextKey(func(k ui.TextKey) bool {
 			if k.Key != ui.KeyEnter || k.Mods != 0 {
 				return false
@@ -119,9 +163,18 @@ func (a *appState) renamePanel(c *ui.Context) {
 			submit()
 			return true
 		})
-		ui.Text(c, a.tr("Leave it empty to use the automatic name.",
-			"留空将使用自动名称。")).
-			FontSize(textMicro).FontWeight(400).TextColor(colorDim)
+		feedback := a.renameFeedback()
+		hint := a.tr("Up to 80 characters. Leave empty for the automatic name.",
+			"最多 80 个字符。留空将使用自动名称。")
+		if feedback != "" {
+			hint = feedback
+		}
+		hintColor := colorDim
+		if feedback != "" {
+			hintColor = colorBad
+		}
+		ui.Text(c, hint).
+			FontSize(textMicro).FontWeight(400).TextColor(hintColor)
 		ui.Row(c).Gap(spaceSm).WidthPercent(100).AlignItems(ui.Center).Children(func() {
 			ui.Box(c).Grow(1)
 			a.secondaryButton(c, "rename-cancel", a.tr("Cancel", "取消"), 88, true, func() {

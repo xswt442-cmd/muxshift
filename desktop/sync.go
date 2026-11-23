@@ -324,6 +324,7 @@ func (a *appState) syncMembers() (core.SyncGroup, error) {
 	}
 	a.sync.group = group.ID
 	log.Printf("sync: created %s with %d tracks", group.ID, len(group.Tracks))
+	a.saveSession()
 	return group, nil
 }
 
@@ -456,6 +457,7 @@ func (a *appState) anchor(index int) error {
 		a.sync.place(track, dvr.BasisManual, instance, epoch)
 	}
 	a.apply()
+	a.saveSession()
 	return nil
 }
 
@@ -557,6 +559,7 @@ func (a *appState) nudge(index int, delta time.Duration) (string, error) {
 			return "", err
 		}
 	}
+	a.saveSession()
 	// The target is a content position. A recording player counts from its own
 	// first frame, so it must be asked for the file's position; a live player is
 	// asked for its own clock, which is the only mapping anyone has for it.

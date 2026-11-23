@@ -94,14 +94,8 @@ func (a *appState) fontFamily() string {
 	return "Segoe UI"
 }
 
-// syncAppearance rebuilds the token vars when the applied settings name a
-// different theme, scale or font. It runs at the top of view, before the theme
-// is handed to the window, so the first frame already uses the saved look.
-//
-// Appearance is applied the moment a control changes (applyAppearanceNow), so
-// the live settings always name the look to draw; there is no draft preview to
-// undo when the page is left. An unapplied Reset must likewise not repaint the
-// window, which is why the draft is not read here.
+// syncAppearance rebuilds token vars from applied settings before the theme
+// reaches MyGo.
 func (a *appState) syncAppearance() {
 	theme, scale := a.settings.Theme, a.settings.TextScale
 	if a.appliedTheme != theme {

@@ -518,6 +518,9 @@ func (a *appState) applySettingsState(next settings) error {
 	// Both sides get their own copy of the entries: the draft keeps being edited
 	// after Apply, and a shared array would let the next draft edit change what
 	// the applied settings say.
+	if next.DockOpen != a.settings.DockOpen {
+		a.dockUp = next.DockOpen
+	}
 	a.settings = cloneSettings(next)
 	a.beginDraft(next)
 	a.apply()
@@ -525,9 +528,8 @@ func (a *appState) applySettingsState(next settings) error {
 }
 
 // beginDraft starts a fresh draft from the given settings and clears the mark
-// that says this draft asked to forget the remembered sources. Nothing reaches
-// the session until Apply, so the draft is the only place a Clear lives until
-// then.
+// that says this draft asked to forget the remembered sources. Appearance has
+// its immediate path; the other draft changes reach the session on Apply.
 func (a *appState) beginDraft(from settings) {
 	a.settingsDraft = cloneSettings(from)
 	a.draftCleared = false
@@ -596,8 +598,8 @@ type choiceOption struct {
 	label string
 }
 
-// settingsPage draws the Global Settings page. The page edits a draft; nothing
-// reaches the session until Apply, and Cancel puts the draft back.
+// settingsPage draws the Global Settings page. The page edits a draft that Apply
+// commits; Cancel restores it. Appearance has its explicit immediate path.
 func (a *appState) settingsPage(c *ui.Context) {
 	ui.Row(c).WidthPercent(100).AlignItems(ui.Start).Gap(spaceLg).Padding(spaceMd).Children(func() {
 		ui.Column(c).Width(190).Gap(spaceXs).Padding(spaceSm).Children(func() {
@@ -643,21 +645,17 @@ func (a *appState) settingsPage(c *ui.Context) {
 			if a.settingsNote != "" {
 				ui.Text(c, a.settingsNote).TextColor(colorTextDim).Wrap()
 			}
-			if a.settingsSection != "About" {
+			if a.settingsSection != "About" && a.settingsSection != "Diagnostics" {
 				dirty := !sameSettings(a.settingsDraft, a.settings)
 				ui.Row(c).Gap(spaceSm).Padding(0, spaceSm).Children(func() {
 					a.primaryButton(c, "settings-apply", a.tr("Apply", "应用"), 100, dirty, func() {
 						a.applySettingsCommand()
 					})
 					a.secondaryButton(c, "settings-cancel", a.tr("Cancel", "取消"), 100, dirty, func() {
-						a.beginDraft(a.settings)
-						a.settingsErr = ""
-						a.settingsNote = a.tr("cancelled: the draft is back to what is applied", "已取消：草稿恢复为当前生效的设置")
+						a.cancelSettingsDraft()
 					})
-					a.ghostButton(c, "settings-reset", a.tr("Reset to defaults", "恢复默认"), 160, func() {
-						a.beginDraft(defaultSettings())
-						a.settingsErr = ""
-						a.settingsNote = a.tr("defaults are in the draft; Apply writes them", "默认值已填入草稿，点击“应用”写入")
+					a.ghostButton(c, "settings-reset", a.tr("Reset draft to defaults", "草稿恢复默认"), 180, func() {
+						a.resetSettingsDraft()
 					})
 					if dirty {
 						ui.Text(c, a.tr("unsaved changes", "有未应用的更改")).FontSize(textMicro).TextColor(colorWarn)
@@ -737,10 +735,9 @@ func (a *appState) settingsForm(c *ui.Context) {
 			}
 		}
 	case "Appearance":
-		// These five controls do not wait for Apply: a change here is applied
-		// and written at once and is kept when the page is left. Capture the
-		// five values before drawing and compare after, because choiceRow and
-		// checkboxRow report a change only by mutating the draft.
+		ui.Text(c, a.tr("These appearance controls apply and save immediately. Resetting the settings draft does not change them.",
+			"这些外观选项会立即生效并保存。重置设置草稿不会更改它们。")).
+			FontSize(textMicro).TextColor(colorTextDim).Wrap()
 		before := appearanceOf(a.settingsDraft)
 		a.choiceRow(c, a.tr("Colour theme", "配色"), "settings-theme", &a.settingsDraft.Theme, a.themeChoices())
 		a.choiceRow(c, a.tr("Text size", "字号"), "settings-scale", &a.settingsDraft.TextScale, []choiceOption{
@@ -754,6 +751,11 @@ func (a *appState) settingsForm(c *ui.Context) {
 		if appearanceOf(a.settingsDraft) != before {
 			a.applyAppearanceNow()
 		}
+		if ui.Button(c.Key("settings-appearance-reset"), a.tr("Reset appearance now", "立即恢复外观默认值")).Height(28).Clicked() {
+			a.resetAppearanceNow()
+		}
+		ui.Text(c, a.tr("Console layout is saved with Apply.", "控制台布局会随“应用”保存。")).
+			FontSize(textMicro).TextColor(colorTextDim).Wrap()
 		a.choiceRow(c, a.tr("Console layout", "控制台布局"), "settings-console", &a.settingsDraft.ConsoleLayout, []choiceOption{
 			{consolePanels, a.tr("Panels", "面板")},
 			{consoleRows, a.tr("One row per source", "每源一行")},
@@ -781,14 +783,9 @@ func (a *appState) settingsForm(c *ui.Context) {
 				FontSize(textMicro).TextColor(colorWarn).Wrap()
 		}
 	case "Diagnostics":
-		// The full diagnostics page is the one place with the per-source state,
-		// the browser pairing code and the event log. This section used to
-		// repeat a subset of it; it now only points there, so there is a single
-		// diagnostics destination (questions-v4 P1-4).
+		// This settings section is read-only. The shared page navigation owns
+		// the route to the full diagnostics page.
 		ui.Text(c, strconv.Itoa(a.eventCount())+a.tr(" event(s) in the session, ", " 个事件，")+strconv.Itoa(len(a.items))+a.tr(" source(s)", " 个来源"))
-		if ui.Button(c.Key("diag-open-page"), a.tr("Open the diagnostics page", "打开诊断页")).Width(260).Clicked() {
-			a.workspace = workspaceDiagnostics
-		}
 	case "About":
 		a.aboutPage(c)
 	}
@@ -1019,9 +1016,8 @@ func (a *appState) applySettingsCommand() {
 	log.Printf("settings: applied %s", settingsSummary(next))
 }
 
-// appearanceFields are the five Appearance controls that take effect and
-// persist the moment they change, unlike the rest of the page's draft. Keeping
-// them in one comparable value lets the page tell whether a control moved.
+// appearanceFields groups the appearance controls so the page can detect a
+// draft change and preview it without writing settings.
 type appearanceFields struct {
 	Theme      string
 	TextScale  string
@@ -1041,34 +1037,63 @@ func appearanceOf(st settings) appearanceFields {
 	}
 }
 
-// applyAppearanceNow makes the five Appearance choices live and persistent the
-// moment a control changes. It copies only those fields from the draft into a
-// copy of the applied settings and sends them through the same validate, apply
-// and save path the Apply button uses, so there is one route to the session and
-// one route to the file. The draft keeps the other sections' still-unapplied
-// edits, and the five fields now match the applied settings, so the page does
-// not report an appearance change as unsaved.
+func (a *appState) cancelSettingsDraft() {
+	a.beginDraft(a.settings)
+	a.settingsErr = ""
+	a.settingsNote = a.tr("cancelled: the draft is back to what is applied", "已取消：草稿恢复为当前生效的设置")
+	a.invalidate()
+}
+
+func (a *appState) resetSettingsDraft() {
+	a.beginDraft(defaultSettings())
+	copyAppearance(&a.settingsDraft, a.settings)
+	a.settingsErr = ""
+	a.settingsNote = a.tr("the draft is reset; live appearance is unchanged until you use Reset appearance now", "草稿已重置；立即恢复外观默认值前，当前外观保持不变")
+}
+
+func copyAppearance(target *settings, source settings) {
+	target.Theme = source.Theme
+	target.TextScale = source.TextScale
+	target.FontFamily = source.FontFamily
+	target.Compact = source.Compact
+	target.DockOpen = source.DockOpen
+}
+
 func (a *appState) applyAppearanceNow() {
 	draft := cloneSettings(a.settingsDraft)
 	cleared := a.draftCleared
 	next := cloneSettings(a.settings)
-	next.Theme = draft.Theme
-	next.TextScale = draft.TextScale
-	next.FontFamily = draft.FontFamily
-	next.Compact = draft.Compact
-	next.DockOpen = draft.DockOpen
+	copyAppearance(&next, draft)
 	if err := a.applySettingsState(next); err != nil {
 		a.settingsErr = err.Error()
 		return
 	}
-	// applySettingsState reseeds the draft from what it applied; put back what
-	// the other sections were still holding so an appearance switch never
-	// discards their edits. The five appearance fields are already the applied
-	// values.
 	a.settingsDraft = draft
 	a.draftCleared = cleared
 	a.settingsErr = ""
-	a.settingsNote = ""
+	a.settingsNote = a.tr("appearance applied and saved immediately", "外观已立即应用并保存")
+	if err := a.saveSettingsSerialized(next, a.saveTicket()); err != nil {
+		a.settingsErr = fmt.Sprintf("applied, but saving failed: %v", err)
+		return
+	}
+	a.settingsSaved.Store(true)
+	a.invalidate()
+}
+
+func (a *appState) resetAppearanceNow() {
+	draft := cloneSettings(a.settingsDraft)
+	cleared := a.draftCleared
+	next := cloneSettings(a.settings)
+	copyAppearance(&next, defaultSettings())
+	if err := a.applySettingsState(next); err != nil {
+		a.settingsErr = err.Error()
+		return
+	}
+	copyAppearance(&draft, next)
+	a.settingsDraft = draft
+	a.draftCleared = cleared
+	a.settingsErr = ""
+	a.settingsNote = a.tr("appearance defaults applied and saved immediately", "外观默认值已立即应用并保存")
 	if err := a.saveSettingsSerialized(next, a.saveTicket()); err != nil {
 		a.settingsErr = fmt.Sprintf("applied, but saving failed: %v", err)
 		return

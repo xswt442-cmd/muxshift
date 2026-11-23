@@ -399,15 +399,16 @@ func emptyWord(value string) string {
 func waitUntilReady(a *appState, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		var ready int
+		var allReady bool
 		mygoRunOnMain(func() {
 			for _, it := range a.items {
-				if it.player != nil && it.player.Ready() {
-					ready++
+				if it.player == nil || !it.player.Ready() {
+					return
 				}
 			}
+			allReady = len(a.items) > 0
 		})
-		if ready == len(a.items) {
+		if allReady {
 			return true
 		}
 		time.Sleep(250 * time.Millisecond)
@@ -1433,46 +1434,48 @@ func pagesBody(window *mygo.Window, a *appState, dir string) {
 	check(folded, "the rail folds at the smallest window, which is what this walk needs")
 	logf(scenario, "the rail is folded; the bar's page button is the visible way between pages")
 
-	// Watch the page for as long as the client needs to press the button once
-	// per page: the walk itself is driven from outside, the way a person would.
+	// The runner uses the visible navigation. Sources opens a dock tab on the
+	// stage, so it does not count as a separate workspace visit here.
 	visited := []workspace{}
+	seen := map[workspace]bool{}
 	last := workspace(-1)
-	deadline := time.Now().Add(15 * time.Second)
+	returned := false
+	deadline := time.Now().Add(25 * time.Second)
 	for time.Now().Before(deadline) {
 		var current workspace
 		mygoRunOnMain(func() { current = a.workspace })
 		if current != last {
 			visited = append(visited, current)
+			seen[current] = true
 			last = current
 			logf(scenario, "page is now %s", current.title())
 		}
+		returned = current == workspaceStage && seen[workspaceSettings] &&
+			seen[workspaceDiagnostics] && seen[workspaceMixer]
+		if returned {
+			break
+		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	step(window, a, dir, scenario, "pages.png", "after pressing the page button", nil)
+	step(window, a, dir, scenario, "pages.png", "after navigating by mouse", nil)
 
-	check(len(visited) >= 5, "the page button visited %d pages in sequence (%v)", len(visited), visited)
 	if len(visited) > 0 {
 		check(visited[0] == workspaceStage, "the walk started on Stage (%s)", visited[0].title())
 	}
-	if len(visited) == int(workspaceCount) {
-		// A full cycle ends where it started; one extra press proves the button
-		// keeps working after the last page.
-		check(visited[len(visited)-1] == workspaceStage,
-			"the full cycle came back to Stage (%s)", visited[len(visited)-1].title())
+	for _, page := range []workspace{workspaceSettings, workspaceDiagnostics, workspaceMixer} {
+		check(seen[page], "the page menu reached %s", page.title())
 	}
-	for index := 1; index < len(visited); index++ {
-		want := (visited[index-1] + 1) % workspaceCount
-		check(visited[index] == want, "the button went from %s to %s, and the next page is %s",
-			visited[index-1].title(), visited[index].title(), want.title())
-	}
+	check(returned, "the walk returned to Stage after visiting all three workspaces")
 	logf(scenario, "the page button walked: %s", pagePath(visited))
 
 	step(window, a, dir, scenario, "", "back to a normal window", func(a *appState) {
 		window.SetSize(1426, 862)
 	})
 	logf(scenario, "checks failed: %d", failures)
-	a.release()
-	mygo.App.Quit()
+	mygoRunOnMain(func() {
+		a.release()
+		mygo.App.Quit()
+	})
 }
 
 func pagePath(pages []workspace) string {

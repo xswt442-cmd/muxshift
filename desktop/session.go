@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -29,6 +30,11 @@ import (
 // opened for it.
 type item struct {
 	uri string
+	// persistentID identifies this source in saved scenes independently of the
+	// Core ID, which is allocated afresh whenever a session is rebuilt.
+	persistentID  string
+	persistedName string
+	restored      bool
 
 	// origin says whether the address came from the command line; only a source
 	// somebody added by hand writes its level back to the settings file.
@@ -38,8 +44,9 @@ type item struct {
 	video  core.TrackID
 	audio  core.TrackID
 
-	player  desktopPlayer
-	openErr error
+	player    desktopPlayer
+	openErr   error
+	restoring bool
 
 	// previous is the player this item opened before the current one, kept
 	// alive and drawn until the current one has a picture. See reopenPlayer.
@@ -86,6 +93,43 @@ type item struct {
 	// muted is this source's own mute. The scene keeps its routing and level;
 	// the mixer overlay decides whether the sound is heard. See mixer.go.
 	muted bool
+}
+
+// itemKey is the stable identifier the UI and command boundary can use before
+// an unavailable saved source has been registered into Core.
+func itemKey(it *item) core.SourceID {
+	if it == nil {
+		return ""
+	}
+	if it.source.ID != "" {
+		return it.source.ID
+	}
+	if it.persistentID != "" {
+		return core.SourceID("saved:" + it.persistentID)
+	}
+	return ""
+}
+
+func (a *appState) updateRecoveredSourceKey(it *item, oldKey core.SourceID) {
+	if it == nil {
+		return
+	}
+	newKey := itemKey(it)
+	savedKey := core.SourceID("saved:" + it.persistentID)
+	legacyKey := core.SourceID(it.persistentID)
+	if a.selected == oldKey || a.selected == savedKey || a.selected == legacyKey {
+		a.selected = newKey
+	}
+	if a.reselectSource == oldKey || a.reselectSource == savedKey || a.reselectSource == legacyKey {
+		a.reselectSource = newKey
+	}
+}
+
+type pendingSceneBinding struct {
+	video      bool
+	videoIndex int
+	audio      *storedAudio
+	audioIndex int
 }
 
 // trackedRunner is one replay buffer this run opened, kept so shutdown can stop
@@ -229,7 +273,12 @@ type appState struct {
 
 	// importing is the address being read right now, or empty. The field is the
 	// first thing checked so a second Add cannot start a second read.
-	importing string
+	importing           string
+	retryTargetID       string
+	reselectSource      core.SourceID
+	reselectText        string
+	startupMediaQueue   []string
+	pendingImportOrigin sourceOrigin
 
 	// The shell's own state. systemLang is the window's locale, resolved once on
 	// the first frame, and is what "follow the system" means. applied* remember
@@ -361,9 +410,10 @@ type appState struct {
 	// runs, and only touched on the drawing thread.
 	window *mygo.Window
 
-	// settings is what is applied and running; settingsDraft is what the
-	// Settings page edits until Apply. settingsPath is where applied values are
-	// written, and settingsSaved says this start has written that file, so the
+	// settings is what is applied and running; settingsDraft is what the Settings
+	// page edits. Appearance controls update both through their immediate path;
+	// the other draft values wait for Apply. settingsPath is where applied values
+	// are written, and settingsSaved says this start has written that file, so the
 	// page can be exact about the persistence boundary.
 	settings      settings
 	settingsDraft settings
@@ -389,10 +439,34 @@ type appState struct {
 	saveSeq      atomic.Uint64
 	saveDone     atomic.Uint64
 
+	// Session snapshots are coalesced off the drawing thread. The mutex protects
+	// the newest pending copy and its debounce timer; timer and shutdown writes
+	// share this one serialized path.
+	sessionSaveMu         sync.Mutex
+	sessionSavePending    *storedSession
+	sessionSavePendingSeq uint64
+	sessionSaveTimer      *time.Timer
+	sessionSaveWriteMu    sync.Mutex
+	sessionStoreWriter    func(string, storedSession) error
+	sessionSaveNotify     func(func())
+	sessionSaveSeq        uint64
+	sessionSaveDone       uint64
+
 	// sessionPath is where the session snapshot lives, derived from the settings
 	// path so the two files sit together; empty when there is nowhere to write.
 	// See session_store.go.
-	sessionPath string
+	sessionPath          string
+	sessionWriteEnabled  bool
+	sessionErr           string
+	sourceIdentitySeq    uint64
+	pendingBindings      map[core.SceneID]map[string]pendingSceneBinding
+	pendingStageEdits    []storedStageEdits
+	pendingSyncGroups    []storedSyncGroup
+	pendingShifts        []storedShift
+	persistentSceneIDs   map[string]core.SceneID
+	pendingLayoutOrder   []string
+	startupSources       []storedSource
+	startupRestoreCancel context.CancelFunc
 
 	// The rename dialog edits one scene's or one source's display name. It is
 	// kept here so a redraw does not lose what was typed; see rename.go.
@@ -586,7 +660,7 @@ func newAppStateWithSettings(uris []string, loaded settings) (*appState, error) 
 			// would be told 100%, whatever the file remembered. Every source is
 			// routed, not just the first, so several command-line sources mix
 			// together instead of only the first one being heard (P0-1).
-			if _, err := session.SetSceneAudio(app.scene, it.audio, it.volume, it.muted); err != nil {
+			if _, err := session.SetSceneAudio(app.scene, it.audio, it.volume, false); err != nil {
 				app.lastErr = safeOpenError(err)
 			}
 		}
@@ -605,7 +679,7 @@ func newAppShell(session *core.Session, scene core.SceneID, output core.OutputID
 	app.navUp = true
 	app.editingShell = true
 	app.dockHeight = 240
-	app.dockUp = true
+	app.dockUp = loaded.DockOpen
 	app.dockHidden = make(map[string]bool)
 	return app
 }
@@ -769,6 +843,47 @@ const (
 	importDirect
 )
 
+type importPlan struct {
+	uri    string
+	stream hls.Stream
+	mode   importMode
+	live   bool
+}
+
+func inspectImport(ctx context.Context, uri string) (importPlan, error) {
+	plan := importPlan{uri: uri}
+	if !isNetworkAddress(uri) {
+		return plan, nil
+	}
+	kind, err := sniffAddress(ctx, uri)
+	if err != nil {
+		return plan, err
+	}
+	if kind != addressPlaylist {
+		plan.mode = importDirect
+		return plan, nil
+	}
+	role, err := inspectPlaylist(ctx, uri)
+	if err != nil {
+		return plan, err
+	}
+	if role.live {
+		plan.uri = role.address
+		plan.mode = importDirect
+		plan.live = true
+		return plan, nil
+	}
+	plan.stream, err = hls.Probe(ctx, uri, hls.Options{})
+	if err != nil {
+		if ctx.Err() != nil {
+			err = fmt.Errorf("reading %s stopped: %w", shortURI(uri), ctx.Err())
+		}
+		return plan, err
+	}
+	plan.mode = importProbed
+	return plan, nil
+}
+
 // importSource adds a source without freezing the window. Reading a network
 // address takes as long as the origin takes, so both the sniff and the probe run
 // off the drawing thread; everything that writes the session or opens a player
@@ -781,51 +896,307 @@ const (
 // is. A failed probe is never treated as "probably an MP4": the failure is the
 // outcome, with the address's own words in it.
 func (a *appState) importSource(ctx context.Context, uri string, token int) {
-	var (
-		stream   hls.Stream
-		mode     importMode
-		live     bool
-		probeErr error
-	)
-	if isNetworkAddress(uri) {
-		kind, err := sniffAddress(ctx, uri)
-		switch {
-		case err != nil:
-			probeErr = err
-		case kind == addressPlaylist:
-			role, roleErr := inspectPlaylist(ctx, uri)
-			switch {
-			case roleErr != nil:
-				// A protected stream is refused before a player is opened, with
-				// the key method it asked for rather than a failed read; any
-				// other answer that is not a playlist is reported as it came.
-				probeErr = roleErr
-			case role.live:
-				// A live playlist never ends, so there is nothing to enumerate
-				// and no timeline to align against: the player is given the
-				// media playlist itself, which is what its live support reads.
-				// A master playlist is narrowed to one variant first, because
-				// the player is never asked to choose between variants.
-				uri = role.address
-				mode = importDirect
-				live = true
-			default:
-				// A playlist that ends is read as before, so the session gets
-				// the tracks the stream declares.
-				stream, probeErr = hls.Probe(ctx, uri, hls.Options{})
-				if probeErr == nil {
-					mode = importProbed
-				} else if ctx.Err() != nil {
-					probeErr = fmt.Errorf("reading %s stopped: %w", shortURI(uri), ctx.Err())
-				}
+	plan, probeErr := inspectImport(ctx, uri)
+	mygoRunOnMain(func() {
+		a.landImport(token, plan.uri, plan.stream, plan.mode, plan.live, probeErr)
+	})
+}
+
+// retryUnavailableSource repeats address inspection off the drawing thread;
+// only the resulting Core registration and player open return to the window.
+func (a *appState) retryUnavailableSource(it *item, uri string) error {
+	if a.importing != "" {
+		return errors.New("another source read is still in progress")
+	}
+	if it.persistentID == "" {
+		it.persistentID = a.nextPersistentSourceID()
+	}
+	a.importToken++
+	token := a.importToken
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	a.importing = uri
+	a.retryTargetID = it.persistentID
+	a.importSince = time.Now()
+	a.importCancel = cancel
+	a.importDone = make(chan struct{})
+	go a.tickImport(a.importDone)
+	go func(targetID string) {
+		plan, err := inspectImport(ctx, uri)
+		mygoRunOnMain(func() { a.landUnavailableRetry(token, targetID, uri, plan, err) })
+	}(it.persistentID)
+	return nil
+}
+
+func (a *appState) startStoredSourceRestores() {
+	if len(a.startupSources) == 0 || a.closed {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a.startupRestoreCancel = cancel
+	sem := make(chan struct{}, 3)
+	for _, stored := range a.startupSources {
+		if stored.NeedsReselect || strings.TrimSpace(stored.URI) == "" {
+			continue
+		}
+		it := a.itemByPersistentID(stored.ID)
+		if it == nil {
+			continue
+		}
+		it.restoring = true
+		targetID, uri := stored.ID, stored.URI
+		go func() {
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
 			}
-		default:
-			mode = importDirect
+			defer func() { <-sem }()
+			probeCtx, probeCancel := context.WithTimeout(ctx, 20*time.Second)
+			plan, err := inspectImport(probeCtx, uri)
+			probeCancel()
+			a.mainDo(func() {
+				current := a.itemByPersistentID(targetID)
+				if current == nil || a.closed || ctx.Err() != nil {
+					return
+				}
+				current.restoring = false
+				if current.source.ID == "" {
+					if openErr := a.installSavedSource(current, plan, err); openErr != nil {
+						current.openErr = safeOpenError(openErr)
+						a.lastErr = current.openErr
+					} else {
+						go a.watchFirstOpen(current, current.generation)
+					}
+				}
+				a.invalidate()
+			})
+		}()
+	}
+}
+
+func (a *appState) startCommandLineSources(uris []string) {
+	a.startupMediaQueue = append([]string(nil), uris...)
+	a.advanceCommandLineSources()
+}
+
+func (a *appState) advanceCommandLineSources() {
+	if a.closed || len(a.startupMediaQueue) == 0 {
+		a.startupMediaQueue = nil
+		return
+	}
+	uri := a.startupMediaQueue[0]
+	a.startupMediaQueue = a.startupMediaQueue[1:]
+	a.importToken++
+	token := a.importToken
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	a.importing = uri
+	a.importSince = time.Now()
+	a.importCancel = cancel
+	a.importDone = make(chan struct{})
+	go a.tickImport(a.importDone)
+	go func() {
+		plan, err := inspectImport(ctx, uri)
+		mygoRunOnMain(func() {
+			if token != a.importToken || a.closed {
+				return
+			}
+			a.pendingImportOrigin = originCommandLine
+			a.landImport(token, plan.uri, plan.stream, plan.mode, plan.live, err)
+			a.advanceCommandLineSources()
+		})
+	}()
+}
+
+func (a *appState) landUnavailableRetry(token int, targetID, requestedURI string, plan importPlan, inspectErr error) {
+	commandID := core.SourceID("saved:" + targetID)
+	if token != a.importToken {
+		return
+	}
+	if a.closed {
+		a.closeImportTicker()
+		a.importing = ""
+		a.retryTargetID = ""
+		return
+	}
+	it := a.itemByPersistentID(targetID)
+	if it == nil {
+		a.closeImportTicker()
+		a.importing = ""
+		a.retryTargetID = ""
+		return
+	}
+	err := a.installSavedSource(it, plan, inspectErr)
+	if err == nil {
+		a.saveSession()
+		go a.watchFirstOpen(it, it.generation)
+	}
+	a.closeImportTicker()
+	a.importing = ""
+	a.retryTargetID = ""
+	result := commandResult{Command: command{Kind: commandRetry, Source: commandID, URI: requestedURI}, At: time.Now()}
+	if err != nil {
+		it.openErr = safeOpenError(err)
+		result.Err = it.openErr
+		result.Message = "the source could not be reopened"
+		a.lastErr = it.openErr
+	} else {
+		result.Generation = it.generation
+		result.Message = "reopened " + sourceDisplayName(it)
+		a.lastErr = nil
+	}
+	a.lastCommand = result
+	a.report(result)
+	a.invalidate()
+}
+
+func (a *appState) installSavedSource(it *item, plan importPlan, inspectErr error) error {
+	oldKey := itemKey(it)
+	oldSourceID := it.source.ID
+	wasShown := it.shown
+	savedName := it.persistedName
+	if savedName == "" {
+		savedName = it.source.Name
+	}
+	if inspectErr != nil {
+		return inspectErr
+	}
+	candidate := &item{uri: plan.uri, volume: it.volume, muted: it.muted, origin: originAdded}
+	switch plan.mode {
+	case importProbed:
+		inspectErr = a.attachStream(candidate, plan.stream)
+	case importDirect:
+		inspectErr = a.addDirect(candidate)
+	default:
+		inspectErr = a.addLocal(candidate)
+	}
+	if inspectErr == nil && savedName != "" {
+		inspectErr = a.session.RenameSource(candidate.source.ID, savedName)
+		if inspectErr == nil {
+			candidate.source, _ = a.session.Source(candidate.source.ID)
 		}
 	}
-	mygoRunOnMain(func() {
-		a.landImport(token, uri, stream, mode, live, probeErr)
-	})
+	if inspectErr == nil {
+		var player *ui.VideoPlayer
+		player, inspectErr = a.openImportedPlayer(plan.uri)
+		if inspectErr == nil && player == nil {
+			inspectErr = errors.New("player open returned no player")
+		}
+		if inspectErr == nil {
+			candidate.player = player
+			if oldSourceID != "" {
+				a.preserveSourceBeforeReplacement(it)
+				a.close(it)
+				if removeErr := a.session.RemoveSource(oldSourceID); removeErr != nil {
+					candidate.player.Close()
+					candidate.player = nil
+					inspectErr = removeErr
+				}
+			}
+			if inspectErr == nil {
+				candidate.generation = it.generation + 1
+				candidate.persistentID = it.persistentID
+				candidate.persistedName = savedName
+				candidate.restored = true
+				candidate.shown = wasShown
+				it.uri = candidate.uri
+				it.source = candidate.source
+				it.video = candidate.video
+				it.audio = candidate.audio
+				it.player = candidate.player
+				it.generation = candidate.generation
+				it.persistedName = savedName
+				it.shown = wasShown
+				it.openErr = nil
+				a.pruneStageEdits()
+				a.updateRecoveredSourceKey(it, oldKey)
+				a.restoreRetryBindings(it)
+				a.restorePersistentMetadata(a.persistentSceneIDs)
+				left := a.pendingLayoutOrder[:0]
+				for _, id := range a.pendingLayoutOrder {
+					if id == it.persistentID {
+						a.layoutTaken = append(a.layoutTaken, it.source.ID)
+					} else {
+						left = append(left, id)
+					}
+				}
+				a.pendingLayoutOrder = left
+				wakeNetworkPlayer(it.uri, rawPlayer(it.player), a.generationIs(it, it.generation))
+				a.closePendingWhenReady()
+				a.apply()
+				return nil
+			}
+		}
+	}
+	a.dropUnreachableSource(candidate)
+	return inspectErr
+}
+
+func (a *appState) restoreRetryBindings(it *item) {
+	for sceneID, bindings := range a.pendingBindings {
+		binding, ok := bindings[it.persistentID]
+		if !ok {
+			continue
+		}
+		if binding.video && it.video != "" {
+			scene, err := a.session.Scene(sceneID)
+			if err == nil && !containsTrack(scene.Video, it.video) {
+				tracks := append([]core.TrackID(nil), scene.Video...)
+				index := min(max(binding.videoIndex, 0), len(tracks))
+				tracks = append(tracks, "")
+				copy(tracks[index+1:], tracks[index:])
+				tracks[index] = it.video
+				_, err = a.session.SetSceneVideo(sceneID, tracks...)
+			}
+			if err == nil {
+				binding.video = false
+			}
+		}
+		if binding.audio != nil && it.audio != "" {
+			scene, err := a.session.Scene(sceneID)
+			if err == nil {
+				levels := append([]core.AudioLevel(nil), scene.Audio...)
+				ordered := make([]storedAudio, 0, len(levels)+1)
+				for _, level := range levels {
+					if owner := a.sourceOfTrack(level.Track); owner != "" {
+						if source := a.itemBySourceID(owner); source != nil {
+							ordered = append(ordered, storedAudio{Source: source.persistentID, Volume: level.Volume, Muted: level.Muted})
+						}
+					}
+				}
+				index := min(max(binding.audioIndex, 0), len(ordered))
+				ordered = append(ordered, storedAudio{})
+				copy(ordered[index+1:], ordered[index:])
+				ordered[index] = *binding.audio
+				for _, level := range levels {
+					_, _ = a.session.RemoveSceneAudio(sceneID, level.Track)
+				}
+				for _, level := range ordered {
+					if source := a.itemByPersistentID(level.Source); source != nil && source.audio != "" {
+						if _, err = a.session.SetSceneAudio(sceneID, source.audio, level.Volume, level.Muted); err != nil {
+							break
+						}
+					}
+				}
+			}
+			if err == nil {
+				binding.audio = nil
+			}
+		}
+		if !binding.video && binding.audio == nil {
+			delete(bindings, it.persistentID)
+		} else {
+			bindings[it.persistentID] = binding
+		}
+	}
+}
+
+func (a *appState) itemBySourceID(id core.SourceID) *item {
+	for _, it := range a.items {
+		if it.source.ID == id {
+			return it
+		}
+	}
+	return nil
 }
 
 // landImport ends an import on the drawing thread: it adds the source when the
@@ -845,7 +1216,9 @@ func (a *appState) landImport(token int, uri string, stream hls.Stream, mode imp
 		a.importing = ""
 		return
 	}
-	it := &item{uri: uri, volume: a.settingsSourceVolume()}
+	origin := a.pendingImportOrigin
+	a.pendingImportOrigin = originAdded
+	it := &item{uri: uri, volume: a.settingsSourceVolume(), origin: origin}
 	var err error
 	switch {
 	case probeErr != nil:
@@ -882,7 +1255,7 @@ func (a *appState) landImport(token int, uri string, stream hls.Stream, mode imp
 			// user had just added, which is the "没有声音" in questions-v4 P0-1.
 			if it.audio != "" {
 				if _, routed := a.sceneLevel(it); !routed {
-					if _, err := a.session.SetSceneAudio(a.scene, it.audio, it.volume, it.muted); err != nil {
+					if _, err := a.session.SetSceneAudio(a.scene, it.audio, it.volume, false); err != nil {
 						a.lastErr = safeOpenError(err)
 					}
 				}
@@ -988,6 +1361,26 @@ func (a *appState) abandonImport(it *item, generation int, cause error) {
 		if a.closed || it.generation != generation {
 			return
 		}
+		if it.restored {
+			shown := it.shown
+			a.close(it)
+			it.shown = shown
+			err := safeOpenError(cause)
+			it.openErr = err
+			a.lastErr = err
+			result := commandResult{
+				Command: command{Kind: commandRetry, Source: itemKey(it)},
+				At:      time.Now(),
+				Err:     err,
+				Message: fmt.Sprintf("could not open %s; the saved source and its bindings are still here", shortURI(it.uri)),
+			}
+			a.lastCommand = result
+			a.report(result)
+			a.saveSession()
+			a.invalidate()
+			return
+		}
+		removed := false
 		for index, candidate := range a.items {
 			if candidate != it {
 				continue
@@ -996,7 +1389,11 @@ func (a *appState) abandonImport(it *item, generation int, cause error) {
 				log.Printf("import: could not remove %s after the player failed: %v", it.source.ID, err)
 				return
 			}
+			removed = true
 			break
+		}
+		if removed {
+			a.saveSession()
 		}
 		err := safeOpenError(cause)
 		a.lastErr = err
@@ -1074,7 +1471,9 @@ func (a *appState) tickImport(done chan struct{}) {
 			return
 		case <-ticker.C:
 			mygoRunOnMain(func() {
-				a.invalidate()
+				if !a.closed {
+					a.invalidate()
+				}
 			})
 		}
 	}
@@ -1357,9 +1756,12 @@ func (a *appState) remove(index int) error {
 	if err != nil {
 		return err
 	}
-	if err := a.session.RemoveSource(it.source.ID); err != nil {
-		return err
+	if it.source.ID != "" {
+		if err := a.session.RemoveSource(it.source.ID); err != nil {
+			return err
+		}
 	}
+	a.forgetPendingSource(it.persistentID)
 	a.close(it)
 	a.items = append(a.items[:index], a.items[index+1:]...)
 	a.apply()
@@ -1391,6 +1793,17 @@ func (a *appState) at(index int) (*item, error) {
 // is paused and kept until another player is ready, and the pending close runs
 // then.
 func (a *appState) close(it *item) {
+	if it == nil {
+		return
+	}
+	// A restored placeholder has no window-owned objects to touch. Keeping this
+	// path local also lets removal of an unavailable source work in a headless
+	// session, where MyGo has no drawing loop to receive RunOnMain.
+	if it.player == nil && it.previous == nil && it.handover == nil && it.swap == nil && it.replayLease == nil {
+		it.shown = false
+		it.generation++
+		return
+	}
 	var kept *handover
 	var previous *ui.VideoPlayer
 	var swap *replaySwap
@@ -1895,6 +2308,9 @@ func sourceDisplayName(it *item) string {
 		return "none"
 	}
 	if name := strings.TrimSpace(it.source.Name); name != "" {
+		return name
+	}
+	if name := strings.TrimSpace(it.persistedName); name != "" {
 		return name
 	}
 	return shortURI(it.uri)

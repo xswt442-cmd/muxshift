@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"strings"
 )
 
 // The mixer state in this build is a listening overlay, not a mixing bus.
@@ -37,9 +38,9 @@ func (a *appState) toggleMute(index int) (string, error) {
 	a.apply()
 	a.noteSourcePreference(it)
 	if it.muted {
-		return fmt.Sprintf("source %d muted; its volume and routing are unchanged", index+1), nil
+		return fmt.Sprintf("%s muted; its volume and scene routing are unchanged", sourceDisplayName(it)), nil
 	}
-	return fmt.Sprintf("source %d unmuted at %.0f%%; the rest is unchanged", index+1, it.volume*100), nil
+	return fmt.Sprintf("%s unmuted at %.0f%%; its scene routing is unchanged", sourceDisplayName(it), it.volume*100), nil
 }
 
 // toggleMasterMute silences everything for as long as it is on, without
@@ -48,9 +49,9 @@ func (a *appState) toggleMasterMute() string {
 	a.masterMute = !a.masterMute
 	a.apply()
 	if a.masterMute {
-		return "master mute on: every source keeps its own volume, mute and routing"
+		return "master mute on: every source keeps its own volume, source mute and scene routing"
 	}
-	return "master mute off: each source is back to what it says"
+	return "master mute off: each source is back to its own state"
 }
 
 // toggleSolo makes one source the only source heard, or leaves solo when it is
@@ -67,20 +68,20 @@ func (a *appState) toggleSolo(index int) (string, error) {
 	if a.solo == it.source.ID {
 		a.solo = ""
 		a.apply()
-		return fmt.Sprintf("solo off: source %d and the rest of the mix are back to what they each said", index+1), nil
+		return fmt.Sprintf("solo off: %s and the other sources are back to their own states", sourceDisplayName(it)), nil
 	}
 	if !a.routed(it) {
-		return "", fmt.Errorf("source %d is not in the scene, so soloing it would only silence the others; use Hear to route it first", index+1)
+		return "", fmt.Errorf("%s is not in the scene's audio routing; use Route only before soloing it", sourceDisplayName(it))
 	}
 	a.solo = it.source.ID
 	a.apply()
 	switch {
 	case a.protectedSilence(it):
-		return fmt.Sprintf("soloing source %d, but the unaligned protection keeps it silent until you Allow it", index+1), nil
+		return fmt.Sprintf("soloing %s, but alignment protection keeps it silent until you allow its audio", sourceDisplayName(it)), nil
 	case it.muted:
-		return fmt.Sprintf("soloing source %d, but it is muted itself: unmute it to hear it", index+1), nil
+		return fmt.Sprintf("soloing %s, but its source mute is on", sourceDisplayName(it)), nil
 	}
-	return fmt.Sprintf("soloing source %d; the other sources keep their volume and routing", index+1), nil
+	return fmt.Sprintf("soloing %s; other sources keep their volume and scene routing", sourceDisplayName(it)), nil
 }
 
 // dropSoloIfGone clears a solo whose source has left the session. The scene is
@@ -120,6 +121,31 @@ func (a *appState) routed(it *item) bool {
 		}
 	}
 	return false
+}
+
+// clearSceneMute clears only this source's mute bit in the active scene. It
+// preserves the route, level, every neighboring track and the source's own
+// mute, including when the scene mute came from an ambiguous older snapshot.
+func (a *appState) clearSceneMute(it *item) error {
+	if it == nil || it.audio == "" {
+		return fmt.Errorf("source has no audio track to unmute in the scene")
+	}
+	level, routed := a.sceneLevel(it)
+	if !routed {
+		return fmt.Errorf("%s is not routed into this scene", sourceDisplayName(it))
+	}
+	if !level.Muted {
+		return nil
+	}
+	if _, err := a.session.SetSceneAudio(a.scene, it.audio, level.Volume, false); err != nil {
+		return err
+	}
+	a.apply()
+	if err := a.saveSession(); err != nil {
+		return err
+	}
+	a.invalidate()
+	return nil
 }
 
 // protectedSilence reports whether the unaligned protection alone would keep
@@ -162,6 +188,9 @@ func (a *appState) silences(it *item) []string {
 	if a.protectedSilence(it) {
 		reasons = append(reasons, "the unaligned protection")
 	}
+	if a.shownLevel(it) <= 0 {
+		reasons = append(reasons, "volume is zero")
+	}
 	return reasons
 }
 
@@ -187,7 +216,7 @@ func (a *appState) mixerLine(it *item) string {
 	if a.heard(it) {
 		state = "heard"
 	}
-	line := fmt.Sprintf("%s %s · %.0f%%", it.source.ID, state, a.shownLevel(it)*100)
+	line := fmt.Sprintf("%s · %s · %.0f%%", sourceDisplayName(it), state, a.shownLevel(it)*100)
 	if a.solo == it.source.ID {
 		line += " · solo"
 	}
@@ -195,6 +224,50 @@ func (a *appState) mixerLine(it *item) string {
 		line += " · " + joinWords(reasons)
 	}
 	return line
+}
+
+// localizedMixerLine is the user-facing counterpart of mixerLine. Diagnostic
+// and scenario code keeps using the stable English reason tokens above.
+func (a *appState) localizedMixerLine(it *item) string {
+	state := a.tr("silent", "无声")
+	if a.heard(it) {
+		state = a.tr("audible", "可听")
+	}
+	line := fmt.Sprintf("%s · %s · %.0f%%", sourceDisplayName(it), state, a.shownLevel(it)*100)
+	if a.solo == it.source.ID {
+		line += " · " + a.tr("solo", "独听")
+	}
+	if reasons := a.silences(it); len(reasons) > 0 {
+		localized := make([]string, 0, len(reasons))
+		for _, reason := range reasons {
+			localized = append(localized, a.localizedSilenceReason(reason))
+		}
+		line += " · " + strings.Join(localized, a.tr(", ", "、"))
+	}
+	return line
+}
+
+func (a *appState) localizedSilenceReason(reason string) string {
+	switch reason {
+	case "not in the scene":
+		return a.tr("not routed into this scene", "未接入此场景")
+	case "its player did not open":
+		return a.tr("player did not open", "播放器未能打开")
+	case "muted":
+		return a.tr("source mute is on", "本路静音已开启")
+	case "the scene's own mute":
+		return a.tr("scene mute is on", "场景静音已开启")
+	case "master mute":
+		return a.tr("master mute is on", "总静音已开启")
+	case "another source is soloed":
+		return a.tr("another source is soloed", "另一来源正在独听")
+	case "the unaligned protection":
+		return a.tr("alignment protection is holding audio", "对齐保护正在拦截声音")
+	case "volume is zero":
+		return a.tr("volume is zero", "音量为零")
+	default:
+		return reason
+	}
 }
 
 // joinWords joins a short list the way the status lines read.

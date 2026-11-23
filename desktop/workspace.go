@@ -1,6 +1,5 @@
-// The workspace rail is the thinnest navigation the window can have: three
-// pages that each show real state, and no button for anything that does not
-// work yet.
+// The workspace rail is the thinnest navigation the window can have: pages that
+// each show real state, and no button for anything that does not work yet.
 package main
 
 import (
@@ -26,8 +25,8 @@ const (
 	// workspaceDiagnostics shows the session, the synchronisation state and the
 	// session's own event list.
 	workspaceDiagnostics
-	// workspaceSettings edits the global settings; the page keeps its own draft
-	// until Apply, so Cancel is free.
+	// workspaceSettings edits the global settings. Draft values wait for Apply;
+	// appearance has its own immediate save path.
 	workspaceSettings
 	// workspaceMixer edits the listening overlay: each source's mute, its level
 	// and one solo, plus a master mute. It shapes listening, not sound.
@@ -126,13 +125,37 @@ func (a *appState) importRow(c *ui.Context) {
 				})
 			})
 		}
+		if a.reselectSource != "" {
+			if target, _, err := a.itemBySource(a.reselectSource); err == nil {
+				ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).WidthPercent(100).Children(func() {
+					c.Key("reselect-source-" + string(a.reselectSource))
+					field := a.field(c, &a.reselectText).Grow(1).
+						Placeholder(`https://… .m3u8  or  C:\path\file.mp4`).
+						Description(a.tr("Choose the address for ", "为此来源选择地址：") + sourceDisplayName(target))
+					submit := field.Submitted()
+					if ui.Button(c.Key("reselect-cancel"), a.tr("Cancel", "取消")).Height(28).Clicked() {
+						a.reselectSource = ""
+						a.reselectText = ""
+					}
+					if ui.Button(c.Key("reselect-apply"), a.tr("Use address", "使用地址")).Height(28).Clicked() {
+						submit = true
+					}
+					if submit && strings.TrimSpace(a.reselectText) != "" && a.importing == "" {
+						a.runCommand(command{Kind: commandRetry, Source: a.reselectSource, URI: a.reselectText})
+						a.reselectSource = ""
+						a.reselectText = ""
+					}
+				})
+			}
+		}
 	})
 }
 
 // selectedSource is the source the inspector follows, or nil.
 func (a *appState) selectedSource() (*item, int, bool) {
 	for i, it := range a.items {
-		if it.source.ID == a.selected {
+		if itemKey(it) == a.selected || it.source.ID == a.selected || (it.persistentID != "" &&
+			(core.SourceID(it.persistentID) == a.selected || core.SourceID("saved:"+it.persistentID) == a.selected)) {
 			return it, i, true
 		}
 	}

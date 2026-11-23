@@ -438,6 +438,134 @@ func TestSceneMuteCannotBeReportedAsHeard(t *testing.T) {
 	}
 }
 
+func TestClearSceneMuteKeepsSourceMuteAndNeighborRoutes(t *testing.T) {
+	a := mixerFixture(t)
+	first, neighbor := a.items[0], a.items[1]
+	players := []*mutePlayer{
+		{fakeSeekPlayer: &fakeSeekPlayer{}},
+		{fakeSeekPlayer: &fakeSeekPlayer{}},
+	}
+	first.player, neighbor.player = players[0], players[1]
+	first.muted = true
+	if _, err := a.session.SetSceneAudio(a.scene, first.audio, 0.65, true); err != nil {
+		t.Fatalf("mute target scene track: %v", err)
+	}
+	if _, err := a.session.SetSceneAudio(a.scene, neighbor.audio, 0.35, false); err != nil {
+		t.Fatalf("set neighbor scene track: %v", err)
+	}
+	a.apply()
+
+	if err := a.clearSceneMute(first); err != nil {
+		t.Fatalf("clear target scene mute: %v", err)
+	}
+	scene, err := a.session.Scene(a.scene)
+	if err != nil {
+		t.Fatalf("read scene: %v", err)
+	}
+	levels := make(map[core.TrackID]core.AudioLevel, len(scene.Audio))
+	for _, level := range scene.Audio {
+		levels[level.Track] = level
+	}
+	if len(scene.Audio) != 2 {
+		t.Fatalf("clearing one mute changed the route count: got %d, want 2", len(scene.Audio))
+	}
+	if got := levels[first.audio]; got.Track == "" || got.Volume != 0.65 || got.Muted {
+		t.Fatalf("target scene level = %+v, want same routed track at 0.65 unmuted", got)
+	}
+	if got := levels[neighbor.audio]; got.Track == "" || got.Volume != 0.35 || got.Muted {
+		t.Fatalf("neighbor scene level changed: %+v", got)
+	}
+	if !first.muted || !players[0].muted {
+		t.Fatal("clearing the scene mute cleared the source mute")
+	}
+	if players[1].muted || !a.heard(neighbor) {
+		t.Fatal("clearing one scene mute silenced or unrouted its neighbor")
+	}
+}
+
+func TestSourceMuteAndSceneMuteRemainIndependent(t *testing.T) {
+	a := mixerFixture(t)
+	first, second := a.items[0], a.items[1]
+	players := []*mutePlayer{
+		{fakeSeekPlayer: &fakeSeekPlayer{}},
+		{fakeSeekPlayer: &fakeSeekPlayer{}},
+	}
+	first.player, second.player = players[0], players[1]
+	if _, err := a.session.SetSceneAudio(a.scene, first.audio, 1, true); err != nil {
+		t.Fatalf("set the legacy scene mute: %v", err)
+	}
+	first.muted = true
+	a.apply()
+	line := a.mixerLine(first)
+	if !strings.Contains(line, "muted") || !strings.Contains(line, "the scene's own mute") {
+		t.Fatalf("overlapping mute layers were not both explained: %q", line)
+	}
+	if !players[0].muted || players[1].muted {
+		t.Fatalf("mute layers affected the wrong players: first=%v second=%v", players[0].muted, players[1].muted)
+	}
+
+	if _, err := a.toggleMute(0); err != nil {
+		t.Fatalf("turn off the source mute: %v", err)
+	}
+	level, routed := a.sceneLevel(first)
+	if !routed || !level.Muted {
+		t.Fatal("turning off the source mute changed the scene's saved mute or route")
+	}
+	if a.heard(first) || !a.heard(second) || players[0].muted != true || players[1].muted {
+		t.Fatalf("legacy scene mute was not preserved independently: heard=%v players=%v/%v", heardList(a), players[0].muted, players[1].muted)
+	}
+}
+
+func TestSourceMuteIndicatorDoesNotReadAlignmentAllow(t *testing.T) {
+	a := mixerFixture(t)
+	it := a.items[0]
+	a.audible[it.audio] = false
+	if a.sourceMuted(it) {
+		t.Fatal("alignment hold was presented as the source's own mute")
+	}
+	it.muted = true
+	a.audible[it.audio] = true
+	if !a.sourceMuted(it) {
+		t.Fatal("allowing alignment presented the source mute as off")
+	}
+}
+
+func TestZeroVolumeIsAnAudioSilenceReason(t *testing.T) {
+	a := mixerFixture(t)
+	if err := a.setVolume(0, 0); err != nil {
+		t.Fatalf("set zero volume: %v", err)
+	}
+	if a.heard(a.items[0]) {
+		t.Fatal("a routed source at zero volume was reported audible")
+	}
+	if line := a.localizedMixerLine(a.items[0]); !strings.Contains(line, a.tr("volume is zero", "音量为零")) {
+		t.Fatalf("the row omitted the zero-volume reason: %q", line)
+	}
+	if !a.heard(a.items[1]) {
+		t.Fatal("zeroing one route silenced the other source")
+	}
+}
+
+func TestSourceRenameFeedbackUsesCoreNameLimit(t *testing.T) {
+	a := mixerFixture(t)
+	a.items[0].source.Name = "Camera A"
+	if !a.sourceNameConflict(a.items[1].source.ID, " camera a ") {
+		t.Fatal("a case-insensitive duplicate source name was not reported")
+	}
+	if a.sourceNameConflict(a.items[1].source.ID, "  ") {
+		t.Fatal("an empty name should restore the automatic name without a duplicate warning")
+	}
+
+	limited := strings.Repeat("界", maxDisplayNameRunes)
+	a.items[0].source.Name = limited
+	if got := cappedDisplayName(limited + "extra"); got != limited {
+		t.Fatalf("name cap did not match Core's rune limit: got %d runes", len([]rune(got)))
+	}
+	if !a.sourceNameConflict(a.items[1].source.ID, limited+"different") {
+		t.Fatal("a conflict created after Core truncation was not reported")
+	}
+}
+
 func TestVolumeDoesNotChangeMute(t *testing.T) {
 	a := mixerFixture(t)
 	it := a.items[0]

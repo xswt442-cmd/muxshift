@@ -83,7 +83,13 @@ func (a *appState) eyeTint(it *item) ui.Color {
 // far it has got. The numbers the engine does not know are left out instead of
 // being guessed.
 func (a *appState) rowFacts(it *item) string {
-	parts := make([]string, 0, 2)
+	parts := make([]string, 0, 4)
+	parts = append(parts, a.audioRouteLabel(it))
+	if a.sourceMuted(it) {
+		parts = append(parts, a.tr("source muted", "本路静音"))
+	} else {
+		parts = append(parts, a.tr("source unmuted", "本路未静音"))
+	}
 	if facts := a.sourceFacts(it); facts != "" {
 		parts = append(parts, facts)
 	}
@@ -456,7 +462,7 @@ func (a *appState) dockRowsBody(c *ui.Context) {
 							tint = colorDim
 						}
 						a.quietIconButton(c, "row-mute-"+string(row.source.ID), icon,
-							a.tr("mute this source", "静音这一路"), tint, func() {
+							a.sourceMuteTooltip(row), tint, func() {
 								a.runCommand(command{Kind: commandMute, Source: row.source.ID})
 							})
 						if a.volumeSlider(c, "row-vol-"+string(row.source.ID), &row.volume, 84) {
@@ -503,7 +509,7 @@ func (a *appState) dockMixerBody(c *ui.Context) {
 	ui.Row(c).WidthPercent(100).Height(28).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
 		mute := a.tr("Mute all", "全部静音")
 		if a.masterMute {
-			mute = a.tr("Hear all", "全部有声")
+			mute = a.tr("Unmute all", "取消全部静音")
 		}
 		master := ui.ButtonBase(c.Key("dock-master")).Height(24).Padding(0, spaceSm).
 			Radius(radiusSm).AlignItems(ui.Center)
@@ -580,7 +586,7 @@ func (a *appState) dockSyncBody(c *ui.Context) {
 				lineHeight = 26
 			}
 			ui.Row(c).WidthPercent(100).Height(lineHeight).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, fmt.Sprintf("source %d", i+1)).FontSize(textBody).FontWeight(400).
+				ui.Text(c, fmt.Sprintf("%d  %s", i+1, sourceDisplayName(row))).FontSize(textBody).FontWeight(400).
 					TextColor(colorText).Grow(1).MinWidth(0).SingleLine().Tooltip(sourceDisplayName(row))
 				if !isRef {
 					a.iconButton(c, "sync-ref-"+string(row.source.ID), lucide.Crosshair(),

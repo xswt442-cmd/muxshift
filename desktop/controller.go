@@ -103,7 +103,8 @@ func (r commandResult) String() string {
 // because a removal renumbers the list under the window's feet.
 func (a *appState) itemBySource(id core.SourceID) (*item, int, error) {
 	for index, it := range a.items {
-		if it.source.ID == id {
+		if itemKey(it) == id || it.source.ID == id || (it.persistentID != "" &&
+			(core.SourceID(it.persistentID) == id || core.SourceID("saved:"+it.persistentID) == id)) {
 			return it, index, nil
 		}
 	}
@@ -234,6 +235,9 @@ func (a *appState) runCommand(cmd command) commandResult {
 			a.importCancel()
 			a.importCancel = nil
 		}
+		a.startupMediaQueue = nil
+		a.pendingImportOrigin = originAdded
+		a.retryTargetID = ""
 		a.closeImportTicker()
 		a.importing = ""
 		a.importText = ""
@@ -253,7 +257,7 @@ func (a *appState) runCommand(cmd command) commandResult {
 		if err := a.remove(index); err != nil {
 			return finish(err, "")
 		}
-		if a.selected == cmd.Source {
+		if a.selected == cmd.Source || a.selected == itemKey(it) {
 			a.selected = ""
 		}
 		return finish(nil, fmt.Sprintf("removed %s; %d source(s) left", name, len(a.items)))
@@ -266,6 +270,19 @@ func (a *appState) runCommand(cmd command) commandResult {
 		result.Generation = it.generation
 		if it.openErr == nil && it.player != nil {
 			return finish(fmt.Errorf("%s has not failed, there is nothing to retry", a.name(it)), "")
+		}
+		uri := strings.TrimSpace(cmd.URI)
+		if uri == "" && it.source.ID == "" {
+			uri = it.uri
+		}
+		if uri != "" {
+			if err := a.retryUnavailableSource(it, uri); err != nil {
+				return finish(err, "the source could not be reopened")
+			}
+			return finish(nil, "retrying "+shortURI(uri)+" in the background")
+		}
+		if it.source.ID == "" {
+			return finish(fmt.Errorf("%s needs a new address before it can be reopened", a.name(it)), "")
 		}
 		it.openErr = nil
 		a.reopenPlayer(it)
@@ -302,7 +319,7 @@ func (a *appState) shortcutCommand(kind commandKind) {
 		a.report(result)
 		return
 	}
-	result := a.runCommand(command{Kind: kind, Source: it.source.ID})
+	result := a.runCommand(command{Kind: kind, Source: itemKey(it)})
 	a.report(result)
 }
 

@@ -57,24 +57,18 @@ func (a *appState) eventTime() time.Duration {
 	return a.sync.playhead.Event()
 }
 
-// sourceMuted reports whether the audio overlay is keeping this source quiet.
-// It is the state the mixer's M button shows, not the scene's routing.
+// sourceMuted reports the source's own mute switch. Routing, master mute, solo
+// and alignment protection are separate reasons a source may not be heard.
 func (a *appState) sourceMuted(it *item) bool {
-	if it.audio == "" {
-		return false
-	}
-	return !a.audible[it.audio]
+	return it != nil && it.muted
 }
 
 // muteLabel names the button that flips the player's own mute.
 func (a *appState) muteLabel(it *item) string {
-	if it.player == nil {
-		return a.tr("Mute", "静音")
+	if it != nil && it.muted {
+		return a.tr("Unmute source", "取消本路静音")
 	}
-	if it.player.Muted() {
-		return a.tr("Unmute", "取消静音")
-	}
-	return a.tr("Mute", "静音")
+	return a.tr("Mute source", "静音本路")
 }
 
 // shortAllowLabel names the audio-hold action in a narrow row.
@@ -83,9 +77,23 @@ func (a *appState) shortAllowLabel(it *item) string {
 		return a.tr("No audio", "无音频")
 	}
 	if a.audible[it.audio] {
-		return a.tr("Mute", "静音")
+		return a.tr("Restore alignment protection", "恢复对齐保护")
 	}
-	return a.tr("Allow", "允许")
+	return a.tr("Allow unaligned audio", "允许未对齐声音")
+}
+
+func (a *appState) audioRouteLabel(it *item) string {
+	if it == nil || it.audio == "" {
+		return a.tr("No audio track", "没有音轨")
+	}
+	if a.routed(it) {
+		return a.tr("In scene", "已接入场景")
+	}
+	return a.tr("Not routed", "未接入场景")
+}
+
+func (a *appState) sourceMuteTooltip(it *item) string {
+	return a.muteLabel(it) + " · " + a.audioRouteLabel(it) + " · " + a.localizedMixerLine(it)
 }
 
 // positionLine is the source's media time, and durationLine its length. Both

@@ -135,24 +135,16 @@ func (a *appState) shell(c *ui.Context, width, height float32) {
 	// the old page (a shortcut, a scenario, a settings file) lands on the stage
 	// with that panel in front instead of a second copy of the list.
 	if a.workspace == workspaceSources {
-		delete(a.dockHidden, dockSources)
-		a.dockUp = true
-		a.dockTab = 0
-		a.workspace = workspaceStage
+		a.showSourcesPanel()
 	}
 	ui.Column(c).Fill().Background(colorBg).Children(func() {
+		a.workspaceNavigation(c, width)
 		ui.Row(c).WidthPercent(100).Grow(1).AlignItems(ui.Stretch).Children(func() {
 			// The scene column is a draggable rail the way a capture program
 			// has one: it starts open, keeps its own width, and folds to icons.
 			if !narrow && a.editingShell {
 				layout.DraggableSideNav(c, &a.navWidth, &a.navUp, layout.DraggableSideNavProps{
 					MinWidth: 64, MaxWidth: 360, ShowHandleWhenCollapsed: true, Background: colorPanel,
-					// Settings and Diagnostics belong under the scene list, and
-					// the nav's own footer row is the place that reaches the
-					// bottom: a plain Grow spacer inside the body does not. The
-					// footer folds with the rail, so it is told whether the nav
-					// is expanded (questions-v4 P1-6, P5.3).
-					Footer: func(nav layout.SideNavState) { a.columnFooter(c, nav.Expanded) },
 				}, func(nav layout.SideNavState) {
 					a.sceneColumnBody(c, nav.Expanded)
 				})
@@ -191,6 +183,73 @@ func (a *appState) shell(c *ui.Context, width, height float32) {
 			a.renameDialog(c)
 		}
 	})
+}
+
+func (a *appState) workspaceNavigation(c *ui.Context, width float32) {
+	ui.Row(c).WidthPercent(100).Height(a.barHeight()).Padding(0, spaceMd).
+		Gap(spaceXs).AlignItems(ui.Center).Background(colorPanel).Children(func() {
+		if width < 900 {
+			label := a.pageLabel(a.currentWorkspacePage())
+			if ui.Button(c.Key("corner-pages"), a.tr("Pages", "页面")+" · "+label).
+				Height(a.controlHeight()).Padding(0, spaceSm).Clicked() {
+				a.pageMenu = !a.pageMenu
+			}
+			return
+		}
+		for _, page := range []workspace{workspaceStage, workspaceSources, workspaceDiagnostics, workspaceSettings, workspaceMixer} {
+			p := page
+			button := ui.Button(c.Key("workspace-nav-"+p.title()), a.pageLabel(p)).
+				Height(a.controlHeight()).Padding(0, spaceSm)
+			if a.workspacePageActive(p) {
+				button = button.Background(colorSelected).TextColor(colorSelectedText)
+			}
+			if button.Clicked() {
+				if p == workspaceSettings {
+					a.navigateToSettings("")
+				} else {
+					a.navigateWorkspace(p)
+				}
+			}
+		}
+		ui.Box(c).Grow(1)
+	})
+}
+
+func (a *appState) currentWorkspacePage() workspace {
+	if a.workspace == workspaceStage && a.dockUp && !a.dockHidden[dockSources] && a.dockTab == 0 {
+		return workspaceSources
+	}
+	return a.workspace
+}
+
+func (a *appState) workspacePageActive(page workspace) bool {
+	if page == workspaceSources {
+		return a.currentWorkspacePage() == workspaceSources
+	}
+	return a.workspace == page
+}
+
+func (a *appState) navigateWorkspace(page workspace) {
+	a.pageMenu = false
+	a.drawerOpen = false
+	if page == workspaceSources {
+		a.showSourcesPanel()
+		return
+	}
+	a.workspace = page
+	a.invalidate()
+}
+
+func (a *appState) navigateToSettings(section string) {
+	if section != "" {
+		for _, available := range settingsSections {
+			if available == section {
+				a.settingsSection = section
+				break
+			}
+		}
+	}
+	a.navigateWorkspace(workspaceSettings)
 }
 
 // pageBody draws a page in the middle column, with the padding the page's own
@@ -265,11 +324,11 @@ func (a *appState) sourceDot(it *item) ui.Color {
 // mark, the name and the second line are the same code in both, so the two
 // views cannot drift apart.
 func (a *appState) sourceEntry(c *ui.Context, it *item, index int, compact bool) {
-	active := a.selected == it.source.ID
+	active := a.selected == itemKey(it)
 	row := ui.Row(c).WidthPercent(100).Gap(spaceXs).AlignItems(ui.Center)
 	if compact {
 		row = row.Height(a.rowHeight()).Padding(0, 10).Radius(radiusMd).
-			OnClick(func() { a.selected = it.source.ID })
+			OnClick(func() { a.selected = itemKey(it) })
 		fill := colorRow
 		if row.Pressed() {
 			fill = colorPressed
@@ -316,6 +375,46 @@ func (a *appState) sourceEntry(c *ui.Context, it *item, index int, compact bool)
 		}
 		a.sourceActions(c, it, index)
 	})
+	if compact && it.openErr != nil {
+		ui.Row(c).WidthPercent(100).Wrap().Gap(spaceXs).AlignItems(ui.Center).Children(func() {
+			if ui.Button(c.Key("compact-retry-"+string(itemKey(it))), a.tr("Retry", "重试")).
+				Height(24).Disabled(a.importing != "").Clicked() {
+				a.selected = itemKey(it)
+				a.runCommand(command{Kind: commandRetry, Source: itemKey(it)})
+			}
+			if ui.Button(c.Key("compact-reselect-"+string(itemKey(it))), a.tr("Choose address", "重新选择地址")).
+				Height(24).Clicked() {
+				a.selected = itemKey(it)
+				a.reselectSource = itemKey(it)
+				a.reselectText = ""
+			}
+			if ui.Button(c.Key("compact-remove-"+string(itemKey(it))), a.tr("Remove", "移除")).
+				Height(24).Clicked() {
+				a.runCommand(command{Kind: commandRemove, Source: itemKey(it)})
+			}
+		})
+	}
+	if compact && a.reselectSource == itemKey(it) {
+		ui.Row(c).WidthPercent(100).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
+			c.Key("compact-reselect-input-" + string(itemKey(it)))
+			field := a.field(c, &a.reselectText).Grow(1).
+				Placeholder(`https://… .m3u8  or  C:\path\file.mp4`).
+				Description(a.tr("Choose an address for ", "为此来源选择地址：") + sourceDisplayName(it))
+			submit := field.Submitted()
+			if ui.Button(c.Key("compact-reselect-cancel"), a.tr("Cancel", "取消")).Height(26).Clicked() {
+				a.reselectSource = ""
+				a.reselectText = ""
+			}
+			if ui.Button(c.Key("compact-reselect-apply"), a.tr("Use address", "使用地址")).Height(26).Clicked() {
+				submit = true
+			}
+			if submit && strings.TrimSpace(a.reselectText) != "" && a.importing == "" {
+				a.runCommand(command{Kind: commandRetry, Source: itemKey(it), URI: a.reselectText})
+				a.reselectSource = ""
+				a.reselectText = ""
+			}
+		})
+	}
 }
 
 // sourceMarks says, in a card, what the source contributes to the scene.
@@ -336,9 +435,9 @@ func (a *appState) sourceMarks(c *ui.Context, it *item) {
 // eye that is on takes the picture off the stage without closing the player,
 // and the eye that is off puts it back.
 func (a *appState) sourceEye(c *ui.Context, it *item, index int) {
-	a.quietIconButton(c, "sc-eye-"+string(it.source.ID), a.eyeIcon(it), a.eyeTip(it),
+	a.quietIconButton(c, "sc-eye-"+string(itemKey(it)), a.eyeIcon(it), a.eyeTip(it),
 		a.eyeTint(it), func() {
-			a.selected = it.source.ID
+			a.selected = itemKey(it)
 			a.toggleVideo(index)
 		})
 }
@@ -346,7 +445,10 @@ func (a *appState) sourceEye(c *ui.Context, it *item, index int) {
 // sourceRenameButton is the pencil each source row carries, so a person can give
 // a source their own name without leaving the list.
 func (a *appState) sourceRenameButton(c *ui.Context, it *item) {
-	a.quietIconButton(c, "sc-rename-"+string(it.source.ID), lucide.Pencil(),
+	if it.source.ID == "" {
+		return
+	}
+	a.quietIconButton(c, "sc-rename-"+string(itemKey(it)), lucide.Pencil(),
 		a.tr("Rename", "重命名"), colorDim, func() {
 			a.openRenameSource(it.source.ID)
 		})
@@ -355,7 +457,7 @@ func (a *appState) sourceRenameButton(c *ui.Context, it *item) {
 // sourceActions is the card density's control row.
 func (a *appState) sourceActions(c *ui.Context, it *item, index int) {
 	ui.Row(c).Gap(spaceXs).Children(func() {
-		if ui.Button(c.Key("card-rename-"+string(it.source.ID)), a.tr("Rename", "重命名")).Height(28).Clicked() {
+		if it.source.ID != "" && ui.Button(c.Key("card-rename-"+string(itemKey(it))), a.tr("Rename", "重命名")).Height(28).Clicked() {
 			a.openRenameSource(it.source.ID)
 		}
 		show := a.tr("Hide", "隐藏")
@@ -374,12 +476,18 @@ func (a *appState) sourceActions(c *ui.Context, it *item, index int) {
 			}
 		}
 		if it.openErr != nil {
-			if ui.Button(c.Key("card-retry-"+string(it.source.ID)), a.tr("Retry", "重试")).Height(28).Clicked() {
-				a.runCommand(command{Kind: commandRetry, Source: it.source.ID})
+			if ui.Button(c.Key("card-retry-"+string(itemKey(it))), a.tr("Retry", "重试")).Height(28).Clicked() {
+				a.runCommand(command{Kind: commandRetry, Source: itemKey(it)})
+			}
+			if ui.Button(c.Key("card-reselect-"+string(itemKey(it))), a.tr("Choose address", "重新选择地址")).Height(28).Clicked() {
+				a.selected = itemKey(it)
+				a.reselectSource = itemKey(it)
+				a.reselectText = ""
+				a.invalidate()
 			}
 		}
-		if ui.Button(c.Key("card-remove-"+string(it.source.ID)), a.tr("Remove", "移除")).Height(28).Clicked() {
-			a.runCommand(command{Kind: commandRemove, Source: it.source.ID})
+		if ui.Button(c.Key("card-remove-"+string(itemKey(it))), a.tr("Remove", "移除")).Height(28).Clicked() {
+			a.runCommand(command{Kind: commandRemove, Source: itemKey(it)})
 		}
 	})
 }
@@ -398,9 +506,9 @@ func (a *appState) sceneColumnBody(c *ui.Context, expanded bool) {
 						a.openAddSource()
 					}
 					for _, it := range a.items {
-						if ui.Button(c.Key("rail-src-"+string(it.source.ID)), "▢").Width(28).Height(26).
+						if ui.Button(c.Key("rail-src-"+string(itemKey(it))), "▢").Width(28).Height(26).
 							Tooltip(sourceDisplayName(it)).Clicked() {
-							a.selected = it.source.ID
+							a.selected = itemKey(it)
 							a.invalidate()
 						}
 						if it.shown {
@@ -527,6 +635,7 @@ func (a *appState) selectScene(id core.SceneID) {
 	a.scene = id
 	a.apply()
 	a.invalidate()
+	a.saveSession()
 }
 
 // removeScene drops a scene and stays on a scene that exists.
@@ -537,6 +646,8 @@ func (a *appState) removeScene(id core.SceneID) {
 		return
 	}
 	delete(a.edits, id)
+	a.forgetPendingStageEdits(id)
+	delete(a.pendingBindings, id)
 	if a.scene == id {
 		if scenes := a.session.Scenes(); len(scenes) > 0 {
 			a.scene = scenes[0].ID
@@ -566,6 +677,8 @@ func (a *appState) sourceSub(it *item) string {
 	switch {
 	case it.openErr != nil:
 		return a.tr("failed to open", "打开失败")
+	case it.restoring:
+		return a.tr("opening", "正在打开")
 	case it.player == nil:
 		return a.tr("not opened yet", "尚未打开")
 	case !it.player.Ready():
@@ -578,91 +691,12 @@ func (a *appState) sourceSub(it *item) string {
 	return clock(it.player.Position()) + " / " + clock(it.player.Duration())
 }
 
-// columnFooter is the page shortcut strip. The pages moved out of the top bar,
-// so this is where they stay one press away while the picture is visible.
-func (a *appState) columnFooter(c *ui.Context, expanded bool) {
-	if !expanded {
-		// The rail is 64 DIPs: only icons fit, and every page stays one press
-		// away, so folding the sidebar does not hide navigation (P5.3).
-		ui.Column(c).WidthPercent(100).Padding(spaceXs, spaceXs).Gap(spaceXs).
-			AlignItems(ui.Center).Children(func() {
-			iconRow := func(key string, icon *ui.SVG, label string, on bool, click func()) {
-				b := ui.ButtonBase(c.Key(key)).Size(30, 30).Radius(radiusSm).Justify(ui.Center).
-					Tooltip(label)
-				b = b.Background(stateFill(b.Hovered(), b.Pressed(), on))
-				ink := colorTextDim
-				if on {
-					ink = colorSelectedText
-				}
-				b = b.TextColor(ink)
-				b.Children(func() { ui.Icon(c, icon).Size(16, 16) })
-				if b.Clicked() {
-					click()
-				}
-			}
-			sourcesOn := a.dockUp && !a.dockHidden[dockSources] && a.workspace == workspaceStage
-			iconRow("foot-sources", lucide.SquareStack(), a.pageLabel(workspaceSources), sourcesOn, func() {
-				delete(a.dockHidden, dockSources)
-				a.dockUp = true
-				a.workspace = workspaceStage
-			})
-			iconRow("foot-"+itoa(int(workspaceDiagnostics)), lucide.Activity(),
-				a.pageLabel(workspaceDiagnostics), a.workspace == workspaceDiagnostics, func() {
-					a.workspace = workspaceDiagnostics
-				})
-			iconRow("foot-"+itoa(int(workspaceSettings)), lucide.Settings(),
-				a.pageLabel(workspaceSettings), a.workspace == workspaceSettings, func() {
-					a.workspace = workspaceSettings
-				})
-			iconRow("foot-stage", lucide.Clapperboard(), a.tr("Stage", "舞台"),
-				a.workspace == workspaceStage, func() {
-					a.workspace = workspaceStage
-				})
-		})
-		return
-	}
-	ui.Row(c).WidthPercent(100).Padding(spaceSm, spaceSm).Gap(spaceXs).Wrap().Children(func() {
-		navRow := func(key string, icon *ui.SVG, label string, on bool, click func()) {
-			button := ui.ButtonBase(c.Key(key)).Height(30).Padding(0, spaceSm).Gap(spaceSm).
-				Radius(radiusSm).Justify(ui.Start)
-			button = button.Background(stateFill(button.Hovered(), button.Pressed(), on))
-			ink := colorTextDim
-			if on {
-				ink = colorSelectedText
-			}
-			button = button.TextColor(ink).Tooltip(label)
-			button.Children(func() {
-				ui.Icon(c, icon).Size(16, 16)
-				ui.Text(c, label).FontSize(textSmall).FontWeight(500).TextColor(ink)
-			})
-			if button.Clicked() {
-				click()
-			}
-		}
-		// Sources are not a page any more: the console owns that list, so this
-		// button brings the console forward instead of opening a second copy.
-		sourcesOn := a.dockUp && !a.dockHidden[dockSources] && a.workspace == workspaceStage
-		navRow("foot-sources", lucide.SquareStack(), a.pageLabel(workspaceSources), sourcesOn, func() {
-			delete(a.dockHidden, dockSources)
-			a.dockUp = true
-			a.workspace = workspaceStage
-		})
-		navRow("foot-"+itoa(int(workspaceDiagnostics)), lucide.Activity(),
-			a.pageLabel(workspaceDiagnostics), a.workspace == workspaceDiagnostics, func() {
-				a.workspace = workspaceDiagnostics
-			})
-		navRow("foot-"+itoa(int(workspaceSettings)), lucide.Settings(),
-			a.pageLabel(workspaceSettings), a.workspace == workspaceSettings, func() {
-				a.workspace = workspaceSettings
-			})
-		// The stage is always one of the four, so the strip never grows or
-		// shrinks as pages change (questions-v4 P1-3: entering settings used to
-		// make a "舞台" button appear out of nowhere).
-		navRow("foot-stage", lucide.Clapperboard(), a.tr("Stage", "舞台"),
-			a.workspace == workspaceStage, func() {
-				a.workspace = workspaceStage
-			})
-	})
+func (a *appState) showSourcesPanel() {
+	delete(a.dockHidden, dockSources)
+	a.dockUp = true
+	a.dockTab = 0
+	a.workspace = workspaceStage
+	a.invalidate()
 }
 
 // pageLabel names a page in the window's language.
@@ -795,10 +829,6 @@ func (a *appState) stageCorner(c *ui.Context) {
 				a.tr("properties", "属性"), 30, colorText, false, func() {
 					a.drawerOpen = !a.drawerOpen
 				})
-			a.iconButtonSized(c, "corner-pages", lucide.Menu(),
-				a.tr("pages", "页面"), 30, colorText, false, func() {
-					a.pageMenu = !a.pageMenu
-				})
 		}
 	})
 }
@@ -838,7 +868,7 @@ func (a *appState) toolbar(c *ui.Context, width float32) {
 		if edit.Clicked() {
 			a.editMode = !a.editMode
 			if a.editMode && a.selected == "" && len(a.items) > 0 {
-				a.selected = a.items[0].source.ID
+				a.selected = itemKey(a.items[0])
 			}
 		}
 		if width < 900 {
@@ -938,7 +968,7 @@ func (a *appState) transportBar(c *ui.Context) {
 				})
 				a.ghostIconButton(c, "transport-reload", a.tr("Reload", "重载"), lucide.RotateCcw(), 0, func() {
 					if first != nil {
-						a.runCommand(command{Kind: commandReload, Source: first.source.ID})
+						a.runCommand(command{Kind: commandReload, Source: itemKey(first)})
 					}
 				})
 				ui.Box(c).Width(1).Height(20).Background(colorLineSoft)
@@ -1114,7 +1144,7 @@ func (a *appState) mixerPanel(c *ui.Context, height float32) {
 			ui.Box(c).Grow(1)
 			mute := a.tr("Mute all", "全部静音")
 			if a.masterMute {
-				mute = a.tr("Hear all", "全部有声")
+				mute = a.tr("Unmute all", "取消全部静音")
 			}
 			if ui.Button(c.Key("mix-master"), mute).Height(22).Padding(0, 6).Clicked() {
 				a.runCommand(command{Kind: commandMasterMute})
@@ -1143,8 +1173,15 @@ func (a *appState) mixerChannel(c *ui.Context, it *item) {
 		AlignItems(ui.Center)
 	row.Children(func() {
 		ui.Box(c).Width(6).Height(6).Radius(3).Background(colorSound)
-		ui.Text(c, sourceDisplayName(it)).FontSize(textSmall).FontWeight(400).TextColor(colorText).
-			Grow(1).MinWidth(0).SingleLine()
+		ui.Column(c).Grow(1).MinWidth(0).Children(func() {
+			ui.Text(c, sourceDisplayName(it)).FontSize(textSmall).FontWeight(400).
+				TextColor(colorText).SingleLine()
+			ui.Text(c, a.audioRouteLabel(it)).FontSize(textMicro).TextColor(colorTextDim).
+				SingleLine().Tooltip(a.localizedMixerLine(it))
+		})
+		if it.audio == "" {
+			return
+		}
 		muted := a.sourceMuted(it)
 		icon := lucide.Volume2()
 		tint := colorTextDim
@@ -1153,7 +1190,7 @@ func (a *appState) mixerChannel(c *ui.Context, it *item) {
 			tint = colorDim
 		}
 		a.quietIconButton(c, "mix-mute-"+string(it.source.ID), icon,
-			a.tr("mute this source", "静音这一路"), tint, func() {
+			a.sourceMuteTooltip(it), tint, func() {
 				a.runCommand(command{Kind: commandMute, Source: it.source.ID})
 			})
 		if a.volumeSlider(c, "mix-vol-"+string(it.source.ID), &it.volume, 84) {
@@ -1173,7 +1210,7 @@ func (a *appState) mixerStrip(c *ui.Context) {
 			ui.Text(c, a.tr("Mixer", "混音器")).FontSize(textMicro).TextColor(colorDim)
 			mute := a.tr("Mute all", "全部静音")
 			if a.masterMute {
-				mute = a.tr("Hear all", "全部有声")
+				mute = a.tr("Unmute all", "取消全部静音")
 			}
 			if ui.Button(c.Key("strip-master"), mute).Height(22).Padding(0, 6).Clicked() {
 				a.runCommand(command{Kind: commandMasterMute})
@@ -1240,6 +1277,10 @@ func (a *appState) statusBar(c *ui.Context, width float32) {
 		Gap(spaceSm).AlignItems(ui.Center).Background(colorBg).Children(func() {
 		ui.Text(c, line).FontSize(textMicro).TextColor(colorDim).
 			FontFeatures("tnum").SingleLine().Grow(1)
+		if saveErr := a.sessionSaveError(); saveErr != "" {
+			ui.Text(c, a.tr("session save failed", "会话保存失败")).
+				FontSize(textMicro).TextColor(colorBad).SingleLine().Tooltip(saveErr)
+		}
 		if a.lastErr != nil {
 			if ui.Button(c.Key("status-error"), "!").Width(22).Height(18).
 				Border(1, colorBad).TextColor(colorBad).
@@ -1277,7 +1318,7 @@ func (a *appState) errorReport(c *ui.Context, width, height float32) {
 			}
 			ui.Row(c).Gap(spaceSm).Children(func() {
 				a.secondaryButton(c, "err-diagnostics", a.tr("Open diagnostics", "打开诊断"), 0, true, func() {
-					a.workspace = workspaceDiagnostics
+					a.navigateWorkspace(workspaceDiagnostics)
 					a.errorOpen = false
 				})
 				if a.importRetryTarget() != "" {
@@ -1322,17 +1363,21 @@ func (a *appState) pageMenuPanel(c *ui.Context, width float32) {
 		for _, page := range []workspace{workspaceStage, workspaceSources, workspaceDiagnostics, workspaceSettings, workspaceMixer} {
 			p := page
 			button := ui.Button(c.Key("menu-"+itoa(int(p))), a.pageLabel(p)).Height(a.controlHeight()).Padding(0, spaceSm)
-			if p == a.workspace {
+			if a.workspacePageActive(p) {
 				button = button.Background(colorSelected).TextColor(colorSelectedText)
 			}
 			if button.Clicked() {
-				a.workspace = p
-				a.pageMenu = false
+				if p == workspaceSettings {
+					a.navigateToSettings("")
+				} else {
+					a.navigateWorkspace(p)
+				}
 			}
 		}
 		ui.Box(c).WidthPercent(100).Height(1).Background(colorLine)
 		if ui.Button(c.Key("menu-quit"), a.tr("Quit MuxShift", "退出 MuxShift")).Height(a.controlHeight()).
 			Padding(0, spaceSm).TextColor(colorBad).Clicked() {
+			a.pageMenu = false
 			a.release()
 			a.closes++
 			mygo.App.Quit()

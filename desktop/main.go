@@ -422,11 +422,11 @@ func (a *appState) view(c *ui.Context) {
 		c.OnWindowShortcut(ui.Ctrl, ui.KeyS, func() { a.shortcutCommand(commandShow) })
 		c.OnWindowShortcut(ui.Ctrl, ui.KeyH, func() { a.shortcutCommand(commandHear) })
 		c.OnWindowShortcut(ui.Ctrl, ui.KeyR, func() { a.shortcutCommand(commandRetry) })
-		c.OnWindowShortcut(ui.Ctrl, ui.Key1, func() { a.workspace = workspaceStage })
-		c.OnWindowShortcut(ui.Ctrl, ui.Key2, func() { a.workspace = workspaceSources })
-		c.OnWindowShortcut(ui.Ctrl, ui.Key3, func() { a.workspace = workspaceDiagnostics })
-		c.OnWindowShortcut(ui.Ctrl, ui.Key4, func() { a.workspace = workspaceSettings })
-		c.OnWindowShortcut(ui.Ctrl, ui.Key5, func() { a.workspace = workspaceMixer })
+		c.OnWindowShortcut(ui.Ctrl, ui.Key1, func() { a.navigateWorkspace(workspaceStage) })
+		c.OnWindowShortcut(ui.Ctrl, ui.Key2, func() { a.navigateWorkspace(workspaceSources) })
+		c.OnWindowShortcut(ui.Ctrl, ui.Key3, func() { a.navigateWorkspace(workspaceDiagnostics) })
+		c.OnWindowShortcut(ui.Ctrl, ui.Key4, func() { a.navigateToSettings("") })
+		c.OnWindowShortcut(ui.Ctrl, ui.Key5, func() { a.navigateWorkspace(workspaceMixer) })
 		// P10.3: F11 is the standard full-screen key and works from the
 		// workbench too, so a person does not have to find Cinema first.
 		c.OnWindowShortcut(0, ui.KeyF11, func() { a.enterViewing(viewFullscreen, a.windowRef()) })
@@ -502,6 +502,7 @@ func (a *appState) setLayout(kind layoutKind) {
 	}
 	a.layout = kind
 	a.invalidate()
+	a.saveSession()
 }
 
 // setPrimary puts a source first in the arrangement, so the layout that has one
@@ -515,7 +516,9 @@ func (a *appState) setPrimary(id core.SourceID) {
 		}
 	}
 	a.layoutTaken = taken
+	a.pendingLayoutOrder = nil
 	a.invalidate()
+	a.saveSession()
 }
 
 // stage draws every player in one frame. The scene hides the players it does
@@ -893,7 +896,7 @@ func main() {
 	// No media is a real state: first run shows the empty stage with one way
 	// in, instead of refusing to open a window.
 	for _, uri := range media {
-		if !isNetworkAddress(uri) {
+		if *scenario != "" && !isNetworkAddress(uri) {
 			if _, err := os.Stat(uri); err != nil {
 				log.Fatalf("muxshift-desktop: %v", err)
 			}
@@ -926,14 +929,26 @@ func main() {
 	// cannot reopen keeps its error instead of stopping the start.
 	var s *appState
 	var err error
+	var startupMedia []string
+	storeNote := ""
 	if len(media) > 0 {
-		s, err = newAppStateWithSettings(media, loaded)
+		if *scenario == "" {
+			s, err = newAppStateWithSettings(nil, loaded)
+			startupMedia = append([]string(nil), media...)
+		} else {
+			s, err = newAppStateWithSettings(media, loaded)
+		}
 	} else {
-		snap, storeNote := loadSessionStore(sessionPath)
+		snap, note := loadSessionStore(sessionPath)
+		storeNote = note
 		if storeNote != "" {
 			log.Printf("session: %s", storeNote)
 		}
-		s, err = newAppStateFromStore(loaded, snap)
+		if *scenario == "" {
+			s, err = newAppStateFromStoreDeferred(loaded, snap)
+		} else {
+			s, err = newAppStateFromStore(loaded, snap)
+		}
 	}
 	if err != nil {
 		log.Fatalf("muxshift-desktop: %v", err)
@@ -941,6 +956,10 @@ func main() {
 	s.settingsPath = path
 	s.settingsTrusted = note == ""
 	s.sessionPath = sessionPath
+	// A temporary -media run is isolated from the saved arrangement. A session
+	// file that failed to load is likewise protected until the user can recover
+	// it; startup must never replace either with an empty/default snapshot.
+	s.sessionWriteEnabled = len(media) == 0 && storeNote == ""
 	// A check that takes pictures should not take sound with it: the same master
 	// mute the overlay offers is switched on before the first source is opened,
 	// so nothing has to be turned down on the machine that runs it.
@@ -954,15 +973,11 @@ func main() {
 	setStartPage := func(page string) {
 		switch page {
 		case "sources":
-			// The console holds the source list, so "open on sources" means
-			// the stage with that panel in front.
-			s.dockUp = true
-			delete(s.dockHidden, dockSources)
-			s.workspace = workspaceStage
+			s.navigateWorkspace(workspaceSources)
 		case "diagnostics":
-			s.workspace = workspaceDiagnostics
+			s.navigateWorkspace(workspaceDiagnostics)
 		case "settings":
-			s.workspace = workspaceSettings
+			s.navigateToSettings("")
 		}
 	}
 	setStartPage(loaded.StartPage)
@@ -1001,10 +1016,6 @@ func main() {
 		log.Fatalf("muxshift-desktop: %v", err)
 	}
 	s.apply()
-	// A command-line start still writes the arrangement, so the next start
-	// without -media comes back to it. A restored start rewrites the same
-	// snapshot, which is harmless and keeps it current.
-	s.saveSession()
 	log.Printf("settings: start page %q, file %s", loaded.StartPage, s.settingsPath)
 	for i, it := range s.items {
 		log.Printf("source %d: %s · video=%q audio=%q open=%v", i+1, shortURI(it.uri), it.video, it.audio, errorString(it.openErr))
@@ -1071,6 +1082,9 @@ func main() {
 		})
 		win.InstallWindowIcon(window)
 		s.window = window
+		s.sessionSaveMu.Lock()
+		s.sessionSaveNotify = mygoRunOnMain
+		s.sessionSaveMu.Unlock()
 		// P5.3: the browser's only way in is a loopback socket this window
 		// owns. It starts with the window and stops with it; a port already in
 		// use is a visible reason, never a quiet move to another port.
@@ -1117,6 +1131,10 @@ func main() {
 			// gone: the landing writes the session and the players, and both
 			// belong to this window's drawing thread.
 			s.closed = true
+			if s.startupRestoreCancel != nil {
+				s.startupRestoreCancel()
+				s.startupRestoreCancel = nil
+			}
 			s.closeImportTicker()
 			// The listener holds nothing on disk, but a closed window must not
 			// leave an accepting socket behind.
@@ -1128,6 +1146,9 @@ func main() {
 				// Save the arrangement last, while the session and the players
 				// are still alive, so the next start comes back to it.
 				s.saveSession()
+				if err := s.flushSessionSave(); err != nil {
+					log.Printf("session: final save failed (%v)", err)
+				}
 			}
 			s.release()
 		})
@@ -1144,10 +1165,17 @@ func main() {
 		}
 		if *scenario != "" {
 			scenarios[*scenario](window, s, *dir)
+		} else if len(startupMedia) > 0 {
+			s.startCommandLineSources(startupMedia)
+		} else {
+			s.startStoredSourceRestores()
 		}
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)
+	}
+	if *scenario != "" && scenarioFailed.Load() {
+		log.Fatalf("%s: scenario assertions failed", *scenario)
 	}
 }
 

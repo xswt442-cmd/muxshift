@@ -122,6 +122,7 @@ func (a *appState) toggleStageLock(id core.SourceID) {
 	edits := a.sceneEdits()
 	edits.locked[id] = !edits.locked[id]
 	a.invalidate()
+	a.saveSession()
 }
 
 // stageGeometry returns the editable pictures with their boxes and the order
@@ -397,6 +398,7 @@ func (a *appState) dragByIn(it *item, h handleKind, dx, dy float32, stageW, stag
 	a.editNote = fmt.Sprintf("%s  x %.0f%%  y %.0f%%  w %.0f%%  h %.0f%%",
 		a.name(it), next.X*100, next.Y*100, next.W*100, next.H*100)
 	a.invalidate()
+	a.saveSession()
 }
 
 // fitStage makes a picture cover the whole stage, keeping its own shape: the
@@ -405,11 +407,13 @@ func (a *appState) fitStage(id core.SourceID) {
 	edits := a.sceneEdits()
 	edits.setBox(id, stageBox{X: 0, Y: 0, W: 1, H: 1})
 	a.invalidate()
+	a.saveSession()
 }
 
 // resetStage forgets every rectangle and lock in this scene, which puts the
 // pictures back where the layout preset puts them.
 func (a *appState) resetStage() {
+	a.forgetPendingStageEdits(a.scene)
 	if a.edits == nil {
 		return
 	}
@@ -418,6 +422,7 @@ func (a *appState) resetStage() {
 	a.boxFields = boxFields{}
 	a.editNote = "stage reset to the layout"
 	a.invalidate()
+	a.saveSession()
 }
 
 // pruneStageEdits drops rectangles and locks for sources that no longer
@@ -606,6 +611,7 @@ func (a *appState) forgetBox(id core.SourceID) {
 		edits.forget(id)
 	}
 	a.invalidate()
+	a.saveSession()
 }
 
 // applyBoxFields parses the four numbers and stores them, refusing anything
@@ -644,6 +650,7 @@ func (a *appState) applyBoxFields(it *item) {
 	a.boxFields.note = ""
 	a.reloadBoxFields(it)
 	a.invalidate()
+	a.saveSession()
 }
 
 func ratioLabel(locked bool) string {
@@ -665,11 +672,15 @@ func lockLabel(locked bool) string {
 // the order the stage draws.
 func (a *appState) raiseStage(id core.SourceID, toFront bool) {
 	a.sceneEdits().raise(id, a.shownIDs(), toFront)
+	a.clearPendingStageOrder(a.scene)
 	a.invalidate()
+	a.saveSession()
 }
 
 // lowerStage is the other direction of raiseStage.
 func (a *appState) lowerStage(id core.SourceID, toBack bool) {
 	a.sceneEdits().lower(id, a.shownIDs(), toBack)
+	a.clearPendingStageOrder(a.scene)
 	a.invalidate()
+	a.saveSession()
 }

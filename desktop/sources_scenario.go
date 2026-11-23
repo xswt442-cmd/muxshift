@@ -13,8 +13,10 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -1146,6 +1148,13 @@ func mixerBody(window *mygo.Window, a *appState, dir string) {
 		finishScenario(a)
 		return
 	}
+	// The protection is opt-in. This scenario covers it explicitly, then uses
+	// the real Route only path to create an unrouted source for the refusal
+	// checks below.
+	mygoRunOnMain(func() {
+		a.settings.MuteUnaligned = true
+		a.apply()
+	})
 
 	step(window, a, dir, "mixer", "1-mixer.png", "before anybody aligns anything", func(a *appState) {
 		a.workspace = workspaceMixer
@@ -1186,11 +1195,16 @@ func mixerBody(window *mygo.Window, a *appState, dir string) {
 	// A source the scene does not route cannot be soloed: refusing is the point,
 	// because a solo there would only silence what is playing for nothing.
 	mygoRunOnMain(func() {
+		if err := a.hearAudio(0, a.items[0].volume); err != nil {
+			check(false, "route only the first source: %v", err)
+		}
 		result := a.runCommand(command{Kind: commandSolo, Source: sourceAt(a, 1)})
 		check(result.Err != nil, "soloing a source the scene does not route was accepted")
-		check(strings.Contains(result.Err.Error(), "not in the scene") ||
-			strings.Contains(result.Err.Error(), "not routed"),
-			"the refusal does not say the source is unrouted: %v", result.Err)
+		if result.Err != nil {
+			check(strings.Contains(result.Err.Error(), "not in the scene") ||
+				strings.Contains(result.Err.Error(), "not routed"),
+				"the refusal does not say the source is unrouted: %v", result.Err)
+		}
 		logf("mixer", "solo on the unrouted source: %v", result.Err)
 		// The refusal is expected here; it must not linger as a session error.
 		a.lastErr = nil
@@ -1530,49 +1544,74 @@ func runScene(window *mygo.Window, a *appState, dir string) {
 // object stayed consistent.
 func runFour(window *mygo.Window, a *appState, dir string) {
 	go func() {
-		wait := time.Sleep
-		wait(3 * time.Second)
-		step(window, a, dir, "four", "1-four-open.png", "four sources open", nil)
-		step(window, a, dir, "four", "2-video1-audio2.png", "video 1 with audio 2", func(a *appState) {
-			for _, call := range []struct {
-				name string
-				fn   func() error
-			}{
-				{"show 1", func() error { return a.showVideo(0) }},
-				{"hear 2", func() error { return a.hearAudio(1, 1) }},
-			} {
-				if err := call.fn(); err != nil {
-					logf("four", "%s: %v", call.name, err)
-				}
-			}
-		})
-		wait(1 * time.Second)
-		step(window, a, dir, "four", "3-video3-audio4.png", "video 3 with audio 4", func(a *appState) {
-			if err := a.showVideo(2); err != nil {
-				logf("four", "show 3: %v", err)
-			}
-			if err := a.hearBoth(1, 3, 1, 0.5); err != nil {
-				logf("four", "hear 2 and 4: %v", err)
-			}
-		})
-		wait(1 * time.Second)
-		step(window, a, dir, "four", "", "remove source 2 while it is heard", func(a *appState) {
-			if err := a.remove(1); err != nil {
-				logf("four", "remove 2: %v", err)
-			}
-		})
-		wait(1 * time.Second)
-		step(window, a, dir, "four", "4-after-removing-2.png", "after removing source 2", nil)
-		step(window, a, dir, "four", "", "remove source 3 while it is shown", func(a *appState) {
-			if err := a.remove(1); err != nil {
-				logf("four", "remove 3: %v", err)
-			}
-		})
-		wait(1 * time.Second)
-		step(window, a, dir, "four", "5-after-removing-3.png", "after removing source 3", nil)
-		mygoRunOnMain(func() {
+		const scenario = "four"
+		defer mygoRunOnMain(func() {
 			a.release()
 			mygo.App.Quit()
+		})
+
+		var count int
+		var video1, video3, audio2, audio4 core.TrackID
+		mygoRunOnMain(func() {
+			count = len(a.items)
+			if count == 4 {
+				video1, video3 = a.items[0].video, a.items[2].video
+				audio2, audio4 = a.items[1].audio, a.items[3].audio
+			}
+		})
+		if count != 4 {
+			logf(scenario, "CHECK FAILED: expected four sources, got %d", count)
+			return
+		}
+		if video1 == "" || video3 == "" || audio2 == "" || audio4 == "" {
+			logf(scenario, "CHECK FAILED: sources 1 and 3 need video and sources 2 and 4 need audio")
+			return
+		}
+		if !waitUntilReady(a, 8*time.Second) {
+			logf(scenario, "CHECK FAILED: four players did not become ready")
+		}
+		checkScene := func(video []core.TrackID, audio map[core.TrackID]float64) {
+			scene, err := a.session.Scene(a.scene)
+			if err != nil {
+				logf(scenario, "CHECK FAILED: read scene: %v", err)
+				return
+			}
+			if !slices.Equal(scene.Video, video) {
+				logf(scenario, "CHECK FAILED: scene video = %v, want %v", scene.Video, video)
+			}
+			if len(scene.Audio) != len(audio) {
+				logf(scenario, "CHECK FAILED: scene has %d audio routes, want %d", len(scene.Audio), len(audio))
+			}
+			for _, level := range scene.Audio {
+				want, ok := audio[level.Track]
+				if !ok || level.Volume != want {
+					logf(scenario, "CHECK FAILED: unexpected audio route %s at %.2f", level.Track, level.Volume)
+				}
+			}
+		}
+		checkAction := func(label string, err error) {
+			if err != nil {
+				logf(scenario, "CHECK FAILED: %s: %v", label, err)
+			}
+		}
+		step(window, a, dir, scenario, "1-four-open.png", "four sources open", nil)
+		step(window, a, dir, scenario, "2-video1-audio2.png", "video 1 with audio 2", func(a *appState) {
+			checkAction("hear 2", a.hearAudio(1, 1))
+			checkScene([]core.TrackID{video1}, map[core.TrackID]float64{audio2: 1})
+		})
+		step(window, a, dir, scenario, "3-video3-audio4.png", "video 3 with audio 2 and 4", func(a *appState) {
+			checkAction("hide 1", a.showVideo(0))
+			checkAction("show 3", a.showVideo(2))
+			checkAction("hear 2 and 4", a.hearBoth(1, 3, 1, 0.5))
+			checkScene([]core.TrackID{video3}, map[core.TrackID]float64{audio2: 1, audio4: 0.5})
+		})
+		step(window, a, dir, scenario, "4-after-removing-2.png", "after removing source 2", func(a *appState) {
+			checkAction("remove 2", a.remove(1))
+			checkScene([]core.TrackID{video3}, map[core.TrackID]float64{audio4: 0.5})
+		})
+		step(window, a, dir, scenario, "5-after-removing-3.png", "after removing source 3", func(a *appState) {
+			checkAction("remove 3", a.remove(1))
+			checkScene(nil, map[core.TrackID]float64{audio4: 0.5})
 		})
 	}()
 }
@@ -1898,7 +1937,12 @@ func runSyncFail(window *mygo.Window, a *appState, dir string) {
 	}()
 }
 
+var scenarioFailed atomic.Bool
+
 func logf(scenario, format string, args ...any) {
+	if strings.HasPrefix(format, "CHECK FAILED:") {
+		scenarioFailed.Store(true)
+	}
 	log.Printf(scenario+": "+format, args...)
 }
 

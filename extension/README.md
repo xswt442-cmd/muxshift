@@ -6,14 +6,19 @@ never copies cookies, request headers, or keys.
 
 ## What it does
 
-- The popup scans the active tab after a click and lists the `src` of the page's
-  `video`, `audio`, and `source` elements, plus media-looking resource entries.
-- Choosing one address and pressing **Import the selected address** sends
+- The popup scans the active tab after a click and shows ordinary candidates in
+  its main view. A keyboard-operable radio list selects the candidate; raw URLs,
+  source labels, and scan notes stay in the collapsed details section.
+- Pressing **Send selected address** sends
   `{url: ...}` to the window's own loopback listener, `POST http://127.0.0.1:8731/import`,
-  with the window's token in `X-MuxShift-Handoff`.
+  with the window's token in `X-MuxShift-Handoff`. On supported live pages,
+  **Resolve and send** explicitly labels the one-click send action.
 - The window runs the same add command its own Sources page runs, so an address
   the extension hands over lands in the same session, with the same errors, as
-  one typed in by hand.
+  one typed in by hand. The popup distinguishes scanning, pairing, sending, and
+  acceptance; acceptance means the desktop accepted the import command, not
+  that the media opened. Check the desktop's Sources page for its open status
+  and any later failure.
 
 There is no native messaging host. The window prints a six-digit pairing code
 on the Diagnostics page; typing it in the popup once exchanges it for a token
@@ -56,7 +61,9 @@ profile that already trusts the extension keeps the same identity.
 1. Start the desktop window. Its Diagnostics page shows
    `127.0.0.1:8731 · pairing code 123456 (expires in 2m)`.
 2. Load the extension unpacked (below), open its popup and type that code.
-3. Pick an address in the popup and press **Import the selected address**.
+3. Select an address in the popup's main view and press **Send selected
+   address**. On supported live pages, **Resolve and send** is a separate
+   explicit one-click authorization.
 
 If the window is closed or restarted, the extension reports that the window is
 not answering; a new window shows a new code, so pair again.

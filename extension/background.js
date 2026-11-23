@@ -19,9 +19,7 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
     return true;
   }
   if (message?.type === "import") {
-    importAddress(message.url).then(respond, (error) =>
-      respond({ ok: false, reason: String(error?.message || error) }),
-    );
+    importAddress(message.url).then(respond, (error) => respond({ ok: false, reason: String(error?.message || error) }));
     return true;
   }
   if (message?.type === "resolve") {
@@ -31,11 +29,26 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
   return false;
 });
 
+// activeTab finds the tab the popup acts on. Chromium may omit currentWindow
+// when no browser window has focus, so the fallbacks stay narrow enough that a
+// second active tab cannot become an accidental target.
+async function activeTab() {
+  let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab) {
+    [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  }
+  if (!tab) {
+    const active = await chrome.tabs.query({ active: true });
+    if (active.length === 1) [tab] = active;
+  }
+  return tab;
+}
+
 // scan asks the active tab what media it is presenting. The injected function
 // only reads the document and the resource timings it already has; it does not
 // fetch anything, read cookies, or look at headers.
 async function scan() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = await activeTab();
   if (!tab?.id) {
     return { error: "no active tab" };
   }
@@ -160,12 +173,13 @@ async function request(base, path, body, token) {
       body: JSON.stringify(body || {}),
     });
   } catch (error) {
-    // A TypeError here means fetch could not reach the loopback address: the
-    // window is not running or is not listening. Say what to do instead of
-    // surfacing the browser's raw "Failed to fetch". HTTP status semantics
-    // (401/403/400/202) are unaffected and still arrive from the code below.
-    if (error instanceof TypeError) {
-      throw new Error("无法连接本机 MuxShift，请确认桌面端已运行并已配对");
+    // Preserve the network-failure category for pair and import callers. The
+    // wrapper is an ordinary Error, so callers must not inspect instanceof
+    // TypeError after this point.
+    if (error instanceof TypeError || error?.name === "TypeError") {
+      const disconnected = new Error("the local MuxShift window could not be reached");
+      disconnected.failure = "unreachable";
+      throw disconnected;
     }
     throw error;
   }
@@ -189,11 +203,18 @@ async function request(base, path, body, token) {
 async function pair(code) {
   const cleaned = String(code || "").trim();
   if (!/^\d{6}$/.test(cleaned)) {
-    throw new Error("the pairing code is six digits, as shown in the window");
+    return { ok: false, failure: "bad-code" };
   }
-  const answer = await request(FALLBACK_BASE, "/pair", { code: cleaned });
+  let answer;
+  try {
+    answer = await request(FALLBACK_BASE, "/pair", { code: cleaned });
+  } catch (error) {
+    if (error.failure === "unreachable") return { ok: false, failure: "unreachable" };
+    if (error.status === 401 || error.status === 403) return { ok: false, failure: "bad-code" };
+    return { ok: false, failure: "failed" };
+  }
   if (!answer.token) {
-    throw new Error("the window did not return a token");
+    return { ok: false, failure: "failed" };
   }
   const address = answer.address || FALLBACK_BASE;
   await chrome.storage.local.set({ handoff: { address, token: answer.token } });
@@ -220,7 +241,7 @@ async function status() {
 // called with the tab's cookies, and only the resulting playlist address leaves
 // the browser. No cookie, storage item, or request header is read or exported.
 async function resolveLive() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = await activeTab();
   if (!tab?.id) {
     return { error: "no active tab" };
   }
@@ -428,10 +449,10 @@ async function resolveLivePage() {
 // is dropped here, so the popup can ask for a fresh code instead of repeating
 // a request that cannot succeed.
 async function importAddress(url) {
-  if (!url) throw new Error("no address was selected");
+  if (!url) return { ok: false, failure: "invalid" };
   const handoff = await stored();
   if (!handoff) {
-    throw new Error("pair with the window first: open its Diagnostics page and type its code");
+    return { ok: false, failure: "not-paired" };
   }
   let answer;
   try {
@@ -442,12 +463,12 @@ async function importAddress(url) {
       if (current && current.token === handoff.token && current.address === handoff.address) {
         await chrome.storage.local.remove("handoff");
       }
-      throw new Error("this browser is no longer paired with the window; open its Diagnostics page for a new code");
+      return { ok: false, failure: "expired" };
     }
-    if (error instanceof TypeError) {
-      throw new Error("the window is not answering; start MuxShift and pair again if it asks");
+    if (error.failure === "unreachable") {
+      return { ok: false, failure: "unreachable" };
     }
-    throw error;
+    return { ok: false, failure: error.status ? "rejected" : "failed" };
   }
   return { ok: true, message: answer.message || "the window accepted the address" };
 }

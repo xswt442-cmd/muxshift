@@ -13,12 +13,13 @@ never copies cookies, request headers, or keys.
   `{url: ...}` to the window's own loopback listener, `POST http://127.0.0.1:8731/import`,
   with the window's token in `X-MuxShift-Handoff`. On supported live pages,
   **Resolve and send** explicitly labels the one-click send action.
-- The window runs the same add command its own Sources page runs, so an address
+- The window runs the same add command as the stage's Sources panel, so an address
   the extension hands over lands in the same session, with the same errors, as
   one typed in by hand. The popup distinguishes scanning, pairing, sending, and
   acceptance; acceptance means the desktop accepted the import command, not
-  that the media opened. Check the desktop's Sources page for its open status
-  and any later failure.
+  that the media opened. Check Stage → Sources for its status and any later failure.
+- Resolve and send use the scanned active page. Reopen the popup to scan again
+  if the tab switches, navigates, or reloads.
 
 There is no native messaging host. The window prints a six-digit pairing code
 on the Diagnostics page; typing it in the popup once exchanges it for a token

@@ -4,6 +4,38 @@
 
 This changelog records completed changes that matter to someone using MuxShift. GitHub Release notes come from the matching tagged section, not a separately maintained summary.
 
+## [Unreleased]
+
+### 简体中文
+
+**新增**
+
+- 桌面端分别保存各舞台的布局、主画面和音频分配。来源面板可逐路显示、暂停和恢复播放。
+
+**改进**
+
+- 应用导航收为「舞台」「诊断」「设置」，来源、混音和同步在舞台控制台内操作。
+
+**修复**
+
+- 点击编辑位置时会选中一个可见画面，短窗口也能操作下沿的缩放把手。
+- 来源按保存顺序恢复，临时打不开时可取消恢复并保留原有分配。拖动音量等连续保存不会再因两个计时器同时写入而卡住。
+
+### English
+
+**Added**
+
+- The desktop saves each stage's layout, primary picture, and audio routing. The Sources panel can show, pause, and resume individual sources.
+
+**Improved**
+
+- Application navigation uses Stage, Diagnostics, and Settings. Sources, Mixer, and Sync live in the stage console.
+
+**Fixed**
+
+- Position editing selects a visible picture and keeps the bottom resize handles reachable in short windows.
+- Sources reopen in the saved order, and cancelling recovery keeps the original assignments. Overlapping autosaves no longer deadlock during continuous changes such as volume drags.
+
 ## [0.0.4] - 2026-11-22
 
 ### 简体中文

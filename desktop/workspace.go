@@ -112,19 +112,7 @@ func (a *appState) importRow(c *ui.Context) {
 				cancel.Tooltip(a.tr("stop reading; nothing is added", "停止读取，不会添加") + " " + shortURI(a.importing))
 			}
 		})
-		failed := a.lastCommand.Command.Kind == commandAdd && a.lastCommand.Err != nil
-		if failed {
-			ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).WidthPercent(100).Children(func() {
-				ui.Text(c, a.errorShort()).FontSize(textMicro).TextColor(colorBad).
-					Grow(1).SingleLine().Tooltip(a.lastCommand.Err.Error())
-				a.secondaryButton(c, "import-retry", a.tr("Retry", "重试"), 76, true, func() {
-					a.report(a.runCommand(command{Kind: commandAdd, URI: a.lastCommand.Command.URI}))
-				})
-				a.secondaryButton(c, "import-error-open", a.tr("Details", "详情"), 76, true, func() {
-					a.errorOpen = true
-				})
-			})
-		}
+		a.importFailureNotice(c)
 		if a.reselectSource != "" {
 			if target, _, err := a.itemBySource(a.reselectSource); err == nil {
 				ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).WidthPercent(100).Children(func() {
@@ -151,11 +139,39 @@ func (a *appState) importRow(c *ui.Context) {
 	})
 }
 
+func (a *appState) importFailureNotice(c *ui.Context) {
+	if a.importRetryTarget() == "" {
+		return
+	}
+	title := a.tr("Could not add ", "无法添加 ") + shortURI(a.importFailureURI)
+	detail := a.importFailureErr.Error()
+	ui.Column(c).WidthPercent(100).Padding(spaceXs, spaceSm).Gap(spaceXs).
+		Border(1, colorBad).Radius(radiusMd).Children(func() {
+		ui.Text(c, title).FontSize(textSmall).TextColor(colorBad).SingleLine().Tooltip(title)
+		ui.Text(c, a.importFailureCause(a.importFailureErr)).FontSize(textMicro).
+			TextColor(colorTextDim).SingleLine().Tooltip(detail)
+		ui.Row(c).Gap(spaceXs).Wrap().Children(func() {
+			a.secondaryButton(c, "import-retry", a.tr("Retry", "重试"), 62, true, a.retryImport)
+			a.secondaryButton(c, "import-error-open", a.tr("Details", "详情"), 66, true, func() {
+				a.lastErr = a.importFailureErr
+				a.errorOpen = true
+			})
+			a.secondaryButton(c, "import-dismiss", a.tr("Dismiss", "关闭提示"), 76, true, func() {
+				if a.lastErr != nil && a.lastErr.Error() == detail {
+					a.lastErr = nil
+				}
+				a.importFailureURI = ""
+				a.importFailureErr = nil
+			})
+		})
+	})
+}
+
 // selectedSource is the source the inspector follows, or nil.
 func (a *appState) selectedSource() (*item, int, bool) {
 	for i, it := range a.items {
-		if itemKey(it) == a.selected || it.source.ID == a.selected || (it.persistentID != "" &&
-			(core.SourceID(it.persistentID) == a.selected || core.SourceID("saved:"+it.persistentID) == a.selected)) {
+		if itemKey(it) == a.selected || (it.source.ID != "" && it.source.ID == a.selected) ||
+			(it.persistentID != "" && core.SourceID("saved:"+it.persistentID) == a.selected) {
 			return it, i, true
 		}
 	}
@@ -193,10 +209,10 @@ func (a *appState) diagnosticsPage(c *ui.Context) {
 	ui.Column(c).WidthPercent(100).Padding(spaceSm, spaceMd).Radius(radiusCard).
 		Background(colorPanel).Border(1, colorLineSoft).Gap(0).Children(func() {
 		a.diagSection(c, a.tr("Session", "会话"), func() {
-			ui.Text(c, fmt.Sprintf("session %s · scene %s · video %s · %s",
+			ui.Text(c, fmt.Sprintf(a.tr("Session %s · Scene %s · Video %s · %s", "会话 %s · 场景 %s · 视频轨 %s · %s"),
 				snapshot.Name, snapshot.Scene, pictureLine(snapshot.Picture), soundLine(snapshot.Sound))).
 				FontSize(textSmall).TextColor(colorText).FontFeatures("tnum").Wrap()
-			ui.Text(c, fmt.Sprintf("event %s · playing %v · last %s",
+			ui.Text(c, fmt.Sprintf(a.tr("Event time %s · Playing %t · Last command %s", "事件时间 %s · 正在播放 %t · 最近命令 %s"),
 				snapshot.Event.Round(100*1e6), snapshot.Playing, snapshot.LastCommand)).
 				FontSize(textSmall).TextColor(colorTextDim)
 		})
@@ -206,7 +222,8 @@ func (a *appState) diagnosticsPage(c *ui.Context) {
 		}
 		for i, source := range snapshot.Sources {
 			a.diagSection(c, fmt.Sprintf("%d · %s", i+1, shortURI(source.URI)), func() {
-				ui.Text(c, fmt.Sprintf("%s · gen %d · %s · ready %v · player %v · playing %v · %s / %s · offset %s",
+				ui.Text(c, fmt.Sprintf(a.tr("%s · Generation %d · Tracks %s · Ready %t · Player %t · Playing %t · %s / %s · Offset %s",
+					"%s · 播放器代数 %d · 轨道 %s · 已就绪 %t · 有播放器 %t · 正在播放 %t · %s / %s · 偏移 %s"),
 					source.ID, source.Generation,
 					tracksLine([]core.TrackID{source.Video, source.Audio}), source.Ready,
 					source.Player, source.Playing,

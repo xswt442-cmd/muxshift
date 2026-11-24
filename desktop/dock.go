@@ -348,6 +348,10 @@ func (a *appState) dockSplitter(c *ui.Context, left, right string) {
 }
 
 func (a *appState) dockSourcesBody(c *ui.Context) {
+	placed := make(map[*item]bool)
+	for _, it := range a.stagePictures() {
+		placed[it] = true
+	}
 	ui.Row(c).WidthPercent(100).Height(28).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
 		a.iconButton(c, "dock-src-add", lucide.Plus(), a.tr("add a source", "添加来源"), false,
 			a.openAddSource)
@@ -371,13 +375,14 @@ func (a *appState) dockSourcesBody(c *ui.Context) {
 			ui.Text(c, a.layerNote(it)).FontSize(textMicro).TextColor(colorDim).SingleLine()
 		}
 	})
+	a.importFailureNotice(c)
 	if len(a.items) == 0 {
 		ui.Text(c, a.tr("No sources yet.", "还没有来源。")).FontSize(textCaption).
 			TextColor(colorDim).Wrap()
 		return
 	}
 	for i, it := range a.items {
-		a.sourceEntry(c, it, i, true)
+		a.sourceEntry(c, it, i, true, placed)
 	}
 }
 
@@ -426,6 +431,11 @@ func normalizeConsoleLayout(v string) string {
 // name, the level, the mute, its place in the stack and its offset. It reads
 // exactly the state the panels read; only the arrangement differs.
 func (a *appState) dockRowsBody(c *ui.Context) {
+	a.importFailureNotice(c)
+	placed := make(map[*item]bool)
+	for _, picture := range a.stagePictures() {
+		placed[picture] = true
+	}
 	ui.Column(c).Fill().WidthPercent(100).Padding(spaceSm, spaceSm).Gap(spaceXs).Children(func() {
 		ui.Row(c).WidthPercent(100).Height(22).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, a.tr("Source", "来源")).FontSize(textMicro).TextColor(colorDim).Grow(1).MinWidth(0)
@@ -442,9 +452,54 @@ func (a *appState) dockRowsBody(c *ui.Context) {
 					ui.Column(c).Grow(1).MinWidth(0).Children(func() {
 						ui.Text(c, sourceDisplayName(row)).FontSize(textBody).FontWeight(500).
 							TextColor(colorText).MinWidth(0).SingleLine()
-						ui.Text(c, a.rowFacts(row)).FontSize(textMicro).TextColor(colorDim).
+						state := "hidden"
+						if row.shown {
+							state = "shown"
+							if !placed[row] {
+								state = "shown · outside layout"
+							}
+						}
+						if row.player == nil {
+							state += " · opening"
+						} else if row.player.Ready() {
+							state += " · ready"
+						} else {
+							state += " · not ready"
+						}
+						if row.player != nil && row.player.Playing() {
+							state += " · playing"
+						} else {
+							state += " · paused"
+						}
+						ui.Text(c, state).FontSize(textMicro).TextColor(colorDim).
 							MinWidth(0).SingleLine()
 					})
+					key := string(itemKey(row))
+					visibleLabel := a.tr("Hide", "隐藏")
+					if !row.shown {
+						visibleLabel = a.tr("Show", "显示")
+					}
+					if ui.Button(c.Key("source-visible-"+key), visibleLabel).Height(26).Clicked() {
+						a.toggleVideo(index)
+					}
+					if row.shown && ui.Button(c.Key("source-primary-"+key), a.tr("Primary", "主画面")).Height(26).Clicked() {
+						a.runCommand(command{Kind: commandPrimary, Source: itemKey(row)})
+					}
+					if row.player != nil {
+						kind, label := commandSourcePause, a.tr("Pause", "暂停")
+						if !row.player.Playing() {
+							kind, label = commandSourcePlay, a.tr("Play", "播放")
+						}
+						playButton := ui.Button(c.Key("source-play-"+key), label).Height(26)
+						if a.sourceInExplicitGroup(row) {
+							playButton = playButton.Disabled(true).Tooltip(a.tr("Use the sync group transport", "请使用同步组传输控制"))
+						}
+						if playButton.Clicked() {
+							a.runCommand(command{Kind: kind, Source: itemKey(row)})
+						}
+					} else {
+						ui.Button(c.Key("source-play-"+key), a.tr("Opening", "打开中")).Height(26).Disabled(true)
+					}
 					a.iconButton(c, "row-up-"+string(row.source.ID), lucide.ChevronUp(),
 						a.tr("toward the front", "往前一层"), false, func() {
 							a.raiseStage(row.source.ID, false)

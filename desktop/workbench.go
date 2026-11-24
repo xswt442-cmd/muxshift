@@ -142,7 +142,7 @@ func (a *appState) shell(c *ui.Context, width, height float32) {
 		ui.Row(c).WidthPercent(100).Grow(1).AlignItems(ui.Stretch).Children(func() {
 			// The scene column is a draggable rail the way a capture program
 			// has one: it starts open, keeps its own width, and folds to icons.
-			if !narrow && a.editingShell {
+			if !narrow && a.editingShell && a.workspace == workspaceStage {
 				layout.DraggableSideNav(c, &a.navWidth, &a.navUp, layout.DraggableSideNavProps{
 					MinWidth: 64, MaxWidth: 360, ShowHandleWhenCollapsed: true, Background: colorPanel,
 				}, func(nav layout.SideNavState) {
@@ -189,14 +189,14 @@ func (a *appState) workspaceNavigation(c *ui.Context, width float32) {
 	ui.Row(c).WidthPercent(100).Height(a.barHeight()).Padding(0, spaceMd).
 		Gap(spaceXs).AlignItems(ui.Center).Background(colorPanel).Children(func() {
 		if width < 900 {
-			label := a.pageLabel(a.currentWorkspacePage())
+			label := a.pageLabel(a.topWorkspacePage())
 			if ui.Button(c.Key("corner-pages"), a.tr("Pages", "页面")+" · "+label).
 				Height(a.controlHeight()).Padding(0, spaceSm).Clicked() {
 				a.pageMenu = !a.pageMenu
 			}
 			return
 		}
-		for _, page := range []workspace{workspaceStage, workspaceSources, workspaceDiagnostics, workspaceSettings, workspaceMixer} {
+		for _, page := range []workspace{workspaceStage, workspaceDiagnostics, workspaceSettings} {
 			p := page
 			button := ui.Button(c.Key("workspace-nav-"+p.title()), a.pageLabel(p)).
 				Height(a.controlHeight()).Padding(0, spaceSm)
@@ -213,6 +213,13 @@ func (a *appState) workspaceNavigation(c *ui.Context, width float32) {
 		}
 		ui.Box(c).Grow(1)
 	})
+}
+
+func (a *appState) topWorkspacePage() workspace {
+	if a.currentWorkspacePage() == workspaceSources {
+		return workspaceStage
+	}
+	return a.currentWorkspacePage()
 }
 
 func (a *appState) currentWorkspacePage() workspace {
@@ -234,6 +241,16 @@ func (a *appState) navigateWorkspace(page workspace) {
 	a.drawerOpen = false
 	if page == workspaceSources {
 		a.showSourcesPanel()
+		return
+	}
+	// Old menu, shortcut and saved-workspace routes now land on the stage
+	// console, where source and mixer controls remain available.
+	if page == workspaceMixer {
+		a.workspace = workspaceStage
+		a.dockUp = true
+		a.dockHidden[dockMixer] = false
+		a.dockTab = 1
+		a.invalidate()
 		return
 	}
 	a.workspace = page
@@ -323,7 +340,7 @@ func (a *appState) sourceDot(it *item) ui.Color {
 // a row inside the scene column and a card on the Sources page — but the state
 // mark, the name and the second line are the same code in both, so the two
 // views cannot drift apart.
-func (a *appState) sourceEntry(c *ui.Context, it *item, index int, compact bool) {
+func (a *appState) sourceEntry(c *ui.Context, it *item, index int, compact bool, placement ...map[*item]bool) {
 	active := a.selected == itemKey(it)
 	row := ui.Row(c).WidthPercent(100).Gap(spaceXs).AlignItems(ui.Center)
 	if compact {
@@ -353,7 +370,7 @@ func (a *appState) sourceEntry(c *ui.Context, it *item, index int, compact bool)
 			ui.Text(c, itoa(index+1)).FontSize(textMicro).TextColor(colorDim).
 				Width(16).FontFeatures("tnum")
 		}
-		ui.Column(c).Grow(1).Gap(0).Children(func() {
+		ui.Column(c).Grow(1).MinWidth(0).Gap(0).Children(func() {
 			ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
 				ui.Box(c).Width(5).Height(5).Radius(2.5).Background(a.sourceDot(it))
 				ui.Text(c, sourceDisplayName(it)).FontSize(nameSize).FontWeight(nameWeight).
@@ -362,15 +379,19 @@ func (a *appState) sourceEntry(c *ui.Context, it *item, index int, compact bool)
 					a.sourceMarks(c, it)
 				}
 			})
-			facts := ui.Text(c, a.sourceSub(it)).FontSize(subSize).FontWeight(400).
+			factsText := a.sourceSub(it)
+			if compact {
+				factsText = a.sourceRowStatus(it, placement)
+				c.Key("source-state-" + string(itemKey(it)))
+			}
+			facts := ui.Text(c, factsText).FontSize(subSize).FontWeight(400).
 				TextColor(colorDim).SingleLine()
 			if compact {
-				facts = facts.PaddingStart(13)
+				facts.PaddingStart(13).Tooltip(factsText)
 			}
 		})
 		if compact {
-			a.sourceRenameButton(c, it)
-			a.sourceEye(c, it, index)
+			a.sourceCompactActions(c, it, index)
 			return
 		}
 		a.sourceActions(c, it, index)
@@ -417,6 +438,27 @@ func (a *appState) sourceEntry(c *ui.Context, it *item, index int, compact bool)
 	}
 }
 
+func (a *appState) sourceRowStatus(it *item, placement []map[*item]bool) string {
+	if it.openErr != nil || it.player == nil || !it.player.Ready() || it.player.Buffering() {
+		return a.sourceSub(it)
+	}
+	status := a.tr("Picture hidden", "画面已隐藏")
+	if it.shown {
+		switch {
+		case len(placement) > 0 && !placement[0][it]:
+			status = a.tr("Outside this layout", "当前布局未显示")
+		case a.firstShown() == it && (a.layout == layoutFocus || a.layout == layoutPip || a.layout == layoutHero):
+			status = a.tr("Primary picture", "主画面")
+		default:
+			status = a.tr("Picture shown", "画面已显示")
+		}
+	}
+	if it.player.Playing() {
+		return status + a.tr(" · Playing", " · 播放中")
+	}
+	return status + a.tr(" · Paused", " · 已暂停")
+}
+
 // sourceMarks says, in a card, what the source contributes to the scene.
 func (a *appState) sourceMarks(c *ui.Context, it *item) {
 	if it.openErr != nil {
@@ -431,15 +473,35 @@ func (a *appState) sourceMarks(c *ui.Context, it *item) {
 	}
 }
 
-// sourceEye is the compact density's one control. It is a real switch now: the
-// eye that is on takes the picture off the stage without closing the player,
-// and the eye that is off puts it back.
-func (a *appState) sourceEye(c *ui.Context, it *item, index int) {
-	a.quietIconButton(c, "sc-eye-"+string(itemKey(it)), a.eyeIcon(it), a.eyeTip(it),
-		a.eyeTint(it), func() {
+func (a *appState) sourceCompactActions(c *ui.Context, it *item, index int) {
+	key := string(itemKey(it))
+	if it.player != nil {
+		kind, icon, label := commandSourcePlay, lucide.Play(), a.tr("Play this source", "播放这一路")
+		if it.player.Playing() {
+			kind, icon, label = commandSourcePause, lucide.Pause(), a.tr("Pause this source", "暂停这一路")
+		}
+		if a.sourceInExplicitGroup(it) {
+			ui.Icon(c, icon).Size(16, 16).TextColor(colorDim).
+				Tooltip(a.tr("Use the sync group transport", "请使用同步组传输控制"))
+		} else {
+			a.quietIconButton(c, "source-play-"+key, icon, label, colorTextDim, func() {
+				a.runCommand(command{Kind: kind, Source: itemKey(it)})
+			})
+		}
+	}
+	if it.shown {
+		a.quietIconButton(c, "source-primary-"+key, lucide.Crosshair(),
+			a.tr("Make this the primary picture", "设为主画面"), colorTextDim, func() {
+				a.runCommand(command{Kind: commandPrimary, Source: itemKey(it)})
+			})
+	}
+	a.sourceRenameButton(c, it)
+	if it.video != "" {
+		a.quietIconButton(c, "source-visible-"+key, a.eyeIcon(it), a.eyeTip(it), a.eyeTint(it), func() {
 			a.selected = itemKey(it)
 			a.toggleVideo(index)
 		})
+	}
 }
 
 // sourceRenameButton is the pencil each source row carries, so a person can give
@@ -632,7 +694,12 @@ func (a *appState) selectScene(id core.SceneID) {
 		a.invalidate()
 		return
 	}
-	a.scene = id
+	if _, err := a.session.SetOutputScene(a.output, id); err != nil {
+		a.lastErr = safeOpenError(err)
+		a.invalidate()
+		return
+	}
+	a.activateSceneLayout(id)
 	a.apply()
 	a.invalidate()
 	a.saveSession()
@@ -640,19 +707,36 @@ func (a *appState) selectScene(id core.SceneID) {
 
 // removeScene drops a scene and stays on a scene that exists.
 func (a *appState) removeScene(id core.SceneID) {
+	if id == a.scene {
+		scenes := a.session.Scenes()
+		var next core.SceneID
+		for _, scene := range scenes {
+			if scene.ID != id {
+				next = scene.ID
+				break
+			}
+		}
+		if next == "" {
+			a.lastErr = safeOpenError(core.ErrInvalid)
+			a.invalidate()
+			return
+		}
+		if _, err := a.session.SetOutputScene(a.output, next); err != nil {
+			a.lastErr = safeOpenError(err)
+			a.invalidate()
+			return
+		}
+		a.activateSceneLayout(next)
+	}
 	if err := a.session.RemoveScene(id); err != nil {
 		a.lastErr = safeOpenError(err)
 		a.invalidate()
 		return
 	}
 	delete(a.edits, id)
+	delete(a.sceneLayouts, id)
 	a.forgetPendingStageEdits(id)
 	delete(a.pendingBindings, id)
-	if a.scene == id {
-		if scenes := a.session.Scenes(); len(scenes) > 0 {
-			a.scene = scenes[0].ID
-		}
-	}
 	a.pruneStageEdits()
 	a.apply()
 	a.invalidate()
@@ -747,7 +831,7 @@ func (a *appState) preview(c *ui.Context, width, height float32) {
 	// be measured against the whole window or it is drawn under the dock.
 	room := height
 	if a.editingShell {
-		room = height - a.statusBarHeight() - 44 - 12
+		room = height - a.barHeight() - a.statusBarHeight() - 44 - 12
 		if a.dockUp {
 			room -= a.dockHeight
 		}
@@ -1163,35 +1247,67 @@ func (a *appState) mixerPanel(c *ui.Context, height float32) {
 
 // mixerChannel is one strip in the mixer: name, mute, level.
 func (a *appState) mixerChannel(c *ui.Context, it *item) {
-	row := a.rowSurface(c).Height(40).Padding(0, spaceSm).Gap(spaceXs).
-		AlignItems(ui.Center)
-	row.Children(func() {
-		ui.Box(c).Width(6).Height(6).Radius(3).Background(colorSound)
-		ui.Column(c).Grow(1).MinWidth(0).Children(func() {
-			ui.Text(c, sourceDisplayName(it)).FontSize(textSmall).FontWeight(400).
-				TextColor(colorText).SingleLine()
-			ui.Text(c, a.audioRouteLabel(it)).FontSize(textMicro).TextColor(colorTextDim).
-				SingleLine().Tooltip(a.localizedMixerLine(it))
+	ui.Column(c).WidthPercent(100).Padding(spaceXs, spaceSm).Radius(radiusMd).
+		Gap(spaceXs).Background(colorRow).Border(1, colorRowEdge).Children(func() {
+		ui.Row(c).WidthPercent(100).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
+			ui.Box(c).Width(6).Height(6).Radius(3).Background(colorSound)
+			ui.Column(c).Grow(1).MinWidth(0).Children(func() {
+				ui.Text(c, sourceDisplayName(it)).FontSize(textSmall).FontWeight(400).
+					TextColor(colorText).SingleLine()
+				ui.Text(c, a.mixerChannelRouteLabel(it)).FontSize(textMicro).TextColor(colorTextDim).
+					SingleLine().Tooltip(a.localizedMixerLine(it))
+			})
+			if it.audio == "" {
+				return
+			}
+			muted := a.sourceMuted(it)
+			icon := lucide.Volume2()
+			tint := colorTextDim
+			if muted {
+				icon = lucide.VolumeX()
+				tint = colorDim
+			}
+			a.quietIconButton(c, "mix-mute-"+string(it.source.ID), icon,
+				a.sourceMuteTooltip(it), tint, func() {
+					a.runCommand(command{Kind: commandMute, Source: it.source.ID})
+				})
+			soloTint := colorTextDim
+			if a.solo == it.source.ID {
+				soloTint = colorAccent
+			}
+			a.quietIconButton(c, "mix-solo-"+string(it.source.ID), lucide.Headphones(),
+				a.tr("solo this routed source temporarily", "临时独听已路由的这一路"),
+				soloTint, func() { a.runCommand(command{Kind: commandSolo, Source: it.source.ID}) })
+			a.quietIconButton(c, "mix-route-"+string(it.source.ID), lucide.ListMusic(),
+				a.tr("route only this source in the scene", "将场景音频路由设为仅此路"),
+				colorTextDim, func() { a.runCommand(command{Kind: commandHear, Source: it.source.ID}) })
 		})
 		if it.audio == "" {
 			return
 		}
-		muted := a.sourceMuted(it)
-		icon := lucide.Volume2()
-		tint := colorTextDim
-		if muted {
-			icon = lucide.VolumeX()
-			tint = colorDim
-		}
-		a.quietIconButton(c, "mix-mute-"+string(it.source.ID), icon,
-			a.sourceMuteTooltip(it), tint, func() {
-				a.runCommand(command{Kind: commandMute, Source: it.source.ID})
-			})
-		if a.volumeSlider(c, "mix-vol-"+string(it.source.ID), &it.volume, 84) {
-			a.runCommand(command{Kind: commandVolume, Source: it.source.ID, Volume: it.volume})
-		}
-		a.numericReadout(c, fmt.Sprintf("%.0f%%", it.volume*100), 42)
+		ui.Row(c).WidthPercent(100).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
+			ui.Box(c).Grow(1)
+			if a.volumeSlider(c, "mix-vol-"+string(it.source.ID), &it.volume, 118) {
+				a.runCommand(command{Kind: commandVolume, Source: it.source.ID, Volume: it.volume})
+			}
+			a.numericReadout(c, fmt.Sprintf("%.0f%%", it.volume*100), 42)
+		})
 	})
+}
+
+func (a *appState) mixerChannelRouteLabel(it *item) string {
+	label := a.audioRouteLabel(it)
+	if solo := a.mixerChannelSoloLabel(it); solo != "" {
+		label += " · " + solo
+	}
+	return label
+}
+
+func (a *appState) mixerChannelSoloLabel(it *item) string {
+	if it != nil && a.solo == it.source.ID {
+		return a.tr("Solo active", "独听中")
+	}
+	return ""
 }
 
 // mixerStrip is the narrow window's mixer: a bottom bar that can open into a few
@@ -1201,7 +1317,7 @@ func (a *appState) mixerStrip(c *ui.Context) {
 		ui.Box(c).WidthPercent(100).Height(1).Background(colorLine)
 		ui.Row(c).WidthPercent(100).Height(mixerStripHi).Padding(0, spaceMd).Gap(spaceSm).
 			AlignItems(ui.Center).Children(func() {
-			ui.Text(c, a.tr("Mixer", "混音器")).FontSize(textMicro).TextColor(colorDim)
+			ui.Text(c, a.tr("Mixer", "混音")).FontSize(textMicro).TextColor(colorDim)
 			mute := a.tr("Mute all", "全部静音")
 			if a.masterMute {
 				mute = a.tr("Unmute all", "取消全部静音")
@@ -1290,6 +1406,10 @@ func (a *appState) statusBar(c *ui.Context, width float32) {
 				a.runCommand(command{Kind: commandCancelImport})
 			}
 		}
+		if a.startupRestoreCancel != nil && ui.Button(c.Key("restore-cancel"), a.tr("Cancel recovery", "取消恢复")).Height(18).
+			Padding(0, spaceXs).FontSize(textMicro).Clicked() {
+			a.runCommand(command{Kind: commandCancelRestore})
+		}
 	})
 }
 
@@ -1315,7 +1435,8 @@ func (a *appState) errorReport(c *ui.Context, width, height float32) {
 					a.navigateWorkspace(workspaceDiagnostics)
 					a.errorOpen = false
 				})
-				if a.importRetryTarget() != "" {
+				if a.lastErr != nil && a.importFailureErr != nil &&
+					a.lastErr.Error() == a.importFailureErr.Error() && a.importRetryTarget() != "" {
 					a.secondaryButton(c, "err-retry", a.tr("Retry", "重试"), 0, true, func() {
 						a.retryImport()
 						a.errorOpen = false
@@ -1333,18 +1454,40 @@ func (a *appState) errorReport(c *ui.Context, width, height float32) {
 // errorShort is the sentence a person reads first: what failed, in one line,
 // without the URL and without the Go error text.
 func (a *appState) errorShort() string {
+	if a.lastErr != nil && a.importFailureErr != nil && a.importFailureURI != "" && a.lastErr.Error() == a.importFailureErr.Error() {
+		return a.importFailureCause(a.importFailureErr)
+	}
 	if a.lastErr == nil {
 		return ""
 	}
 	msg := a.tr("The last import did not finish.", "上一次导入没有完成。")
 	if a.lastCommand.Command.Kind == commandAdd && a.lastCommand.Err != nil {
-		if uri := strings.TrimSpace(a.lastCommand.Command.URI); uri != "" {
-			msg = a.tr("This address did not load: ", "这个地址没有加载成功：") + stripSecrets(uri)
-		}
+		msg = a.importFailureCause(a.lastCommand.Err)
 	} else {
 		msg = redactSecrets(a.lastErr.Error())
 	}
 	return msg
+}
+
+// importFailureCause gives the report a short, localized cause. The complete
+// redacted error remains visible below it for diagnosis.
+func (a *appState) importFailureCause(err error) string {
+	if err == nil {
+		return a.tr("The source could not be opened.", "无法打开此来源。")
+	}
+	text := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(text, "404 not found"), strings.Contains(text, "not found"), strings.Contains(text, "no such file"):
+		return a.tr("The file or address was not found.", "找不到此文件或地址。")
+	case strings.Contains(text, "unsupported"), strings.Contains(text, "not supported"):
+		return a.tr("This media format is not supported.", "不支持此媒体格式。")
+	case strings.Contains(text, "timeout"), strings.Contains(text, "connection"), strings.Contains(text, "network"):
+		return a.tr("The source could not be reached.", "无法连接到此来源。")
+	case strings.Contains(text, "invalid"), strings.Contains(text, "malformed"):
+		return a.tr("The address or media is invalid.", "地址或媒体无效。")
+	default:
+		return a.tr("The source could not be opened.", "无法打开此来源。")
+	}
 }
 
 // pageMenuPanel is the page list and the way out of the window, in one place.
@@ -1354,7 +1497,7 @@ func (a *appState) pageMenuPanel(c *ui.Context, width float32) {
 	ui.Column(c).Absolute().Top(a.barHeight()+4).Right(12).Width(220).Padding(4).Gap(2).
 		Radius(radiusCard).Background(colorPanel2).Border(1, colorLineSoft).ZIndex(20).
 		Shadow(0, 8, 24, 0, shadowFloat).Children(func() {
-		for _, page := range []workspace{workspaceStage, workspaceSources, workspaceDiagnostics, workspaceSettings, workspaceMixer} {
+		for _, page := range []workspace{workspaceStage, workspaceDiagnostics, workspaceSettings} {
 			p := page
 			button := ui.Button(c.Key("menu-"+itoa(int(p))), a.pageLabel(p)).Height(a.controlHeight()).Padding(0, spaceSm)
 			if a.workspacePageActive(p) {

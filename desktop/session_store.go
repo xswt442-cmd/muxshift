@@ -69,6 +69,12 @@ type storedScene struct {
 	Name  string        `json:"name,omitempty"`
 	Video []string      `json:"video,omitempty"`
 	Audio []storedAudio `json:"audio,omitempty"`
+	storedSceneLayout
+}
+
+type storedSceneLayout struct {
+	Layout      string   `json:"layout,omitempty"`
+	LayoutOrder []string `json:"layoutOrder,omitempty"`
 }
 
 // storedAudio is one audio source's level in a scene.
@@ -103,7 +109,8 @@ func sessionStorePath(settingsPath string) string {
 // translated back to the source that owns them, because a track id means
 // nothing after a restart while a source id does.
 func (a *appState) captureSessionStore() storedSession {
-	snap := storedSession{ActiveScene: string(a.scene), Layout: a.layout.String()}
+	activeLayout := a.captureSceneLayout()
+	snap := storedSession{ActiveScene: string(a.scene), Layout: activeLayout.Layout, LayoutOrder: activeLayout.LayoutOrder}
 	owner := make(map[core.TrackID]string, len(a.items)*2)
 	trackRefs := make(map[core.TrackID]storedTrackRef, len(a.items)*2)
 	for _, it := range a.items {
@@ -120,16 +127,6 @@ func (a *appState) captureSessionStore() storedSession {
 		if it.audio != "" {
 			owner[it.audio] = it.persistentID
 			trackRefs[it.audio] = storedTrackRef{Source: it.persistentID, Kind: "audio"}
-		}
-	}
-	for _, id := range a.layoutTaken {
-		if it := a.itemOf(id); it != nil && it.persistentID != "" {
-			snap.LayoutOrder = append(snap.LayoutOrder, it.persistentID)
-		}
-	}
-	for _, id := range a.pendingLayoutOrder {
-		if !containsString(snap.LayoutOrder, id) {
-			snap.LayoutOrder = append(snap.LayoutOrder, id)
 		}
 	}
 	for _, it := range a.items {
@@ -149,7 +146,14 @@ func (a *appState) captureSessionStore() storedSession {
 		})
 	}
 	for _, scene := range a.session.Scenes() {
-		stored := storedScene{ID: string(scene.ID), Name: scene.Name}
+		layout := a.sceneLayouts[scene.ID]
+		if scene.ID == a.scene {
+			layout = activeLayout
+		}
+		if layout.Layout == "" {
+			layout.Layout = layoutFocus.String()
+		}
+		stored := storedScene{ID: string(scene.ID), Name: scene.Name, storedSceneLayout: layout}
 		videoSources := make(map[string]bool, len(scene.Video))
 		audioSources := make(map[string]bool, len(scene.Audio))
 		for _, track := range scene.Video {
@@ -273,6 +277,45 @@ func (a *appState) captureSessionStore() storedSession {
 	}
 	snap.Shifts = append(snap.Shifts, a.pendingShifts...)
 	return snap
+}
+
+func (a *appState) captureSceneLayout() storedSceneLayout {
+	layout := storedSceneLayout{Layout: a.layout.String()}
+	for _, id := range a.pendingLayoutOrder {
+		if a.itemByPersistentID(id) != nil && !containsString(layout.LayoutOrder, id) {
+			layout.LayoutOrder = append(layout.LayoutOrder, id)
+		}
+	}
+	for _, id := range a.layoutTaken {
+		if it := a.itemOf(id); it != nil {
+			if it.persistentID == "" {
+				it.persistentID = a.nextPersistentSourceID()
+			}
+			if !containsString(layout.LayoutOrder, it.persistentID) {
+				layout.LayoutOrder = append(layout.LayoutOrder, it.persistentID)
+			}
+		}
+	}
+	return layout
+}
+
+func (a *appState) activateSceneLayout(id core.SceneID) {
+	if a.sceneLayouts == nil {
+		a.sceneLayouts = make(map[core.SceneID]storedSceneLayout)
+	}
+	if a.scene != "" && a.scene != id {
+		a.sceneLayouts[a.scene] = a.captureSceneLayout()
+	}
+	a.scene = id
+	layout := a.sceneLayouts[id]
+	a.layout = parseLayout(layout.Layout)
+	a.pendingLayoutOrder = append([]string(nil), layout.LayoutOrder...)
+	a.layoutTaken = nil
+	for _, saved := range layout.LayoutOrder {
+		if it := a.itemByPersistentID(saved); it != nil && it.source.ID != "" {
+			a.layoutTaken = append(a.layoutTaken, it.source.ID)
+		}
+	}
 }
 
 func cloneStoredStageEdits(edits []storedStageEdits) []storedStageEdits {
@@ -474,6 +517,28 @@ func (a *appState) nextPersistentSourceID() string {
 			return id
 		}
 	}
+}
+
+func (a *appState) projectLayoutOrder() {
+	rank := make(map[string]int, len(a.pendingLayoutOrder))
+	for i, id := range a.pendingLayoutOrder {
+		rank[id] = i
+	}
+	sort.SliceStable(a.layoutTaken, func(i, j int) bool {
+		left, right := a.itemOf(a.layoutTaken[i]), a.itemOf(a.layoutTaken[j])
+		if left == nil || right == nil {
+			return right == nil && left != nil
+		}
+		li, lok := rank[left.persistentID]
+		ri, rok := rank[right.persistentID]
+		if lok != rok {
+			return lok
+		}
+		if lok {
+			return li < ri
+		}
+		return false
+	})
 }
 
 // saveSession writes the current arrangement. A missing path (nowhere to write)
@@ -790,7 +855,7 @@ func newAppStateFromStore(loaded settings, snap storedSession) (*appState, error
 	session := core.NewSession("desktop")
 	app := newAppShell(session, "", "", loaded)
 	app.pendingBindings = make(map[core.SceneID]map[string]pendingSceneBinding)
-	app.layout = parseLayout(snap.Layout)
+	app.sceneLayouts = make(map[core.SceneID]storedSceneLayout)
 	app.pendingStageEdits = append([]storedStageEdits(nil), snap.StageEdits...)
 	app.pendingSyncGroups = append([]storedSyncGroup(nil), snap.SyncGroups...)
 	app.pendingShifts = append([]storedShift(nil), snap.Shifts...)
@@ -843,6 +908,12 @@ func newAppStateFromStore(loaded settings, snap storedSession) (*appState, error
 		if stored.ID != "" {
 			sceneIDs[stored.ID] = scene.ID
 		}
+		layout := stored.storedSceneLayout
+		if layout.Layout == "" {
+			layout = storedSceneLayout{Layout: snap.Layout, LayoutOrder: snap.LayoutOrder}
+		}
+		layout.LayoutOrder = append([]string(nil), layout.LayoutOrder...)
+		app.sceneLayouts[scene.ID] = layout
 		video := make([]core.TrackID, 0, len(stored.Video))
 		for index, source := range stored.Video {
 			if it := byID[source]; it != nil && it.video != "" {
@@ -874,23 +945,17 @@ func newAppStateFromStore(loaded settings, snap storedSession) (*appState, error
 	if restoreErr != nil {
 		app.lastErr = safeOpenError(restoreErr)
 	}
-	app.scene = sceneIDs[snap.ActiveScene]
-	if app.scene == "" {
-		app.scene = first
+	active := sceneIDs[snap.ActiveScene]
+	if active == "" {
+		active = first
 	}
+	app.activateSceneLayout(active)
 	output, err := session.AddOutput(core.OutputDesktopWindow, app.scene)
 	if err != nil {
 		return nil, err
 	}
 	app.output = output.ID
 	app.persistentSceneIDs = sceneIDs
-	for _, id := range snap.LayoutOrder {
-		if it := app.itemByPersistentID(id); it != nil && it.source.ID != "" {
-			app.layoutTaken = append(app.layoutTaken, it.source.ID)
-		} else {
-			app.pendingLayoutOrder = append(app.pendingLayoutOrder, id)
-		}
-	}
 	app.restorePersistentMetadata(sceneIDs)
 	app.apply()
 	return app, nil
@@ -1023,7 +1088,7 @@ func (a *appState) restorePersistentMetadata(sceneIDs map[string]core.SceneID) {
 			remaining = append(remaining, stored)
 			continue
 		}
-		group, err := a.session.AddSyncGroup(reference, tracks...)
+		group, err := a.restoreSyncGroup(reference, tracks)
 		if err != nil {
 			a.lastErr = safeOpenError(err)
 			remaining = append(remaining, stored)
@@ -1034,6 +1099,23 @@ func (a *appState) restorePersistentMetadata(sceneIDs map[string]core.SceneID) {
 		}
 	}
 	a.pendingSyncGroups = remaining
+}
+
+func (a *appState) restoreSyncGroup(reference core.TrackID, tracks []core.TrackID) (core.SyncGroup, error) {
+	member := make(map[core.TrackID]bool, len(tracks))
+	for _, id := range tracks {
+		member[id] = true
+	}
+	for _, existing := range a.session.SyncGroups() {
+		subset := len(existing.Tracks) > 0
+		for _, id := range existing.Tracks {
+			subset = subset && member[id]
+		}
+		if subset {
+			return a.session.UpdateSyncGroup(existing.ID, reference, tracks...)
+		}
+	}
+	return a.session.AddSyncGroup(reference, tracks...)
 }
 
 func (a *appState) trackForStoredRef(ref storedTrackRef) core.TrackID {
@@ -1081,6 +1163,17 @@ func (a *appState) setPendingAudio(scene core.SceneID, source string, audio stor
 	bySource[source] = binding
 }
 
+func (a *appState) clearPendingSceneAudio(scene core.SceneID) {
+	for source, binding := range a.pendingBindings[scene] {
+		binding.audio = nil
+		if !binding.video {
+			delete(a.pendingBindings[scene], source)
+		} else {
+			a.pendingBindings[scene][source] = binding
+		}
+	}
+}
+
 func (a *appState) forgetPendingSource(source string) {
 	if source == "" {
 		return
@@ -1089,6 +1182,10 @@ func (a *appState) forgetPendingSource(source string) {
 		delete(bindings, source)
 	}
 	a.pendingLayoutOrder = removeString(a.pendingLayoutOrder, source)
+	for id, layout := range a.sceneLayouts {
+		layout.LayoutOrder = removeString(layout.LayoutOrder, source)
+		a.sceneLayouts[id] = layout
+	}
 	for i := range a.pendingStageEdits {
 		edit := &a.pendingStageEdits[i]
 		boxes := edit.Boxes[:0]

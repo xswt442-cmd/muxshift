@@ -29,22 +29,26 @@ import (
 type commandKind string
 
 const (
-	commandShow    commandKind = "show"
-	commandHear    commandKind = "hear"
-	commandAllow   commandKind = "allow-audio"
-	commandVolume  commandKind = "volume"
-	commandNudge   commandKind = "nudge"
-	commandPause   commandKind = "pause-all"
-	commandPlay    commandKind = "play-all"
-	commandReload  commandKind = "reload"
-	commandDVRInfo commandKind = "dvr-info"
-	commandAdd     commandKind = "add-source"
-	commandRemove  commandKind = "remove-source"
-	commandRetry   commandKind = "retry"
+	commandShow        commandKind = "show"
+	commandHear        commandKind = "hear"
+	commandAllow       commandKind = "allow-audio"
+	commandVolume      commandKind = "volume"
+	commandNudge       commandKind = "nudge"
+	commandPause       commandKind = "pause-all"
+	commandPlay        commandKind = "play-all"
+	commandSourcePause commandKind = "pause-source"
+	commandSourcePlay  commandKind = "play-source"
+	commandPrimary     commandKind = "primary-source"
+	commandReload      commandKind = "reload"
+	commandDVRInfo     commandKind = "dvr-info"
+	commandAdd         commandKind = "add-source"
+	commandRemove      commandKind = "remove-source"
+	commandRetry       commandKind = "retry"
 	// commandCancelImport stops a read that has not landed yet. It is a real
 	// command, not a disabled placeholder: the context it cancels is the one
 	// the probe is waiting on.
-	commandCancelImport commandKind = "cancel-import"
+	commandCancelImport  commandKind = "cancel-import"
+	commandCancelRestore commandKind = "cancel-restore"
 	// commandMute is a source's own mute, commandSolo the listening overlay that
 	// keeps one source audible, and commandMasterMute the overlay that silences
 	// everything. None of them edits the scene's routing.
@@ -103,8 +107,8 @@ func (r commandResult) String() string {
 // because a removal renumbers the list under the window's feet.
 func (a *appState) itemBySource(id core.SourceID) (*item, int, error) {
 	for index, it := range a.items {
-		if itemKey(it) == id || it.source.ID == id || (it.persistentID != "" &&
-			(core.SourceID(it.persistentID) == id || core.SourceID("saved:"+it.persistentID) == id)) {
+		if itemKey(it) == id || (it.source.ID != "" && it.source.ID == id) ||
+			(it.persistentID != "" && core.SourceID("saved:"+it.persistentID) == id) {
 			return it, index, nil
 		}
 	}
@@ -165,7 +169,7 @@ func (a *appState) runCommand(cmd command) commandResult {
 		a.reopenPlayer(it)
 		return finish(nil, "asked for a new player; the old one stays until the new one has a picture")
 
-	case commandShow, commandHear, commandAllow, commandVolume, commandNudge, commandMute, commandSolo:
+	case commandShow, commandHear, commandAllow, commandVolume, commandNudge, commandMute, commandSolo, commandSourcePause, commandSourcePlay, commandPrimary:
 		it, index, err := a.itemBySource(cmd.Source)
 		if err != nil {
 			return finish(err, "")
@@ -174,6 +178,24 @@ func (a *appState) runCommand(cmd command) commandResult {
 		switch cmd.Kind {
 		case commandShow:
 			err = a.showVideo(index)
+		case commandSourcePause, commandSourcePlay:
+			if a.sourceInExplicitGroup(it) {
+				return finish(errors.New("this source belongs to a sync group; use the group transport"), "")
+			}
+			if it.player == nil {
+				return finish(errors.New("this source has no player"), "")
+			}
+			if cmd.Kind == commandSourcePause {
+				it.player.Pause()
+			} else {
+				it.player.Play()
+			}
+			err = it.player.Err()
+		case commandPrimary:
+			if !it.shown {
+				return finish(errors.New("show this source before making it primary"), "")
+			}
+			a.setPrimary(it.source.ID)
 		case commandHear:
 			err = a.hearAudio(index, it.volume)
 		case commandAllow:
@@ -247,6 +269,19 @@ func (a *appState) runCommand(cmd command) commandResult {
 		a.lastErr = nil
 		return result
 
+	case commandCancelRestore:
+		if a.startupRestoreCancel == nil {
+			return finish(errors.New("no saved-source restore is running"), "")
+		}
+		a.startupRestoreCancel()
+		a.startupRestoreCancel = nil
+		for _, it := range a.items {
+			it.restoring = false
+		}
+		result.Message = "cancelled saved-source recovery; saved bindings are unchanged"
+		a.invalidate()
+		return finish(nil, result.Message)
+
 	case commandRemove:
 		it, index, err := a.itemBySource(cmd.Source)
 		if err != nil {
@@ -289,6 +324,7 @@ func (a *appState) runCommand(cmd command) commandResult {
 		if it.openErr != nil {
 			return finish(it.openErr, "the retry opened no player")
 		}
+		go a.watchFirstOpen(it, it.generation)
 		return finish(nil, "opened a new player for "+a.name(it))
 
 	default:

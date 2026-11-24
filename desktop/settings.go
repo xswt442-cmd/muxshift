@@ -653,10 +653,10 @@ func (a *appState) settingsPage(c *ui.Context) {
 					})
 					a.secondaryButton(c, "settings-cancel", a.tr("Cancel", "取消"), 100, dirty, func() {
 						a.cancelSettingsDraft()
-					})
-					a.ghostButton(c, "settings-reset", a.tr("Reset draft to defaults", "草稿恢复默认"), 180, func() {
+					}).Border(1, colorLineSoft)
+					a.secondaryButton(c, "settings-reset", a.tr("Reset draft to defaults", "草稿恢复默认"), 180, true, func() {
 						a.resetSettingsDraft()
-					})
+					}).Border(1, colorLineSoft)
 					if dirty {
 						ui.Text(c, a.tr("unsaved changes", "有未应用的更改")).FontSize(textMicro).TextColor(colorWarn)
 					}
@@ -699,7 +699,7 @@ func (a *appState) settingsForm(c *ui.Context) {
 		a.shortcutLine(c, "Ctrl+S", a.tr("show or hide the selected source", "显示/隐藏选中来源"))
 		a.shortcutLine(c, "Ctrl+H", a.tr("hear the selected source", "试听选中来源"))
 		a.shortcutLine(c, "Ctrl+R", a.tr("retry the selected player", "重试选中来源的播放器"))
-		a.shortcutLine(c, "Ctrl+1 … 5", a.tr("stage, sources, diagnostics, settings, mixer", "舞台、来源、诊断、设置、混音"))
+		a.shortcutLine(c, "Ctrl+1 … 3", a.tr("stage, diagnostics, settings", "舞台、诊断、设置"))
 		a.shortcutLine(c, "F11 / Esc", a.tr("window full screen, back to editing", "窗口全屏、返回编辑"))
 	case "Playback":
 		a.settingsSlider(c, a.tr("Default volume for new sources", "新来源的默认音量"), &a.settingsDraft.DefaultVolume, 0, 1)

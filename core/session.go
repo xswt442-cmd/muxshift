@@ -124,6 +124,7 @@ const (
 	EventTrackAdded        EventKind = "track.added"
 	EventTrackRemoved      EventKind = "track.removed"
 	EventSyncGroupAdded    EventKind = "syncgroup.added"
+	EventSyncGroupUpdated  EventKind = "syncgroup.updated"
 	EventSyncGroupRemoved  EventKind = "syncgroup.removed"
 	EventSceneAdded        EventKind = "scene.added"
 	EventSceneRemoved      EventKind = "scene.removed"
@@ -132,6 +133,7 @@ const (
 	EventSceneAudioSet     EventKind = "scene.audio-set"
 	EventSceneAudioRemoved EventKind = "scene.audio-removed"
 	EventOutputAdded       EventKind = "output.added"
+	EventOutputSceneSet    EventKind = "output.scene.set"
 	EventOutputRemoved     EventKind = "output.removed"
 )
 
@@ -288,26 +290,9 @@ func (s *Session) AddSyncGroup(reference TrackID, tracks ...TrackID) (SyncGroup,
 	if err := s.requireOpen("add sync group"); err != nil {
 		return SyncGroup{}, err
 	}
-	if len(tracks) == 0 {
-		return SyncGroup{}, fmt.Errorf("add sync group: %w", ErrInvalid)
+	if err := s.validateSyncGroup("", reference, tracks); err != nil {
+		return SyncGroup{}, err
 	}
-	seen := make(map[TrackID]bool, len(tracks))
-	for _, id := range tracks {
-		if seen[id] {
-			return SyncGroup{}, fmt.Errorf("add sync group track %s: %w", id, ErrDuplicateTrack)
-		}
-		seen[id] = true
-		if _, ok := s.track(id); !ok {
-			return SyncGroup{}, fmt.Errorf("add sync group track %s: %w", id, ErrNotFound)
-		}
-		if _, ok := s.groupOf(id); ok {
-			return SyncGroup{}, fmt.Errorf("add sync group track %s: %w", id, ErrSyncConflict)
-		}
-	}
-	if !seen[reference] {
-		return SyncGroup{}, fmt.Errorf("add sync group reference %s: %w", reference, ErrNotMember)
-	}
-
 	s.groupN++
 	group := &SyncGroup{
 		ID:        SyncGroupID(fmt.Sprintf("syncgroup-%d", s.groupN)),
@@ -317,6 +302,47 @@ func (s *Session) AddSyncGroup(reference TrackID, tracks ...TrackID) (SyncGroup,
 	s.groups = append(s.groups, group)
 	s.record(EventSyncGroupAdded, string(group.ID))
 	return *group, nil
+}
+
+// UpdateSyncGroup replaces the reference and members while retaining the group ID.
+func (s *Session) UpdateSyncGroup(id SyncGroupID, reference TrackID, tracks ...TrackID) (SyncGroup, error) {
+	if err := s.requireOpen("update sync group"); err != nil {
+		return SyncGroup{}, err
+	}
+	group, ok := s.group(id)
+	if !ok {
+		return SyncGroup{}, fmt.Errorf("update sync group %s: %w", id, ErrNotFound)
+	}
+	if err := s.validateSyncGroup(id, reference, tracks); err != nil {
+		return SyncGroup{}, err
+	}
+	group.Reference = reference
+	group.Tracks = append([]TrackID(nil), tracks...)
+	s.record(EventSyncGroupUpdated, string(id))
+	return SyncGroup{ID: id, Reference: reference, Tracks: append([]TrackID(nil), tracks...)}, nil
+}
+
+func (s *Session) validateSyncGroup(current SyncGroupID, reference TrackID, tracks []TrackID) error {
+	if len(tracks) == 0 {
+		return fmt.Errorf("sync group: %w", ErrInvalid)
+	}
+	seen := make(map[TrackID]bool, len(tracks))
+	for _, id := range tracks {
+		if seen[id] {
+			return fmt.Errorf("sync group track %s: %w", id, ErrDuplicateTrack)
+		}
+		seen[id] = true
+		if _, ok := s.track(id); !ok {
+			return fmt.Errorf("sync group track %s: %w", id, ErrNotFound)
+		}
+		if group, ok := s.groupOf(id); ok && group.ID != current {
+			return fmt.Errorf("sync group track %s: %w", id, ErrSyncConflict)
+		}
+	}
+	if !seen[reference] {
+		return fmt.Errorf("sync group reference %s: %w", reference, ErrNotMember)
+	}
+	return nil
 }
 
 // RemoveSyncGroup removes a sync group without touching its tracks.
@@ -497,6 +523,23 @@ func (s *Session) RemoveOutput(id OutputID) error {
 	s.outputs = removeByID(s.outputs, func(v *Output) bool { return v.ID == id })
 	s.record(EventOutputRemoved, string(id))
 	return nil
+}
+
+// SetOutputScene changes the scene handed to an existing output.
+func (s *Session) SetOutputScene(id OutputID, scene SceneID) (Output, error) {
+	if err := s.requireOpen("set output scene"); err != nil {
+		return Output{}, err
+	}
+	output, ok := s.output(id)
+	if !ok {
+		return Output{}, fmt.Errorf("set output scene %s: %w", id, ErrNotFound)
+	}
+	if _, ok := s.scene(scene); !ok {
+		return Output{}, fmt.Errorf("set output scene %s: %w", scene, ErrNotFound)
+	}
+	output.Scene = scene
+	s.record(EventOutputSceneSet, string(id))
+	return *output, nil
 }
 
 // Source returns one source.

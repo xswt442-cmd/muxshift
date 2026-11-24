@@ -68,10 +68,8 @@ var workspaceNames = []struct {
 	index workspace
 }{
 	{"stage", workspaceStage},
-	{"sources", workspaceSources},
 	{"diagnostics", workspaceDiagnostics},
 	{"settings", workspaceSettings},
-	{"mixer", workspaceMixer},
 }
 
 // workspaceID is the stored spelling of a page.
@@ -86,6 +84,11 @@ func workspaceID(w workspace) (string, bool) {
 
 // parseWorkspaceID reads a stored page name.
 func parseWorkspaceID(id string) (workspace, bool) {
+	// P10 keeps old workspace snapshots readable while directing the retired
+	// standalone pages to the stage console that owns those controls now.
+	if id == "sources" || id == "mixer" {
+		return workspaceStage, true
+	}
 	for _, name := range workspaceNames {
 		if name.id == id {
 			return name.index, true

@@ -250,6 +250,10 @@ type appState struct {
 	// runCommand, kept so the window and a scenario can read what happened
 	// instead of parsing the status line. See controller.go.
 	lastCommand commandResult
+	// importFailure remains available to the Sources dock even after another
+	// command replaces lastCommand.
+	importFailureURI string
+	importFailureErr error
 
 	// panel is the page the window shows below its native stage in the P13.3
 	// experiment, and webView draws it. They stay nil unless the webview
@@ -465,6 +469,7 @@ type appState struct {
 	pendingShifts        []storedShift
 	persistentSceneIDs   map[string]core.SceneID
 	pendingLayoutOrder   []string
+	sceneLayouts         map[core.SceneID]storedSceneLayout
 	startupSources       []storedSource
 	startupRestoreCancel context.CancelFunc
 
@@ -956,11 +961,13 @@ func (a *appState) startStoredSourceRestores() {
 			probeCancel()
 			a.mainDo(func() {
 				current := a.itemByPersistentID(targetID)
-				if current == nil || a.closed || ctx.Err() != nil {
+				if a.closed || ctx.Err() != nil {
 					return
 				}
-				current.restoring = false
-				if current.source.ID == "" {
+				if current != nil {
+					current.restoring = false
+				}
+				if current != nil && current.source.ID == "" {
 					if openErr := a.installSavedSource(current, plan, err); openErr != nil {
 						current.openErr = safeOpenError(openErr)
 						a.lastErr = current.openErr
@@ -968,10 +975,27 @@ func (a *appState) startStoredSourceRestores() {
 						go a.watchFirstOpen(current, current.generation)
 					}
 				}
+				if !a.hasRestoringSources() {
+					cancel()
+					a.startupRestoreCancel = nil
+				}
 				a.invalidate()
 			})
 		}()
 	}
+	if !a.hasRestoringSources() {
+		cancel()
+		a.startupRestoreCancel = nil
+	}
+}
+
+func (a *appState) hasRestoringSources() bool {
+	for _, it := range a.items {
+		if it.restoring {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *appState) startCommandLineSources(uris []string) {
@@ -1111,15 +1135,14 @@ func (a *appState) installSavedSource(it *item, plan importPlan, inspectErr erro
 				a.updateRecoveredSourceKey(it, oldKey)
 				a.restoreRetryBindings(it)
 				a.restorePersistentMetadata(a.persistentSceneIDs)
-				left := a.pendingLayoutOrder[:0]
 				for _, id := range a.pendingLayoutOrder {
 					if id == it.persistentID {
-						a.layoutTaken = append(a.layoutTaken, it.source.ID)
-					} else {
-						left = append(left, id)
+						if !containsTrackSource(a.layoutTaken, it.source.ID) {
+							a.layoutTaken = append(a.layoutTaken, it.source.ID)
+						}
 					}
 				}
-				a.pendingLayoutOrder = left
+				a.projectLayoutOrder()
 				wakeNetworkPlayer(it.uri, rawPlayer(it.player), a.generationIs(it, it.generation))
 				a.closePendingWhenReady()
 				a.apply()
@@ -1141,7 +1164,13 @@ func (a *appState) restoreRetryBindings(it *item) {
 			scene, err := a.session.Scene(sceneID)
 			if err == nil && !containsTrack(scene.Video, it.video) {
 				tracks := append([]core.TrackID(nil), scene.Video...)
-				index := min(max(binding.videoIndex, 0), len(tracks))
+				index := binding.videoIndex
+				for _, pending := range bindings {
+					if pending.video && pending.videoIndex < binding.videoIndex {
+						index--
+					}
+				}
+				index = min(max(index, 0), len(tracks))
 				tracks = append(tracks, "")
 				copy(tracks[index+1:], tracks[index:])
 				tracks[index] = it.video
@@ -1163,7 +1192,13 @@ func (a *appState) restoreRetryBindings(it *item) {
 						}
 					}
 				}
-				index := min(max(binding.audioIndex, 0), len(ordered))
+				index := binding.audioIndex
+				for _, pending := range bindings {
+					if pending.audio != nil && pending.audioIndex < binding.audioIndex {
+						index--
+					}
+				}
+				index = min(max(index, 0), len(ordered))
 				ordered = append(ordered, storedAudio{})
 				copy(ordered[index+1:], ordered[index:])
 				ordered[index] = *binding.audio
@@ -1301,6 +1336,13 @@ func (a *appState) landImport(token int, uri string, stream hls.Stream, mode imp
 		result.Message = fmt.Sprintf("imported %s as %s; it is selected, Show puts it on the stage", shortURI(uri), it.source.ID)
 	}
 	a.lastCommand = result
+	if err != nil {
+		a.importFailureURI = uri
+		a.importFailureErr = safeOpenError(err)
+	} else {
+		a.importFailureURI = ""
+		a.importFailureErr = nil
+	}
 	a.report(result)
 	a.invalidate()
 }
@@ -1396,6 +1438,10 @@ func (a *appState) abandonImport(it *item, generation int, cause error) {
 			a.saveSession()
 		}
 		err := safeOpenError(cause)
+		if removed {
+			a.importFailureURI = it.uri
+			a.importFailureErr = err
+		}
 		a.lastErr = err
 		result := commandResult{
 			Command: command{Kind: commandAdd, URI: it.uri},
@@ -1507,10 +1553,7 @@ func (a *appState) addScene() {
 		a.invalidate()
 		return
 	}
-	a.scene = scene.ID
-	a.apply()
-	a.invalidate()
-	a.saveSession()
+	a.selectScene(scene.ID)
 }
 
 func (a *appState) apply() {
@@ -1657,6 +1700,7 @@ func (a *appState) hearAudio(index int, volume float64) error {
 	if _, err := a.session.SetSceneAudio(a.scene, it.audio, volume, false); err != nil {
 		return err
 	}
+	a.clearPendingSceneAudio(a.scene)
 	// The scene holds the level now; the source's own copy has to agree, or the
 	// inspector shows one number while the output plays another, and the
 	// remembered preference would save the stale one.

@@ -1045,7 +1045,7 @@ func runKeys(window *mygo.Window, a *appState, dir string) {
 				a.selected = a.items[0].source.ID
 			}
 			a.workspace = workspaceSources
-			log.Printf("keys: selected %q on the Sources page; press Ctrl+S, Ctrl+H, Ctrl+R, Ctrl+1..5", a.selected)
+			log.Printf("keys: selected %q on the Stage console; press Ctrl+S, Ctrl+H, Ctrl+R, Ctrl+1..3", a.selected)
 		})
 		var lastAt time.Time
 		deadline := time.Now().Add(14 * time.Second)
@@ -1468,7 +1468,7 @@ func pagesBody(window *mygo.Window, a *appState, dir string) {
 		window.Invalidate()
 	})
 	check(folded, "the rail folds at the smallest window, which is what this walk needs")
-	logf(scenario, "the rail is folded; the bar's page button is the visible way between pages")
+	logf(scenario, "the rail is folded; the bar's page button exposes Stage, Diagnostics and Settings")
 
 	// The runner uses the visible navigation. Sources opens a dock tab on the
 	// stage, so it does not count as a separate workspace visit here.
@@ -1486,8 +1486,7 @@ func pagesBody(window *mygo.Window, a *appState, dir string) {
 			last = current
 			logf(scenario, "page is now %s", current.title())
 		}
-		returned = current == workspaceStage && seen[workspaceSettings] &&
-			seen[workspaceDiagnostics] && seen[workspaceMixer]
+		returned = current == workspaceStage && seen[workspaceSettings] && seen[workspaceDiagnostics]
 		if returned {
 			break
 		}
@@ -1498,7 +1497,7 @@ func pagesBody(window *mygo.Window, a *appState, dir string) {
 	if len(visited) > 0 {
 		check(visited[0] == workspaceStage, "the walk started on Stage (%s)", visited[0].title())
 	}
-	for _, page := range []workspace{workspaceSettings, workspaceDiagnostics, workspaceMixer} {
+	for _, page := range []workspace{workspaceSettings, workspaceDiagnostics} {
 		check(seen[page], "the page menu reached %s", page.title())
 	}
 	check(returned, "the walk returned to Stage after visiting all three workspaces")

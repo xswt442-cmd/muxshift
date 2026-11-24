@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -356,6 +357,121 @@ func TestSessionSaveOverlappingDebounceTimers(t *testing.T) {
 	}
 }
 
+func TestSessionRestoreProjectsRoutesInSavedOrder(t *testing.T) {
+	app, err := newAppStateFromStore(defaultSettings(), storedSession{
+		Scenes: []storedScene{{ID: "scene", Video: []string{"a", "b", "c"}, Audio: []storedAudio{
+			{Source: "a", Volume: 0.2}, {Source: "b", Volume: 0.4}, {Source: "c", Volume: 0.8, Muted: true},
+		}}},
+		Sources: []storedSource{{ID: "a", NeedsReselect: true}, {ID: "b", NeedsReselect: true}, {ID: "c", NeedsReselect: true}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"c", "b", "a"} {
+		it := app.itemByPersistentID(id)
+		if it == nil {
+			t.Fatalf("missing source %s", id)
+		}
+		it.uri = "https://example.test/" + id + ".mp4"
+		if err := app.addDirect(it); err != nil {
+			t.Fatal(err)
+		}
+		app.restoreRetryBindings(it)
+	}
+	got := app.captureSessionStore().Scenes[0]
+	if !slices.Equal(got.Video, []string{"a", "b", "c"}) || len(got.Audio) != 3 ||
+		got.Audio[0].Source != "a" || got.Audio[1].Source != "b" || got.Audio[2] != (storedAudio{Source: "c", Volume: 0.8, Muted: true}) {
+		t.Fatalf("unexpected routes: %+v", got)
+	}
+}
+
+func TestRestoredSyncGroupKeepsSurvivingGroupIdentity(t *testing.T) {
+	app, _, _ := newStoreFixture(t)
+	original := app.items[0]
+	replacement := &item{uri: "https://example.test/replacement.mp4"}
+	if err := app.addDirect(replacement); err != nil {
+		t.Fatal(err)
+	}
+	group, err := app.session.AddSyncGroup(original.audio, original.audio)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := app.restoreSyncGroup(replacement.audio, []core.TrackID{original.audio, replacement.audio})
+	if err != nil || got.ID != group.ID || got.Reference != replacement.audio ||
+		!slices.Equal(got.Tracks, []core.TrackID{original.audio, replacement.audio}) {
+		t.Fatalf("restored group = %+v, err = %v", got, err)
+	}
+}
+
+func TestStageLayoutsMigrateAndSaveIndependently(t *testing.T) {
+	legacy := storedSession{
+		ActiveScene: "one", Layout: "pip", LayoutOrder: []string{"b", "a"},
+		Scenes:  []storedScene{{ID: "one", Name: "One"}, {ID: "two", Name: "Two"}},
+		Sources: []storedSource{{ID: "a", NeedsReselect: true}, {ID: "b", NeedsReselect: true}},
+	}
+	app, err := newAppStateFromStore(defaultSettings(), legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scenes := app.session.Scenes()
+	app.setLayout(layoutGrid)
+	app.selectScene(scenes[1].ID)
+	if app.layout != layoutPip || !slices.Equal(app.pendingLayoutOrder, legacy.LayoutOrder) {
+		t.Fatalf("second stage did not inherit old preset: %s %v", app.layout, app.pendingLayoutOrder)
+	}
+	app.setLayout(layoutSplit)
+	app.selectScene(scenes[0].ID)
+	if app.layout != layoutGrid || app.session.Outputs()[0].Scene != scenes[0].ID {
+		t.Fatalf("first stage did not recover its preset or output: %s %+v", app.layout, app.session.Outputs())
+	}
+	path := filepath.Join(t.TempDir(), "session.json")
+	if err := saveSessionStore(path, app.captureSessionStore()); err != nil {
+		t.Fatal(err)
+	}
+	snap, note := loadSessionStore(path)
+	if note != "" || snap.Scenes[0].Layout != "grid" || snap.Scenes[1].Layout != "split" {
+		t.Fatalf("stage presets did not round trip: %+v (%s)", snap.Scenes, note)
+	}
+	app.removeScene(scenes[0].ID)
+	if len(app.session.Scenes()) != 1 || app.layout != layoutSplit || app.session.Outputs()[0].Scene != scenes[1].ID {
+		t.Fatalf("removing active stage did not move layout and output: %s %+v", app.layout, app.session.Outputs())
+	}
+}
+
+func TestRestoringLegacySourceIDDoesNotAliasRegisteredSource(t *testing.T) {
+	app, _, _ := newStoreFixture(t)
+	app.items[0].persistentID = "source-a"
+	app.items[0].source.ID = "source-1"
+	placeholder := &item{persistentID: "source-1", uri: "", source: core.Source{ID: ""}}
+	app.items = append(app.items, placeholder)
+	got, _, err := app.itemBySource("saved:source-1")
+	if err != nil || got != placeholder {
+		t.Fatalf("namespaced lookup = %p, %v; want placeholder %p", got, err, placeholder)
+	}
+	got, _, err = app.itemBySource("source-1")
+	if err != nil || got != app.items[0] {
+		t.Fatalf("legacy Core lookup = %p, %v; want registered source %p", got, err, app.items[0])
+	}
+}
+
+func TestExclusiveAudioRouteDropsOnlyPendingAudio(t *testing.T) {
+	app, scene, _ := newStoreFixture(t)
+	app.pendingBindings = map[core.SceneID]map[string]pendingSceneBinding{
+		scene: {
+			"late-audio": {audio: &storedAudio{Source: "late-audio"}, audioIndex: 0},
+			"late-both":  {video: true, videoIndex: 1, audio: &storedAudio{Source: "late-both"}, audioIndex: 1},
+		},
+	}
+	app.clearPendingSceneAudio(scene)
+	if _, ok := app.pendingBindings[scene]["late-audio"]; ok {
+		t.Fatal("audio-only pending route survived exclusive routing")
+	}
+	binding := app.pendingBindings[scene]["late-both"]
+	if !binding.video || binding.audio != nil {
+		t.Fatalf("pending video/audio after exclusive route = %+v", binding)
+	}
+}
+
 func TestSessionSaveIgnoresStaleCompletionAndCallback(t *testing.T) {
 	app, _, _ := newStoreFixture(t)
 	app.sessionSaveSeq = 2
@@ -557,16 +673,12 @@ func TestAddressReplacementRetainsBindingsStageAndSyncMetadata(t *testing.T) {
 	app.pruneStageEdits()
 	app.restoreRetryBindings(it)
 	app.restorePersistentMetadata(app.persistentSceneIDs)
-	left := app.pendingLayoutOrder[:0]
 	for _, id := range app.pendingLayoutOrder {
 		if id == it.persistentID {
 			app.layoutTaken = append(app.layoutTaken, it.source.ID)
-		} else {
-			left = append(left, id)
 		}
 	}
-	app.pendingLayoutOrder = left
-	if len(app.pendingLayoutOrder) != 0 || len(app.layoutTaken) != 1 || app.layoutTaken[0] != it.source.ID {
+	if len(app.pendingLayoutOrder) != 1 || app.pendingLayoutOrder[0] != it.persistentID || len(app.layoutTaken) != 1 || app.layoutTaken[0] != it.source.ID {
 		t.Fatalf("layout order after replacement = pending %v active %v", app.pendingLayoutOrder, app.layoutTaken)
 	}
 	scene, err := app.session.Scene(sceneID)

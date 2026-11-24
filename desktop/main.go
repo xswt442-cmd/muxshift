@@ -423,10 +423,8 @@ func (a *appState) view(c *ui.Context) {
 		c.OnWindowShortcut(ui.Ctrl, ui.KeyH, func() { a.shortcutCommand(commandHear) })
 		c.OnWindowShortcut(ui.Ctrl, ui.KeyR, func() { a.shortcutCommand(commandRetry) })
 		c.OnWindowShortcut(ui.Ctrl, ui.Key1, func() { a.navigateWorkspace(workspaceStage) })
-		c.OnWindowShortcut(ui.Ctrl, ui.Key2, func() { a.navigateWorkspace(workspaceSources) })
-		c.OnWindowShortcut(ui.Ctrl, ui.Key3, func() { a.navigateWorkspace(workspaceDiagnostics) })
-		c.OnWindowShortcut(ui.Ctrl, ui.Key4, func() { a.navigateToSettings("") })
-		c.OnWindowShortcut(ui.Ctrl, ui.Key5, func() { a.navigateWorkspace(workspaceMixer) })
+		c.OnWindowShortcut(ui.Ctrl, ui.Key2, func() { a.navigateWorkspace(workspaceDiagnostics) })
+		c.OnWindowShortcut(ui.Ctrl, ui.Key3, func() { a.navigateToSettings("") })
 		// P10.3: F11 is the standard full-screen key and works from the
 		// workbench too, so a person does not have to find Cinema first.
 		c.OnWindowShortcut(0, ui.KeyF11, func() { a.enterViewing(viewFullscreen, a.windowRef()) })
@@ -509,6 +507,14 @@ func (a *appState) setLayout(kind layoutKind) {
 // large slot — pip and hero — gives it to that source. The rest keep the order
 // the scene already has.
 func (a *appState) setPrimary(id core.SourceID) {
+	primary := a.itemOf(id)
+	if primary == nil {
+		return
+	}
+	if primary.persistentID == "" {
+		primary.persistentID = a.nextPersistentSourceID()
+	}
+	order := a.captureSceneLayout().LayoutOrder
 	taken := []core.SourceID{id}
 	for _, it := range a.items {
 		if it.source.ID != id && it.player != nil && it.shown {
@@ -516,7 +522,8 @@ func (a *appState) setPrimary(id core.SourceID) {
 		}
 	}
 	a.layoutTaken = taken
-	a.pendingLayoutOrder = nil
+	a.pendingLayoutOrder = append([]string{primary.persistentID}, removeString(order, primary.persistentID)...)
+	a.projectLayoutOrder()
 	a.invalidate()
 	a.saveSession()
 }
@@ -960,6 +967,9 @@ func main() {
 	// file that failed to load is likewise protected until the user can recover
 	// it; startup must never replace either with an empty/default snapshot.
 	s.sessionWriteEnabled = len(media) == 0 && storeNote == ""
+	if storeNote != "" {
+		s.sessionErr = storeNote + "; saving is disabled to preserve the original session file"
+	}
 	// A check that takes pictures should not take sound with it: the same master
 	// mute the overlay offers is switched on before the first source is opened,
 	// so nothing has to be turned down on the machine that runs it.

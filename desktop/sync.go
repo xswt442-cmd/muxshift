@@ -343,6 +343,20 @@ func (a *appState) existingGroup() (core.SyncGroup, bool) {
 	return core.SyncGroup{}, false
 }
 
+// sourceInExplicitGroup reports membership without creating a group.
+func (a *appState) sourceInExplicitGroup(it *item) bool {
+	group, ok := a.existingGroup()
+	if !ok {
+		return false
+	}
+	for _, track := range group.Tracks {
+		if track == it.video || track == it.audio {
+			return true
+		}
+	}
+	return false
+}
+
 // name labels a source in group messages so a failure names the source it came
 // from instead of only the error text.
 func (a *appState) name(it *item) string {
@@ -358,6 +372,9 @@ func (a *appState) name(it *item) string {
 // members that could not be told, so a half-pause is reported rather than
 // looking like a working one.
 func (a *appState) pauseAll() []string {
+	if _, ok := a.existingGroup(); !ok {
+		return a.transportScene(false)
+	}
 	a.sync.playhead.Pause()
 	members, err := a.group()
 	if err != nil {
@@ -380,6 +397,9 @@ func (a *appState) pauseAll() []string {
 // playAll starts the shared clock and every player of the group, reporting the
 // members that failed the same way pauseAll does.
 func (a *appState) playAll() []string {
+	if _, ok := a.existingGroup(); !ok {
+		return a.transportScene(true)
+	}
 	a.sync.playhead.Play()
 	members, err := a.group()
 	if err != nil {
@@ -392,6 +412,41 @@ func (a *appState) playAll() []string {
 			continue
 		}
 		it.player.Play()
+		if err := it.player.Err(); err != nil {
+			problems = append(problems, fmt.Sprintf("%s: %v", a.name(it), err))
+		}
+	}
+	return problems
+}
+
+// transportScene controls the live scene members without creating a sync group.
+func (a *appState) transportScene(play bool) []string {
+	scene, err := a.session.Scene(a.scene)
+	if err != nil {
+		return []string{err.Error()}
+	}
+	var problems []string
+	for _, it := range a.items {
+		if it.player == nil {
+			continue
+		}
+		member := containsTrack(scene.Video, it.video)
+		if !member {
+			for _, level := range scene.Audio {
+				if level.Track == it.audio {
+					member = true
+					break
+				}
+			}
+		}
+		if !member {
+			continue
+		}
+		if play {
+			it.player.Play()
+		} else {
+			it.player.Pause()
+		}
 		if err := it.player.Err(); err != nil {
 			problems = append(problems, fmt.Sprintf("%s: %v", a.name(it), err))
 		}

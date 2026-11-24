@@ -508,6 +508,11 @@ func (a *appState) stepVolume(delta float32) {
 // firstShown is the source the watching keys act on: the first one the scene
 // shows, because a watching mode draws whoever the scene shows.
 func (a *appState) firstShown() *item {
+	for _, id := range a.layoutTaken {
+		if it := a.find(id); it != nil && it.shown && it.player != nil {
+			return it
+		}
+	}
 	for _, it := range a.items {
 		if it.shown && it.player != nil {
 			return it

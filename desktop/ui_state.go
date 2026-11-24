@@ -41,6 +41,30 @@ func (a *appState) entryOf(it *item) sourceSnapshot {
 }
 
 func (a *appState) playing() bool {
+	if _, ok := a.existingGroup(); !ok {
+		scene, err := a.session.Scene(a.scene)
+		if err != nil {
+			return false
+		}
+		for _, it := range a.items {
+			if it.player == nil {
+				continue
+			}
+			member := containsTrack(scene.Video, it.video)
+			if !member {
+				for _, level := range scene.Audio {
+					if level.Track == it.audio {
+						member = true
+						break
+					}
+				}
+			}
+			if member && it.player.Playing() {
+				return true
+			}
+		}
+		return false
+	}
 	if a.sync == nil || a.sync.playhead == nil {
 		return false
 	}
@@ -125,10 +149,10 @@ func (a *appState) hasCommonClock(it *item) bool {
 // importRetryTarget is the address a failed import still owns. The editor's
 // current text is a draft and may already name something else.
 func (a *appState) importRetryTarget() string {
-	if a.importing != "" || a.lastCommand.Err == nil || a.lastCommand.Command.Kind != commandAdd {
+	if a.importing != "" || a.importFailureErr == nil {
 		return ""
 	}
-	return strings.TrimSpace(a.lastCommand.Command.URI)
+	return strings.TrimSpace(a.importFailureURI)
 }
 
 // retryImport sends the address that failed again. A source selected after a

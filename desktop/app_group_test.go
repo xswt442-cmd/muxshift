@@ -1082,6 +1082,10 @@ func TestAFinishedImportAsksForAFrame(t *testing.T) {
 	if got, want := app.lastCommand.Message, "could not import not-there.mp4"; got != want {
 		t.Fatalf("the status line says %q, want %q", got, want)
 	}
+	app.lastCommand = commandResult{Command: command{Kind: commandMute}}
+	if app.importFailureURI != missing || app.importFailureErr == nil {
+		t.Fatalf("unrelated command erased the import failure: uri=%q err=%v", app.importFailureURI, app.importFailureErr)
+	}
 }
 
 // TestACancelledReadDoesNotDrawTwice guards the early return: a landing from the
@@ -2880,6 +2884,35 @@ func memoryFixture(t *testing.T) (*appState, *item, *mutePlayer) {
 	}
 	app.items = []*item{it}
 	return app, it, player
+}
+
+func TestOrdinaryTransportDoesNotCreateSyncGroup(t *testing.T) {
+	app, _, _ := memoryFixture(t)
+	if result := app.runCommand(command{Kind: commandPlay}); result.Err != nil {
+		t.Fatalf("play scene: %v", result.Err)
+	}
+	if groups := app.session.SyncGroups(); len(groups) != 0 {
+		t.Fatalf("ordinary transport created %d sync groups", len(groups))
+	}
+	if result := app.runCommand(command{Kind: commandPause}); result.Err != nil {
+		t.Fatalf("pause scene: %v", result.Err)
+	}
+	if groups := app.session.SyncGroups(); len(groups) != 0 {
+		t.Fatalf("ordinary pause created %d sync groups", len(groups))
+	}
+}
+
+func TestSingleSourceTransportRejectsExplicitGroupMember(t *testing.T) {
+	app, it, _ := memoryFixture(t)
+	if _, err := app.session.AddSyncGroup(it.video, it.video, it.audio); err != nil {
+		t.Fatalf("add group: %v", err)
+	}
+	group := app.session.SyncGroups()[0]
+	app.sync.group = group.ID
+	result := app.runCommand(command{Kind: commandSourcePause, Source: itemKey(it)})
+	if result.Err == nil || !strings.Contains(result.Err.Error(), "sync group") {
+		t.Fatalf("single-source pause error = %v", result.Err)
+	}
 }
 
 // TestRestoredSoundReachesTheSceneAndThePlayer pins the difference between the

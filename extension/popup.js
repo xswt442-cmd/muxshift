@@ -26,6 +26,7 @@ const STRINGS = {
     pairButton: "配对",
     importButton: "发送所选地址",
     candidateHeading: (count) => `可选地址（${count}）`,
+    selectionHint: "使用 Tab 定位候选地址，方向键选择；发送后在桌面「舞台 → 来源」确认是否打开。",
     detailsTitle: "地址与扫描详情",
     advancedMeta: "原始地址、页面来源和扫描说明。地址仅按用户选择发送；Cookie、请求头和受保护的媒体不会导出。",
     checking: "正在检查本机窗口…",
@@ -56,8 +57,9 @@ const STRINGS = {
     noLiveAddress: "页面没有提供可用的直播地址",
     sending: "正在发送地址到本机窗口…",
     accepted: "桌面端已接收导入请求。请在「舞台 → 来源」查看打开状态。",
-    sendFailed: "桌面端未能接收该地址 · 请查看桌面端提示并重试",
-    staleTab: "当前标签页已变化，请重新打开扩展扫描",
+    sendFailed: "发送失败 · 检查桌面端是否运行及配对状态，然后重试",
+    rejected: "桌面端拒绝了该地址 · 请在「舞台 → 来源」查看原因，确认地址可播放后重试",
+    staleTab: "页面已切换或重新加载，旧地址已作废 · 重新打开扩展扫描",
     selectFirst: "先选择一个地址，再发送。",
     expired: "配对已失效 · 请从 MuxShift 诊断页获取新配对码",
     windowUnreachable: "无法连接本机 MuxShift · 请确认桌面窗口正在运行",
@@ -71,6 +73,7 @@ const STRINGS = {
     pairButton: "Pair",
     importButton: "Send selected address",
     candidateHeading: (count) => `Available addresses (${count})`,
+    selectionHint: "Use Tab to focus an address and the arrow keys to select it; after sending, check Stage → Sources to see whether it opened.",
     detailsTitle: "Address and scan details",
     advancedMeta: "Raw addresses, page sources, and scan notes. An address is sent only after you choose it; cookies, headers, and protected media are not exported.",
     checking: "checking the local window…",
@@ -101,8 +104,9 @@ const STRINGS = {
     noLiveAddress: "the page did not provide a usable live address",
     sending: "sending the address to the local window…",
     accepted: "The desktop accepted the import request. Check Stage → Sources for its status.",
-    sendFailed: "The desktop could not accept this address · check its message and try again",
-    staleTab: "The active page changed. Reopen the popup to scan again.",
+    sendFailed: "Could not send · check that the desktop is running and paired, then retry",
+    rejected: "The desktop rejected this address · check Stage → Sources for the reason and retry with a playable address",
+    staleTab: "The page changed or reloaded; this address is discarded · reopen the popup to scan again",
     selectFirst: "Choose an address before sending.",
     expired: "pairing expired · get a new code from MuxShift Diagnostics",
     windowUnreachable: "Cannot reach local MuxShift · make sure the desktop window is running",
@@ -161,12 +165,20 @@ function candidateLabel(source, index, includePath) {
   return [t("candidate", index + 1), kind, host, from, path].filter(Boolean).join(" · ");
 }
 function updateHandoffControls() {
-  resolveButton.disabled = handoffBusy;
-  importButton.disabled = handoffBusy || !selected;
-  for (const control of candidateControls) control.disabled = handoffBusy;
+  const unavailable = handoffBusy || !scannedTarget;
+  resolveButton.disabled = unavailable;
+  importButton.disabled = unavailable || !selected;
+  for (const control of candidateControls) control.disabled = unavailable;
 }
 function finishHandoff() {
   handoffBusy = false;
+  updateHandoffControls();
+}
+
+function discardStaleScan() {
+  scannedTarget = null;
+  selected = null;
+  setStatus(t("staleTab"), "bad");
   updateHandoffControls();
 }
 
@@ -315,7 +327,9 @@ function sendAddress(url, done) {
         setPairLine(t("pairedUnreachable"));
         setStatus(t("windowUnreachable"), "bad");
       } else if (reply?.failure === "stale-tab") {
-        setStatus(t("staleTab"), "bad");
+        discardStaleScan();
+      } else if (reply?.failure === "rejected") {
+        setStatus(t("rejected"), "bad");
       } else {
         setStatus(t("sendFailed"), "bad");
       }
@@ -339,7 +353,7 @@ resolveButton.addEventListener("click", () => {
       return;
     }
     if (reply?.failure === "stale-tab") {
-      setStatus(t("staleTab"), "bad");
+      discardStaleScan();
       finishHandoff();
       return;
     }
@@ -369,7 +383,7 @@ function start() {
   });
   chrome.runtime.sendMessage({ type: "scan" }, (reply) => {
     if (reply?.failure === "stale-tab") {
-      setStatus(t("staleTab"), "bad");
+      discardStaleScan();
       return;
     }
     if (chrome.runtime.lastError || reply?.error) {
@@ -421,6 +435,7 @@ code.placeholder = t("pairPlaceholder");
 pairButton.textContent = t("pairButton");
 importButton.textContent = t("importButton");
 candidateHeading.textContent = t("candidateHeading", 0);
+document.getElementById("selection-hint").textContent = t("selectionHint");
 document.getElementById("details-title").textContent = t("detailsTitle");
 document.getElementById("advanced-meta").textContent = t("advancedMeta");
 page.textContent = t("readingTab");

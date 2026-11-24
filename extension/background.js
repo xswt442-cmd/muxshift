@@ -59,7 +59,19 @@ async function scan() {
   const entry = results?.[0];
   const found = entry?.result || { sources: [], notes: [] };
   const url = found.page?.url || tab.url;
-  if ((await activeTab())?.id !== tab.id || url !== tab.url) return { failure: "stale-tab" };
+  const current = await activeTab();
+  if (current?.id !== tab.id || url !== current.url) return { failure: "stale-tab" };
+  if (entry?.documentId) {
+    try {
+      const [stillThere] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id, documentIds: [entry.documentId] },
+        func: () => location.href,
+      });
+      if (stillThere?.result !== url) return { failure: "stale-tab" };
+    } catch {
+      return { failure: "stale-tab" };
+    }
+  }
   return { tab: { id: tab.id, title: tab.title, url, documentId: entry?.documentId }, ...found };
 }
 
@@ -266,12 +278,18 @@ async function status() {
 // the browser. No cookie, storage item, or request header is read or exported.
 async function resolveLive(target) {
   if (!await sameActivePage(target)) return { failure: "stale-tab" };
-  const results = await chrome.scripting.executeScript({
-    target: scriptTarget(target),
-    world: "MAIN",
-    func: resolveLivePage,
-    args: [target.url],
-  });
+  let results;
+  try {
+    results = await chrome.scripting.executeScript({
+      target: scriptTarget(target),
+      world: "MAIN",
+      func: resolveLivePage,
+      args: [target.url],
+    });
+  } catch (error) {
+    if (!await sameActivePage(target)) return { failure: "stale-tab" };
+    return { error: `page resolver could not run: ${String(error?.message || error)}` };
+  }
   const found = results?.[0]?.result || { error: "the page did not answer" };
   if (!await sameActivePage(target)) return { failure: "stale-tab" };
   return found;
@@ -288,6 +306,8 @@ async function resolveLive(target) {
 // description rather than another copy of the same procedure.
 async function resolveLivePage(expectedURL) {
   if (location.href !== expectedURL) return { failure: "stale-tab" };
+  const controller = new AbortController();
+  const cancelForNavigation = () => controller.abort();
   const SITES = [
     {
       name: "Bilibili",
@@ -419,6 +439,8 @@ async function resolveLivePage(expectedURL) {
       note: `This extension resolves live addresses for ${list} only. This page is none of them, so scan it for a playlist instead.`,
     };
   }
+  const navigationEvents = ["pagehide", "popstate", "hashchange"];
+  for (const event of navigationEvents) addEventListener(event, cancelForNavigation, { once: true });
   try {
     const subject = site.subject();
     if (!subject) {
@@ -430,9 +452,14 @@ async function resolveLivePage(expectedURL) {
     if (!hls.length) {
       return { url: "", note: site.noHls ? site.noHls(subject, addresses.length) : `${site.name} listed ${addresses.length} address(es) but none is HLS.` };
     }
-    return { url: await firstReachable(hls), note: site.describe(subject, hls.length) };
+    const url = await firstReachable(hls);
+    if (controller.signal.aborted || location.href !== expectedURL) return { failure: "stale-tab" };
+    return { url, note: site.describe(subject, hls.length) };
   } catch (error) {
+    if (controller.signal.aborted || location.href !== expectedURL) return { failure: "stale-tab" };
     return { url: "", note: `The page could not trade its session for an address: ${String(error?.message || error)}` };
+  } finally {
+    for (const event of navigationEvents) removeEventListener(event, cancelForNavigation);
   }
 
   // ask performs the site's own request and hands back the parsed answer.
@@ -443,6 +470,7 @@ async function resolveLivePage(expectedURL) {
       credentials: spec.credentials || "omit",
       headers: spec.headers,
       body: spec.body,
+      signal: controller.signal,
     });
     if (!answer.ok) {
       throw new Error(`${entry.name} answered ${answer.status} for ${subject}.`);
@@ -455,14 +483,20 @@ async function resolveLivePage(expectedURL) {
   // cross-origin page can get; an answer of any kind means the host is there.
   async function firstReachable(candidates) {
     for (const candidate of candidates) {
-      const answered = await Promise.race([
-        fetch(candidate, { mode: "no-cors", cache: "no-store" }).then(
-          () => true,
-          () => false,
-        ),
-        new Promise((resolve) => setTimeout(() => resolve(false), 4000)),
-      ]);
-      if (answered) return candidate;
+      if (controller.signal.aborted) return "";
+      const probe = new AbortController();
+      const stop = () => probe.abort();
+      const timeout = setTimeout(stop, 4000);
+      controller.signal.addEventListener("abort", stop, { once: true });
+      try {
+        await fetch(candidate, { mode: "no-cors", cache: "no-store", signal: probe.signal });
+        return candidate;
+      } catch {
+        // Try the next candidate unless navigation cancelled the resolver.
+      } finally {
+        clearTimeout(timeout);
+        controller.signal.removeEventListener("abort", stop);
+      }
     }
     return candidates[0] || "";
   }

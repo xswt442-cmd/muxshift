@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -1076,6 +1077,9 @@ func layoutsBody(window *mygo.Window, a *appState, dir string) {
 
 	players := map[core.SourceID]*ui.VideoPlayer{}
 	heard := map[core.TrackID]bool{}
+	var initialScene core.Scene
+	var gone core.SourceID
+	var goneVideo, goneAudio core.TrackID
 	scene := ""
 	bad := ""
 	mygoRunOnMain(func() {
@@ -1096,6 +1100,11 @@ func layoutsBody(window *mygo.Window, a *appState, dir string) {
 		}
 		heard = heardTracks(a)
 		scene = a.sceneLabel()
+		if snapshot, err := a.session.Scene(a.scene); err == nil {
+			initialScene = snapshot
+		} else {
+			bad = fmt.Sprintf("could not snapshot scene video routes: %v", err)
+		}
 	})
 	logf(scenario, "started with %d source(s) as %s; heard %s", len(players), scene, tracksOf(heard))
 
@@ -1189,13 +1198,26 @@ func layoutsBody(window *mygo.Window, a *appState, dir string) {
 	// Removing the source a grid slot holds shrinks the grid; nothing is left
 	// drawing in the slot it used to occupy.
 	if len(a.items) > 0 {
-		var gone core.SourceID
-		mygoRunOnMain(func() { gone = a.items[len(a.items)-1].source.ID })
+		mygoRunOnMain(func() {
+			gone = a.items[len(a.items)-1].source.ID
+			goneVideo = a.items[len(a.items)-1].video
+			goneAudio = a.items[len(a.items)-1].audio
+		})
 		steps = append(steps, step{at: at, act: func() {
 			window.SetBounds(mygo.Rectangle{X: 60, Y: 60, Width: 1150, Height: 660})
 		}})
 		steps = append(steps, step{at: at + 900*time.Millisecond, act: func() {
-			a.report(a.runCommand(command{Kind: commandRemove, Source: gone}))
+			beforeRemoval, err := a.session.Scene(a.scene)
+			if err != nil || beforeRemoval.ID != initialScene.ID ||
+				!slices.Equal(beforeRemoval.Video, initialScene.Video) ||
+				!slices.Equal(beforeRemoval.Audio, initialScene.Audio) {
+				bad = "layout changed the scene or its routes before removal"
+			}
+			result := a.runCommand(command{Kind: commandRemove, Source: gone})
+			a.report(result)
+			if result.Err != nil {
+				bad = fmt.Sprintf("removal failed: %v", result.Err)
+			}
 		}})
 		steps = append(steps, step{at: at + 2100*time.Millisecond, shot: "grid-after-removal"})
 		at += 3000 * time.Millisecond
@@ -1224,10 +1246,11 @@ func layoutsBody(window *mygo.Window, a *appState, dir string) {
 	}
 
 	var after map[core.TrackID]bool
-	var afterScene string
 	mygoRunOnMain(func() {
 		after = heardTracks(a)
-		afterScene = a.sceneLabel()
+		if bad != "" {
+			return
+		}
 		for _, it := range a.items {
 			if it.player == nil {
 				continue
@@ -1247,18 +1270,31 @@ func layoutsBody(window *mygo.Window, a *appState, dir string) {
 				return
 			}
 		}
-		if afterScene != scene {
-			bad = fmt.Sprintf("the scene changed from %q to %q", scene, afterScene)
-			return
-		}
+		delete(heard, goneAudio)
 		if !sameTracks(heard, after) {
 			bad = fmt.Sprintf("what is heard changed from %s to %s", tracksOf(heard), tracksOf(after))
+			return
+		}
+		currentScene, err := a.session.Scene(a.scene)
+		if err != nil {
+			bad = fmt.Sprintf("could not read scene video routes after removal: %v", err)
+			return
+		}
+		wantVideo := slices.DeleteFunc(slices.Clone(initialScene.Video), func(track core.TrackID) bool {
+			return track == goneVideo
+		})
+		wantAudio := slices.DeleteFunc(slices.Clone(initialScene.Audio), func(level core.AudioLevel) bool {
+			return level.Track == goneAudio
+		})
+		if gone == "" || a.find(gone) != nil || currentScene.ID != initialScene.ID ||
+			!slices.Equal(currentScene.Video, wantVideo) || !slices.Equal(currentScene.Audio, wantAudio) {
+			bad = fmt.Sprintf("removing %s did not preserve the other ordered routes", gone)
 		}
 	})
 	if bad != "" {
 		logf(scenario, "CHECK FAILED: %s", bad)
 	} else {
-		logf(scenario, "CHECK PASSED: five layouts, same players, same scene, same sound, pictures advanced")
+		logf(scenario, "CHECK PASSED: five layouts preserve players, scene identity, audio routes and retained video routes; removal drops its target route; pictures advanced")
 	}
 	mygoRunOnMain(func() {
 		a.release()

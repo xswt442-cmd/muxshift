@@ -809,10 +809,7 @@ func (a *appState) stageCorner(c *ui.Context) {
 			editInk = colorAccent
 		}
 		a.iconButtonSized(c, "corner-edit", lucide.Move(),
-			a.tr("edit the picture's place", "编辑画面位置"), 30, editInk, a.editMode, func() {
-				a.editMode = !a.editMode
-				a.invalidate()
-			})
+			a.tr("edit the picture's place", "编辑画面位置"), 30, editInk, a.editMode, a.toggleStageEdit)
 		ui.Box(c).Width(1).Height(18).Background(colorLineSoft)
 		a.iconButtonSized(c, "corner-cinema", lucide.MonitorPlay(),
 			a.tr("watch in cinema", "沉浸观看"), 30, colorText, false, func() {
@@ -866,10 +863,7 @@ func (a *appState) toolbar(c *ui.Context, width float32) {
 			edit = edit.Background(colorAccentSoft).TextColor(colorAccent)
 		}
 		if edit.Clicked() {
-			a.editMode = !a.editMode
-			if a.editMode && a.selected == "" && len(a.items) > 0 {
-				a.selected = itemKey(a.items[0])
-			}
+			a.toggleStageEdit()
 		}
 		if width < 900 {
 			if ui.Button(c.Key("stage-props"), a.tr("Properties", "属性")).Height(a.controlHeight()).Padding(0, spaceSm).Clicked() {

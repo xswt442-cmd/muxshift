@@ -842,6 +842,30 @@ func TestTheSceneKnowsItsOwnRectangles(t *testing.T) {
 	}
 }
 
+func TestStageEditorKeepsOnlyAPlacedSelection(t *testing.T) {
+	geometry := []stagePlacement{
+		{item: &item{source: core.Source{ID: "first"}}},
+		{item: &item{source: core.Source{ID: "second"}}},
+	}
+	for _, tc := range []struct {
+		name, selected string
+		geometry       []stagePlacement
+		want           core.SourceID
+	}{
+		{"retain visible", "second", geometry, "second"},
+		{"empty selection", "", geometry, "first"},
+		{"placeholder selection", "restoring", geometry, "first"},
+		{"off-stage selection", "overflow", geometry, "first"},
+		{"no pictures", "stale", nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := stageEditSelection(core.SourceID(tc.selected), tc.geometry); got != tc.want {
+				t.Fatalf("editor selection = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestStackingOrderMovesOneStepAndToTheEnds(t *testing.T) {
 	edits := newStageEdits()
 	sources := []core.SourceID{"a", "b", "c"}

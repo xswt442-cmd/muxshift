@@ -159,6 +159,45 @@ func (a *appState) stageGeometry() []stagePlacement {
 	return out
 }
 
+// enterStageEdit selects a picture the active layout actually places before
+// enabling the handles. A stale selection may refer to a hidden or overflow
+// source, so it is retained only while it remains in the stage geometry.
+func (a *appState) enterStageEdit() {
+	geometry := a.stageGeometry()
+	if len(geometry) == 0 {
+		a.editMode = false
+		a.editNote = a.tr("Show a source on the stage to position it.", "先在舞台上显示一路画面，再调整位置。")
+		a.invalidate()
+		return
+	}
+	a.selected = stageEditSelection(a.selected, geometry)
+	a.editMode = true
+	a.editNote = a.tr("Drag the picture to move it, or drag a handle to resize it.", "拖动画面调整位置，拖动把手调整大小。")
+	a.invalidate()
+}
+
+func (a *appState) toggleStageEdit() {
+	if a.editMode {
+		a.editMode = false
+		a.editNote = ""
+		a.invalidate()
+		return
+	}
+	a.enterStageEdit()
+}
+
+func stageEditSelection(selected core.SourceID, geometry []stagePlacement) core.SourceID {
+	for _, spot := range geometry {
+		if itemKey(spot.item) == selected {
+			return selected
+		}
+	}
+	if len(geometry) == 0 {
+		return ""
+	}
+	return itemKey(geometry[0].item)
+}
+
 // stagePlacement is one picture where the stage will draw it.
 type stagePlacement struct {
 	item *item

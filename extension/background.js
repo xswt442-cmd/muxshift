@@ -19,11 +19,11 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
     return true;
   }
   if (message?.type === "import") {
-    importAddress(message.url).then(respond, (error) => respond({ ok: false, reason: String(error?.message || error) }));
+    importAddress(message.url, message.target).then(respond, (error) => respond({ ok: false, reason: String(error?.message || error) }));
     return true;
   }
   if (message?.type === "resolve") {
-    resolveLive().then(respond, (error) => respond({ error: String(error?.message || error) }));
+    resolveLive(message.target).then(respond, (error) => respond({ error: String(error?.message || error) }));
     return true;
   }
   return false;
@@ -56,8 +56,32 @@ async function scan() {
     target: { tabId: tab.id },
     func: collectMedia,
   });
-  const found = results?.[0]?.result || { sources: [], notes: [] };
-  return { tab: { id: tab.id, title: tab.title, url: tab.url }, ...found };
+  const entry = results?.[0];
+  const found = entry?.result || { sources: [], notes: [] };
+  const url = found.page?.url || tab.url;
+  if ((await activeTab())?.id !== tab.id || url !== tab.url) return { failure: "stale-tab" };
+  return { tab: { id: tab.id, title: tab.title, url, documentId: entry?.documentId }, ...found };
+}
+
+function scriptTarget(target) {
+  return target.documentId ? { tabId: target.id, documentIds: [target.documentId] } : { tabId: target.id };
+}
+
+async function sameActivePage(target) {
+  if (!target?.id || !target?.url) return false;
+  let tab = await activeTab();
+  if (tab?.id !== target.id || tab.url !== target.url) return false;
+  try {
+    const [entry] = await chrome.scripting.executeScript({
+      target: scriptTarget(target),
+      func: () => location.href,
+    });
+    if (entry?.result !== target.url || (target.documentId && entry.documentId !== target.documentId)) return false;
+  } catch {
+    return false;
+  }
+  tab = await activeTab();
+  return tab?.id === target.id && tab.url === target.url;
 }
 
 // collectMedia runs inside the page.
@@ -240,18 +264,17 @@ async function status() {
 // can fetch by itself. The trade happens inside the page: the site's own API is
 // called with the tab's cookies, and only the resulting playlist address leaves
 // the browser. No cookie, storage item, or request header is read or exported.
-async function resolveLive() {
-  const tab = await activeTab();
-  if (!tab?.id) {
-    return { error: "no active tab" };
-  }
+async function resolveLive(target) {
+  if (!await sameActivePage(target)) return { failure: "stale-tab" };
   const results = await chrome.scripting.executeScript({
-    target: { tabId: tab.id },
+    target: scriptTarget(target),
     world: "MAIN",
     func: resolveLivePage,
+    args: [target.url],
   });
   const found = results?.[0]?.result || { error: "the page did not answer" };
-  return { tab: { id: tab.id, title: tab.title, url: tab.url }, ...found };
+  if (!await sameActivePage(target)) return { failure: "stale-tab" };
+  return found;
 }
 
 // resolveLivePage runs inside the page. It knows a handful of sites and says so
@@ -263,7 +286,8 @@ async function resolveLive() {
 // already holds), and how to turn that answer into candidate addresses. The HLS
 // filter, the mirror race and the note are shared, so a new site is a short
 // description rather than another copy of the same procedure.
-async function resolveLivePage() {
+async function resolveLivePage(expectedURL) {
+  if (location.href !== expectedURL) return { failure: "stale-tab" };
   const SITES = [
     {
       name: "Bilibili",
@@ -448,12 +472,13 @@ async function resolveLivePage() {
 // A pairing the window no longer knows (it restarted, or the code was replaced)
 // is dropped here, so the popup can ask for a fresh code instead of repeating
 // a request that cannot succeed.
-async function importAddress(url) {
+async function importAddress(url, target) {
   if (!url) return { ok: false, failure: "invalid" };
   const handoff = await stored();
   if (!handoff) {
     return { ok: false, failure: "not-paired" };
   }
+  if (!await sameActivePage(target)) return { ok: false, failure: "stale-tab" };
   let answer;
   try {
     answer = await request(base(handoff.address), "/import", { url }, handoff.token);

@@ -11,6 +11,7 @@ const resolveButton = document.getElementById("resolve");
 const candidateHeading = document.getElementById("candidate-heading");
 
 let selected = null;
+let scannedTarget = null;
 let pairEpoch = 0;
 let handoffBusy = false;
 let candidateControls = [];
@@ -54,8 +55,9 @@ const STRINGS = {
     resolveFailed: "页面解析失败或未提供可用地址 · 请检查页面状态后重试",
     noLiveAddress: "页面没有提供可用的直播地址",
     sending: "正在发送地址到本机窗口…",
-    accepted: "桌面端已接收导入请求 · 请在「来源」页查看打开状态；失败原因会显示在那里。",
+    accepted: "桌面端已接收导入请求。请在「舞台 → 来源」查看打开状态。",
     sendFailed: "桌面端未能接收该地址 · 请查看桌面端提示并重试",
+    staleTab: "当前标签页已变化，请重新打开扩展扫描",
     selectFirst: "先选择一个地址，再发送。",
     expired: "配对已失效 · 请从 MuxShift 诊断页获取新配对码",
     windowUnreachable: "无法连接本机 MuxShift · 请确认桌面窗口正在运行",
@@ -98,8 +100,9 @@ const STRINGS = {
     resolveFailed: "page resolution failed or returned no usable address · check the page and retry",
     noLiveAddress: "the page did not provide a usable live address",
     sending: "sending the address to the local window…",
-    accepted: "The desktop accepted the import request · check Sources for its open status and any failure reason.",
+    accepted: "The desktop accepted the import request. Check Stage → Sources for its status.",
     sendFailed: "The desktop could not accept this address · check its message and try again",
+    staleTab: "The active page changed. Reopen the popup to scan again.",
     selectFirst: "Choose an address before sending.",
     expired: "pairing expired · get a new code from MuxShift Diagnostics",
     windowUnreachable: "Cannot reach local MuxShift · make sure the desktop window is running",
@@ -168,6 +171,7 @@ function finishHandoff() {
 }
 
 function render(scanned) {
+  scannedTarget = scanned.tab ? { id: scanned.tab.id, url: scanned.tab.url, documentId: scanned.tab.documentId } : null;
   page.textContent = safePageAddress(scanned.tab?.url || scanned.page?.url || "");
   list.textContent = "";
   detailsList.textContent = "";
@@ -294,7 +298,7 @@ function offer(reply) {
 
 function sendAddress(url, done) {
   setStatus(t("sending"));
-  chrome.runtime.sendMessage({ type: "import", url }, (reply) => {
+  chrome.runtime.sendMessage({ type: "import", url, target: scannedTarget }, (reply) => {
     if (chrome.runtime.lastError) {
       setStatus(t("sendFailed"), "bad");
       if (done) done();
@@ -310,6 +314,8 @@ function sendAddress(url, done) {
       } else if (reply?.failure === "unreachable") {
         setPairLine(t("pairedUnreachable"));
         setStatus(t("windowUnreachable"), "bad");
+      } else if (reply?.failure === "stale-tab") {
+        setStatus(t("staleTab"), "bad");
       } else {
         setStatus(t("sendFailed"), "bad");
       }
@@ -326,9 +332,14 @@ resolveButton.addEventListener("click", () => {
   handoffBusy = true;
   updateHandoffControls();
   setStatus(t("resolving"));
-  chrome.runtime.sendMessage({ type: "resolve" }, (reply) => {
+  chrome.runtime.sendMessage({ type: "resolve", target: scannedTarget }, (reply) => {
     if (chrome.runtime.lastError) {
       setStatus(t("scanFailed"), "bad");
+      finishHandoff();
+      return;
+    }
+    if (reply?.failure === "stale-tab") {
+      setStatus(t("staleTab"), "bad");
       finishHandoff();
       return;
     }
@@ -357,6 +368,10 @@ function start() {
     }
   });
   chrome.runtime.sendMessage({ type: "scan" }, (reply) => {
+    if (reply?.failure === "stale-tab") {
+      setStatus(t("staleTab"), "bad");
+      return;
+    }
     if (chrome.runtime.lastError || reply?.error) {
       setStatus(t("scanFailed"), "bad");
       return;

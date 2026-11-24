@@ -317,6 +317,45 @@ func TestSessionSaveCloseFlushCannotBeOvertakenByOlderTimer(t *testing.T) {
 	}
 }
 
+func TestSessionSaveOverlappingDebounceTimers(t *testing.T) {
+	app, _, _ := newStoreFixture(t)
+	app.sessionPath = filepath.Join(t.TempDir(), "session.json")
+	app.sessionWriteEnabled = true
+	writes := make(chan float64, 2)
+	releaseFirst := make(chan struct{})
+	app.sessionStoreWriter = func(_ string, snapshot storedSession) error {
+		level := snapshot.Sources[0].Volume
+		writes <- level
+		if level == 0.2 {
+			<-releaseFirst
+		}
+		return nil
+	}
+	app.items[0].volume = 0.2
+	app.saveSession()
+	select {
+	case <-writes:
+	case <-time.After(3 * time.Second):
+		close(releaseFirst)
+		t.Fatal("first timer did not start")
+	}
+	app.items[0].volume = 0.9
+	app.saveSession()
+	time.Sleep(300 * time.Millisecond)
+	close(releaseFirst)
+	select {
+	case level := <-writes:
+		if level != 0.9 {
+			t.Fatalf("second write level = %v, want 0.9", level)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("second timer could not flush while the first writer completed")
+	}
+	if err := app.flushSessionSave(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSessionSaveIgnoresStaleCompletionAndCallback(t *testing.T) {
 	app, _, _ := newStoreFixture(t)
 	app.sessionSaveSeq = 2

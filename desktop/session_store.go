@@ -497,27 +497,26 @@ func (a *appState) saveSession() error {
 }
 
 func (a *appState) flushPendingSession() {
+	a.sessionSaveWriteMu.Lock()
 	a.sessionSaveMu.Lock()
 	snap := a.sessionSavePending
 	seq := a.sessionSavePendingSeq
 	a.sessionSavePending = nil
 	a.sessionSavePendingSeq = 0
 	a.sessionSaveTimer = nil
-	if snap != nil {
-		a.sessionSaveWriteMu.Lock()
-	}
 	a.sessionSaveMu.Unlock()
 	if snap != nil {
 		err := a.writeSessionSnapshotLocked(*snap)
 		notify := a.recordSessionSnapshot(seq, err)
 		a.sessionSaveWriteMu.Unlock()
 		a.notifySessionSnapshot(seq, notify)
+		return
 	}
+	a.sessionSaveWriteMu.Unlock()
 }
 
-// writeSessionSnapshotLocked requires sessionSaveWriteMu. A timer claims this
-// lock while it still holds sessionSaveMu, so a later shutdown flush cannot
-// overtake the older snapshot after it has left the pending slot.
+// writeSessionSnapshotLocked requires sessionSaveWriteMu. The writer lock
+// precedes the state lock when a timer or shutdown claims a snapshot.
 func (a *appState) writeSessionSnapshotLocked(snap storedSession) error {
 	writer := a.sessionStoreWriter
 	if writer == nil {
@@ -567,6 +566,7 @@ func (a *appState) notifySessionSnapshot(seq uint64, notify func(func())) {
 // flushSessionSave makes a queued change durable before the live session is
 // released. It also waits for a write that already left the debounce queue.
 func (a *appState) flushSessionSave() error {
+	a.sessionSaveWriteMu.Lock()
 	a.sessionSaveMu.Lock()
 	if a.sessionSaveTimer != nil {
 		a.sessionSaveTimer.Stop()
@@ -578,15 +578,13 @@ func (a *appState) flushSessionSave() error {
 	a.sessionSavePendingSeq = 0
 	a.sessionSaveMu.Unlock()
 	if snap == nil {
-		a.sessionSaveWriteMu.Lock()
-		a.sessionSaveWriteMu.Unlock()
 		err := a.sessionSaveError()
+		a.sessionSaveWriteMu.Unlock()
 		if err == "" {
 			return nil
 		}
 		return errors.New(err)
 	}
-	a.sessionSaveWriteMu.Lock()
 	err := a.writeSessionSnapshotLocked(*snap)
 	notify := a.recordSessionSnapshot(seq, err)
 	a.sessionSaveWriteMu.Unlock()

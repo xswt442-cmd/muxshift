@@ -357,12 +357,17 @@ func (a *appState) viewingControls(c *ui.Context, width, height float32) ui.Elem
 		// that the timer promise keeps in place.
 		first := a.focusControls
 		a.focusControls = false
-		playing := a.sync.playhead.Playing()
-		label, buttonWidth := a.tr("Pause", "暂停"), float32(88)
-		if !playing {
-			label = a.tr("Play", "播放")
+		plan, planErr := a.stageTransportPlan()
+		if planErr != nil {
+			plan = transportPlan{}
 		}
-		play := ui.Button(c.Key("view-play"), label).Width(buttonWidth).Height(a.controlHeight() - 2)
+		playing := a.playingFor(plan)
+		label := a.transportActionLabel(plan, playing)
+		play := ui.Button(c.Key("view-play"), label).Width(180).Height(a.controlHeight() - 2).
+			Tooltip(a.transportActionTooltip(plan))
+		if len(plan.items) == 0 {
+			play = play.Disabled(true)
+		}
 		if first {
 			play = play.AutoFocus()
 		}
@@ -458,8 +463,12 @@ func (a *appState) viewingShortcuts(c *ui.Context) {
 		a.leaveViewing(a.windowRef())
 	})
 	c.OnWindowShortcut(0, ui.KeySpace, func() {
+		plan, err := a.stageTransportPlan()
+		if err != nil || len(plan.items) == 0 {
+			return
+		}
 		kind := commandPlay
-		if a.sync.playhead.Playing() {
+		if a.playingFor(plan) {
 			kind = commandPause
 		}
 		a.report(a.runCommand(command{Kind: kind}))

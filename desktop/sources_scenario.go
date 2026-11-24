@@ -1771,6 +1771,16 @@ func runSync(window *mygo.Window, a *appState, dir string) {
 func runSyncGroup(window *mygo.Window, a *appState, dir string) {
 	go func() {
 		wait := time.Sleep
+		captured, missing := 0, 0
+		checkpoint := func(file, label string) {
+			if err := step(window, a, dir, "syncgroup", file, label, nil); err != nil {
+				missing++
+				logf("syncgroup", "CHECK FAILED: required capture %s: %v", file, err)
+				return
+			}
+			captured++
+			logf("syncgroup", "required capture saved: %s", file)
+		}
 		wait(3 * time.Second)
 		// A source that was never drawn does not advance in this MyGo build, so
 		// the second source is shown once before it can be measured.
@@ -1797,7 +1807,7 @@ func runSyncGroup(window *mygo.Window, a *appState, dir string) {
 			logf("syncgroup", "after creation %s", a.groupState())
 		})
 		wait(500 * time.Millisecond)
-		step(window, a, dir, "syncgroup", "1-group-paused.png", "group paused", nil)
+		checkpoint("1-group-paused.png", "group paused")
 
 		step(window, a, dir, "syncgroup", "", "group resumed", func(a *appState) {
 			logGroup("syncgroup", "play", a.playAll())
@@ -1817,7 +1827,7 @@ func runSyncGroup(window *mygo.Window, a *appState, dir string) {
 			logGroup("syncgroup", "pause", a.pauseAll())
 		})
 		wait(500 * time.Millisecond)
-		step(window, a, dir, "syncgroup", "2-third-still-playing.png", "group paused, third source outside it", nil)
+		checkpoint("2-third-still-playing.png", "group paused, third source outside it")
 		wait(1500 * time.Millisecond)
 		step(window, a, dir, "syncgroup", "", "third source a second and a half later", nil)
 
@@ -1829,13 +1839,14 @@ func runSyncGroup(window *mygo.Window, a *appState, dir string) {
 			logf("syncgroup", "after removal %s", a.groupState())
 		})
 		wait(time.Second)
-		step(window, a, dir, "syncgroup", "3-after-removal.png", "second source removed from the session", nil)
+		checkpoint("3-after-removal.png", "second source removed from the session")
 
 		step(window, a, dir, "syncgroup", "", "pause the group after its member left", func(a *appState) {
 			logGroup("syncgroup", "pause", a.pauseAll())
 		})
 		wait(500 * time.Millisecond)
-		step(window, a, dir, "syncgroup", "4-paused-after-removal.png", "group paused with the surviving member", nil)
+		checkpoint("4-paused-after-removal.png", "group paused with the surviving member")
+		logf("syncgroup", "required captures: saved=%d missing=%d", captured, missing)
 
 		mygoRunOnMain(func() {
 			a.release()
@@ -1999,7 +2010,7 @@ func errorString(err error) string {
 
 // step runs fn on the main thread, where the window and its players live, and
 // then records every source, capturing the window when path is not empty.
-func step(window *mygo.Window, a *appState, dir, scenario, path, what string, fn func(*appState)) {
+func step(window *mygo.Window, a *appState, dir, scenario, path, what string, fn func(*appState)) error {
 	mygoRunOnMain(func() {
 		if fn != nil {
 			fn(a)
@@ -2023,8 +2034,8 @@ func step(window *mygo.Window, a *appState, dir, scenario, path, what string, fn
 	if path != "" {
 		time.Sleep(400 * time.Millisecond)
 	}
+	var logErr error
 	mygoRunOnMain(func() {
-		logErr := error(nil)
 		if path != "" {
 			logErr = capture(window, filepath.Join(dir, path))
 		}
@@ -2034,6 +2045,7 @@ func step(window *mygo.Window, a *appState, dir, scenario, path, what string, fn
 		}
 		logf(scenario, "%s: %s | scene %s", what, allStates(a), a.sessionState())
 	})
+	return logErr
 }
 
 // allStates is every source's state as one line.

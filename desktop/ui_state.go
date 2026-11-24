@@ -41,34 +41,50 @@ func (a *appState) entryOf(it *item) sourceSnapshot {
 }
 
 func (a *appState) playing() bool {
-	if _, ok := a.existingGroup(); !ok {
-		scene, err := a.session.Scene(a.scene)
-		if err != nil {
-			return false
-		}
-		for _, it := range a.items {
-			if it.player == nil {
-				continue
-			}
-			member := containsTrack(scene.Video, it.video)
-			if !member {
-				for _, level := range scene.Audio {
-					if level.Track == it.audio {
-						member = true
-						break
-					}
-				}
-			}
-			if member && it.player.Playing() {
-				return true
-			}
-		}
+	plan, err := a.stageTransportPlan()
+	if err != nil {
 		return false
 	}
-	if a.sync == nil || a.sync.playhead == nil {
-		return false
+	return a.playingFor(plan)
+}
+
+func (a *appState) playingFor(plan transportPlan) bool {
+	for _, it := range plan.items {
+		if it.player.Playing() {
+			return true
+		}
 	}
-	return a.sync.playhead.Playing()
+	if plan.syncGroup && a.sync != nil && a.sync.playhead != nil && a.sync.playhead.Playing() {
+		return true
+	}
+	return false
+}
+
+func (a *appState) transportActionLabel(plan transportPlan, playing bool) string {
+	if len(plan.items) == 0 {
+		return a.tr("No players", "没有播放器")
+	}
+	if plan.syncGroup {
+		if playing {
+			return a.tr("Pause stage + group", "暂停舞台和同步组")
+		}
+		return a.tr("Play stage + group", "播放舞台和同步组")
+	}
+	if playing {
+		return a.tr("Pause stage", "暂停舞台")
+	}
+	return a.tr("Play stage", "播放舞台")
+}
+
+func (a *appState) transportActionTooltip(plan transportPlan) string {
+	if len(plan.items) == 0 {
+		return a.tr("There are no players linked to the current stage.", "当前舞台没有已连接的播放器。")
+	}
+	if plan.syncGroup {
+		return a.tr("Controls every player linked to this stage and every player in its intersecting sync group.",
+			"控制当前舞台的播放器；舞台包含同步组成员时，也会控制该组的全部播放器。")
+	}
+	return a.tr("Controls every player linked to the current stage.", "控制当前舞台的全部播放器。")
 }
 
 // eventTime is the shared timeline's position, the value the event clock shows.

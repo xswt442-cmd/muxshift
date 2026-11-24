@@ -411,7 +411,7 @@ func (a *appState) sourceEntry(c *ui.Context, it *item, index int, compact bool,
 			}
 			if ui.Button(c.Key("compact-remove-"+string(itemKey(it))), a.tr("Remove", "移除")).
 				Height(24).Clicked() {
-				a.runCommand(command{Kind: commandRemove, Source: itemKey(it)})
+				a.unlinkStageMember(it)
 			}
 		})
 	}
@@ -549,7 +549,7 @@ func (a *appState) sourceActions(c *ui.Context, it *item, index int) {
 			}
 		}
 		if ui.Button(c.Key("card-remove-"+string(itemKey(it))), a.tr("Remove", "移除")).Height(28).Clicked() {
-			a.runCommand(command{Kind: commandRemove, Source: itemKey(it)})
+			a.unlinkStageMember(it)
 		}
 	})
 }
@@ -568,6 +568,9 @@ func (a *appState) sceneColumnBody(c *ui.Context, expanded bool) {
 						a.openAddSource()
 					}
 					for _, it := range a.items {
+						if !a.isStageMember(it) {
+							continue
+						}
 						if ui.Button(c.Key("rail-src-"+string(itemKey(it))), "▢").Width(28).Height(26).
 							Tooltip(sourceDisplayName(it)).Clicked() {
 							a.selected = itemKey(it)
@@ -700,6 +703,7 @@ func (a *appState) selectScene(id core.SceneID) {
 		return
 	}
 	a.activateSceneLayout(id)
+	a.reconcileStageSelection()
 	a.apply()
 	a.invalidate()
 	a.saveSession()
@@ -727,6 +731,7 @@ func (a *appState) removeScene(id core.SceneID) {
 			return
 		}
 		a.activateSceneLayout(next)
+		a.reconcileStageSelection()
 	}
 	if err := a.session.RemoveScene(id); err != nil {
 		a.lastErr = safeOpenError(err)
@@ -735,7 +740,12 @@ func (a *appState) removeScene(id core.SceneID) {
 	}
 	delete(a.edits, id)
 	delete(a.sceneLayouts, id)
+	delete(a.sceneMembers, id)
 	a.forgetPendingStageEdits(id)
+	if persistent := a.scenePersistentIDs[id]; persistent != "" {
+		delete(a.persistentSceneIDs, persistent)
+		delete(a.scenePersistentIDs, id)
+	}
 	delete(a.pendingBindings, id)
 	a.pruneStageEdits()
 	a.apply()
@@ -862,7 +872,9 @@ func (a *appState) preview(c *ui.Context, width, height float32) {
 			ui.Box(c).Width(pictureWidth).Height(pictureCap).MaxHeight(pictureCap).
 				Border(1, colorLineSoft).Children(func() {
 				a.stage(c)
-				a.stageCorner(c)
+				if a.firstShown() != nil {
+					a.stageCorner(c)
+				}
 			})
 			ui.Box(c).Grow(1)
 		})
@@ -996,26 +1008,31 @@ func (a *appState) layoutNote() string {
 func (a *appState) transportBar(c *ui.Context) {
 	event := a.eventTime()
 	first := a.firstShown()
+	plan, planErr := a.stageTransportPlan()
+	if planErr != nil {
+		plan = transportPlan{}
+	}
+	playing := a.playingFor(plan)
+	transportLabel := a.transportActionLabel(plan, playing)
+	transportTip := a.transportActionTooltip(plan)
 	ui.Row(c).WidthPercent(100).Height(44).Padding(0, spaceSm).Gap(spaceSm).
 		Background(colorBg).Border(0, colorBg).
 		AlignItems(ui.Center).Children(func() {
 		ui.Row(c).Grow(1).Justify(ui.SpaceBetween).AlignItems(ui.Center).Children(func() {
 			ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
-				playing := a.playing()
-				play := a.tr("Pause", "暂停")
-				if !playing {
-					play = a.tr("Play", "播放")
-				}
-				playButton := ui.ButtonBase(c.Key("transport-play")).Width(88).Height(a.controlHeight()).
+				playButton := ui.ButtonBase(c.Key("transport-play")).Width(180).Height(a.controlHeight()).
 					Padding(0, controlPadX).Radius(radiusMd).AlignItems(ui.Center).Shrink(0).AlignSelf(ui.Center)
 				fill, ink := colorEnabled, colorSelectedText
-				if len(a.items) == 0 {
+				if len(plan.items) == 0 {
 					fill, ink = colorPanel2, colorDim
-					playButton = playButton.Disabled(true)
+					playButton = playButton.Disabled(true).Tooltip(transportTip)
 				} else if playButton.Pressed() {
 					fill, ink = colorEnabledPress, colorText
 				} else if playButton.Hovered() {
 					fill, ink = colorEnabledHover, colorText
+				}
+				if len(plan.items) != 0 {
+					playButton = playButton.Tooltip(transportTip)
 				}
 				playButton = playButton.Background(fill).TextColor(ink)
 				playIcon := lucide.Play()
@@ -1025,11 +1042,11 @@ func (a *appState) transportBar(c *ui.Context) {
 				playButton.Children(func() {
 					ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 						ui.Icon(c, playIcon).Size(14, 14).TextColor(ink)
-						ui.Text(c, play).FontSize(textSmall).FontWeight(500).TextColor(ink).SingleLine()
+						ui.Text(c, transportLabel).FontSize(textSmall).FontWeight(500).TextColor(ink).SingleLine()
 					})
 				})
 				if playButton.Clicked() {
-					if a.playing() {
+					if playing {
 						a.runCommand(command{Kind: commandPause})
 					} else {
 						a.runCommand(command{Kind: commandPlay})
@@ -1174,7 +1191,7 @@ func (a *appState) soundTab(c *ui.Context, it *item, index int) {
 			}
 		}
 		if ui.Button(c.Key("snd-remove"), a.tr("Remove", "移除")).Height(26).Clicked() {
-			a.runCommand(command{Kind: commandRemove, Source: it.source.ID})
+			a.unlinkStageMember(it)
 		}
 	})
 	a.detailRow(c, a.tr("Align", "对齐"), a.alignedState(a.entryOf(it)))
@@ -1260,38 +1277,70 @@ func (a *appState) mixerChannel(c *ui.Context, it *item) {
 			if it.audio == "" {
 				return
 			}
-			muted := a.sourceMuted(it)
-			icon := lucide.Volume2()
-			tint := colorTextDim
-			if muted {
-				icon = lucide.VolumeX()
-				tint = colorDim
-			}
-			a.quietIconButton(c, "mix-mute-"+string(it.source.ID), icon,
-				a.sourceMuteTooltip(it), tint, func() {
-					a.runCommand(command{Kind: commandMute, Source: it.source.ID})
-				})
-			soloTint := colorTextDim
-			if a.solo == it.source.ID {
-				soloTint = colorAccent
-			}
-			a.quietIconButton(c, "mix-solo-"+string(it.source.ID), lucide.Headphones(),
-				a.tr("solo this routed source temporarily", "临时独听已路由的这一路"),
-				soloTint, func() { a.runCommand(command{Kind: commandSolo, Source: it.source.ID}) })
-			a.quietIconButton(c, "mix-route-"+string(it.source.ID), lucide.ListMusic(),
-				a.tr("route only this source in the scene", "将场景音频路由设为仅此路"),
-				colorTextDim, func() { a.runCommand(command{Kind: commandHear, Source: it.source.ID}) })
+			a.mixerActions(c, it, "mix")
 		})
 		if it.audio == "" {
 			return
 		}
-		ui.Row(c).WidthPercent(100).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
-			ui.Box(c).Grow(1)
-			if a.volumeSlider(c, "mix-vol-"+string(it.source.ID), &it.volume, 118) {
-				a.runCommand(command{Kind: commandVolume, Source: it.source.ID, Volume: it.volume})
-			}
-			a.numericReadout(c, fmt.Sprintf("%.0f%%", it.volume*100), 42)
+		a.mixerLevelControl(c, it, "mix-vol-", 118, 42)
+	})
+}
+
+func (a *appState) mixerActions(c *ui.Context, it *item, keyPrefix string) {
+	if it == nil || it.audio == "" {
+		return
+	}
+	muted := a.sourceMuted(it)
+	icon, tint := lucide.Volume2(), colorTextDim
+	if muted {
+		icon, tint = lucide.VolumeX(), colorDim
+	}
+	a.quietIconButton(c, keyPrefix+"-mute-"+string(it.source.ID), icon,
+		a.sourceMuteTooltip(it), tint, func() {
+			a.runCommand(command{Kind: commandMute, Source: it.source.ID})
 		})
+	soloTint := colorTextDim
+	if a.solo == it.source.ID {
+		soloTint = colorAccent
+	}
+	soloTip := a.tr("Solo this routed source temporarily", "临时独听已路由的这一路")
+	routed := a.routed(it)
+	if !routed {
+		soloTip = a.tr("Route this source into the scene before soloing it.", "先将此来源接入场景，再开启独听。")
+	}
+	solo := ui.ButtonBase(c.Key(keyPrefix + "-solo-" + string(it.source.ID))).
+		Width(28).Height(28).Radius(radiusMd).Padding(0).Tooltip(soloTip)
+	if !routed {
+		solo = solo.Disabled(true)
+	}
+	solo = solo.Background(stateFill(solo.Hovered(), solo.Pressed(), false)).TextColor(soloTint)
+	solo.Children(func() { ui.Icon(c, lucide.Headphones()).Size(16, 16) })
+	if solo.Clicked() {
+		a.runCommand(command{Kind: commandSolo, Source: it.source.ID})
+	}
+	a.quietIconButton(c, keyPrefix+"-route-"+string(it.source.ID), lucide.ListMusic(),
+		a.tr("Route only this source in the scene", "将场景音频路由设为仅此路"),
+		colorTextDim, func() { a.runCommand(command{Kind: commandHear, Source: it.source.ID}) })
+}
+
+func (a *appState) mixerLevel(it *item) float64 {
+	if level, ok := a.sceneLevel(it); ok {
+		return level.Volume
+	}
+	return it.volume
+}
+
+func (a *appState) mixerLevelControl(c *ui.Context, it *item, keyPrefix string, width, readoutWidth float32) {
+	if it == nil || it.audio == "" {
+		return
+	}
+	level := a.mixerLevel(it)
+	ui.Row(c).WidthPercent(100).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
+		ui.Box(c).Grow(1)
+		if a.volumeSlider(c, keyPrefix+string(it.source.ID), &level, width) {
+			a.runCommand(command{Kind: commandVolume, Source: it.source.ID, Volume: level})
+		}
+		a.numericReadout(c, fmt.Sprintf("%.0f%%", level*100), readoutWidth)
 	})
 }
 
@@ -1300,7 +1349,31 @@ func (a *appState) mixerChannelRouteLabel(it *item) string {
 	if solo := a.mixerChannelSoloLabel(it); solo != "" {
 		label += " · " + solo
 	}
+	if reasons := a.silences(it); len(reasons) > 0 && reasons[0] != "not in the scene" {
+		label += " · " + a.shortMixerReason(reasons[0])
+	}
 	return label
+}
+
+func (a *appState) shortMixerReason(reason string) string {
+	switch reason {
+	case "its player did not open":
+		return a.tr("player failed", "播放器失败")
+	case "muted":
+		return a.tr("source muted", "本路静音")
+	case "the scene's own mute":
+		return a.tr("scene muted", "场景静音")
+	case "master mute":
+		return a.tr("master muted", "总静音")
+	case "another source is soloed":
+		return a.tr("another source soloed", "另一来源独听")
+	case "the unaligned protection":
+		return a.tr("unaligned", "尚未对齐")
+	case "volume is zero":
+		return a.tr("zero volume", "音量为零")
+	default:
+		return a.localizedSilenceReason(reason)
+	}
 }
 
 func (a *appState) mixerChannelSoloLabel(it *item) string {

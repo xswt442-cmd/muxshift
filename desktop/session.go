@@ -283,6 +283,7 @@ type appState struct {
 	reselectText        string
 	startupMediaQueue   []string
 	pendingImportOrigin sourceOrigin
+	importScene         core.SceneID
 
 	// The shell's own state. systemLang is the window's locale, resolved once on
 	// the first frame, and is what "follow the system" means. applied* remember
@@ -459,17 +460,22 @@ type appState struct {
 	// sessionPath is where the session snapshot lives, derived from the settings
 	// path so the two files sit together; empty when there is nowhere to write.
 	// See session_store.go.
-	sessionPath          string
-	sessionWriteEnabled  bool
-	sessionErr           string
-	sourceIdentitySeq    uint64
-	pendingBindings      map[core.SceneID]map[string]pendingSceneBinding
-	pendingStageEdits    []storedStageEdits
-	pendingSyncGroups    []storedSyncGroup
-	pendingShifts        []storedShift
-	persistentSceneIDs   map[string]core.SceneID
-	pendingLayoutOrder   []string
-	sceneLayouts         map[core.SceneID]storedSceneLayout
+	sessionPath         string
+	sessionWriteEnabled bool
+	sessionErr          string
+	sourceIdentitySeq   uint64
+	pendingBindings     map[core.SceneID]map[string]pendingSceneBinding
+	pendingStageEdits   []storedStageEdits
+	pendingSyncGroups   []storedSyncGroup
+	pendingShifts       []storedShift
+	persistentSceneIDs  map[string]core.SceneID
+	scenePersistentIDs  map[core.SceneID]string
+	pendingLayoutOrder  []string
+	sceneLayouts        map[core.SceneID]storedSceneLayout
+	// sceneMembers records linked sources independently from video visibility
+	// and audio routing. Each scene maps persistent source IDs to membership.
+	sceneMembers         map[core.SceneID]map[string]bool
+	stageCatalogOpen     bool
 	startupSources       []storedSource
 	startupRestoreCancel context.CancelFunc
 
@@ -1253,6 +1259,13 @@ func (a *appState) landImport(token int, uri string, stream hls.Stream, mode imp
 	}
 	origin := a.pendingImportOrigin
 	a.pendingImportOrigin = originAdded
+	target := a.importScene
+	a.importScene = ""
+	if target == "" {
+		target = a.scene
+	}
+	_, targetErr := a.session.Scene(target)
+	targetAvailable := targetErr == nil
 	it := &item{uri: uri, volume: a.settingsSourceVolume(), origin: origin}
 	var err error
 	switch {
@@ -1282,15 +1295,29 @@ func (a *appState) landImport(token int, uri string, stream hls.Stream, mode imp
 			it.generation++
 			wakeNetworkPlayer(it.uri, rawPlayer(player), a.generationIs(it, it.generation))
 			a.items = append(a.items, it)
-			a.selected = it.source.ID
+			if target == a.scene {
+				a.selected = it.source.ID
+			}
+			// Ordinary startup selects the first video whose source and player
+			// both landed successfully. A failed earlier CLI candidate must not
+			// leave the stage pointing at a track that can never show a picture.
+			// UI and handoff imports keep their explicit Show behavior.
+			if origin == originCommandLine && target == a.scene && it.video != "" {
+				if scene, sceneErr := a.session.Scene(target); sceneErr == nil && len(scene.Video) == 0 {
+					if _, setErr := a.session.SetSceneVideo(target, it.video); setErr != nil {
+						a.lastErr = safeOpenError(setErr)
+					}
+				}
+			}
 			// A source the user just imported is audible by default: route its
 			// audio into the scene at its own level, exactly the way a source
 			// given on the command line is routed at startup. Without this the
 			// scene held no level for the track and apply() muted a source the
 			// user had just added, which is the "没有声音" in questions-v4 P0-1.
-			if it.audio != "" {
-				if _, routed := a.sceneLevel(it); !routed {
-					if _, err := a.session.SetSceneAudio(a.scene, it.audio, it.volume, false); err != nil {
+			if _, sceneErr := a.session.Scene(target); sceneErr == nil {
+				a.materializeStageMembers(target)[a.stageSourceID(it)] = true
+				if it.audio != "" {
+					if _, err := a.session.SetSceneAudio(target, it.audio, it.volume, false); err != nil {
 						a.lastErr = safeOpenError(err)
 					}
 				}
@@ -1334,6 +1361,9 @@ func (a *appState) landImport(token int, uri string, stream hls.Stream, mode imp
 		a.lastErr = safeOpenError(err)
 	} else {
 		result.Message = fmt.Sprintf("imported %s as %s; it is selected, Show puts it on the stage", shortURI(uri), it.source.ID)
+		if !targetAvailable {
+			result.Message = fmt.Sprintf("imported %s as %s into the shared catalog; the starting stage was deleted", shortURI(uri), it.source.ID)
+		}
 	}
 	a.lastCommand = result
 	if err != nil {
@@ -1553,6 +1583,9 @@ func (a *appState) addScene() {
 		a.invalidate()
 		return
 	}
+	a.persistentSceneID(scene.ID)
+	a.materializeStageMembers(a.scene)
+	a.sceneMembers[scene.ID] = make(map[string]bool)
 	a.selectScene(scene.ID)
 }
 
@@ -1806,6 +1839,9 @@ func (a *appState) remove(index int) error {
 		}
 	}
 	a.forgetPendingSource(it.persistentID)
+	for _, members := range a.sceneMembers {
+		delete(members, it.persistentID)
+	}
 	a.close(it)
 	a.items = append(a.items[:index], a.items[index+1:]...)
 	a.apply()

@@ -79,8 +79,8 @@ func TestSessionStoreRoundTrip(t *testing.T) {
 	if note != "" {
 		t.Fatalf("load note = %q, want none", note)
 	}
-	if got.ActiveScene != string(sceneID) {
-		t.Fatalf("active scene = %q, want %q", got.ActiveScene, sceneID)
+	if got.ActiveScene != "stage-1" {
+		t.Fatalf("active scene ID = %q, want stable persisted ID stage-1 (runtime %q)", got.ActiveScene, sceneID)
 	}
 	if len(got.Sources) != 1 {
 		t.Fatalf("sources = %d, want 1", len(got.Sources))
@@ -96,7 +96,7 @@ func TestSessionStoreRoundTrip(t *testing.T) {
 		t.Fatalf("scenes = %d, want 1", len(got.Scenes))
 	}
 	scene := got.Scenes[0]
-	if scene.ID != string(sceneID) || scene.Name != "Opening" {
+	if scene.ID != got.ActiveScene || scene.Name != "Opening" {
 		t.Fatalf("scene identity = %+v", scene)
 	}
 	if len(scene.Video) != 1 || scene.Video[0] != src.ID {
@@ -435,6 +435,116 @@ func TestStageLayoutsMigrateAndSaveIndependently(t *testing.T) {
 	app.removeScene(scenes[0].ID)
 	if len(app.session.Scenes()) != 1 || app.layout != layoutSplit || app.session.Outputs()[0].Scene != scenes[1].ID {
 		t.Fatalf("removing active stage did not move layout and output: %s %+v", app.layout, app.session.Outputs())
+	}
+}
+
+func TestLegacyGlobalLayoutOrderBelongsOnlyToActiveStage(t *testing.T) {
+	snap := storedSession{
+		ActiveScene: "second", Layout: "pip", LayoutOrder: []string{"source-b"},
+		Scenes:  []storedScene{{ID: "first"}, {ID: "second"}},
+		Sources: []storedSource{{ID: "source-a", NeedsReselect: true}, {ID: "source-b", NeedsReselect: true}},
+	}
+	app, err := newAppStateFromStore(defaultSettings(), snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scenes := app.session.Scenes()
+	a, b := app.itemByPersistentID("source-a"), app.itemByPersistentID("source-b")
+	app.selectScene(scenes[0].ID)
+	if app.isStageMember(b) {
+		t.Fatal("legacy global order leaked active-stage membership into another stage")
+	}
+	app.selectScene(scenes[1].ID)
+	if !app.isStageMember(b) || app.isStageMember(a) {
+		t.Fatalf("active-stage migration membership: b=%v a=%v", app.isStageMember(b), app.isStageMember(a))
+	}
+}
+
+func TestPersistentStageIDsSurviveDeletingMiddleStageAndRestore(t *testing.T) {
+	app, first, _ := newStoreFixture(t)
+	prepareStageMembershipFixture(t, app, first)
+	source := app.items[0]
+	source.persistentID = "source-a"
+	app.addScene()
+	middle := app.scene
+	app.addScene()
+	last := app.scene
+	if middle == first || last == middle {
+		t.Fatal("could not create and select the middle and last stages")
+	}
+	app.linkStageMember(source)
+	lastPersistent := app.persistentSceneID(last)
+	app.pendingStageEdits = []storedStageEdits{{
+		Scene: lastPersistent, Order: []string{source.persistentID}, Locked: []string{source.persistentID},
+	}}
+	app.removeScene(middle)
+	firstSnap := app.captureSessionStore()
+	if len(firstSnap.Scenes) != 2 || firstSnap.ActiveScene != lastPersistent {
+		t.Fatalf("snapshot stage IDs = %+v, active=%q, want two stages and active=%q", firstSnap.Scenes, firstSnap.ActiveScene, lastPersistent)
+	}
+	snapshot := firstSnap
+	for reopen := 1; reopen <= 2; reopen++ {
+		restored, err := newAppStateFromStoreDeferred(defaultSettings(), snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		snapshot = restored.captureSessionStore()
+		if snapshot.ActiveScene != lastPersistent || snapshot.Scenes[1].ID != lastPersistent ||
+			!slices.Equal(snapshot.Scenes[1].Members, []string{source.persistentID}) ||
+			!slices.Equal(snapshot.Scenes[1].Video, []string{source.persistentID}) ||
+			len(snapshot.Scenes[1].Audio) != 1 || snapshot.Scenes[1].Audio[0].Source != source.persistentID {
+			t.Fatalf("reopen %d changed stage identity or routes: %+v active=%q", reopen, snapshot.Scenes, snapshot.ActiveScene)
+		}
+		if len(snapshot.StageEdits) != 1 || snapshot.StageEdits[0].Scene != lastPersistent ||
+			!slices.Equal(snapshot.StageEdits[0].Order, []string{source.persistentID}) ||
+			!slices.Equal(snapshot.StageEdits[0].Locked, []string{source.persistentID}) {
+			t.Fatalf("reopen %d changed pending placement: %+v", reopen, snapshot.StageEdits)
+		}
+	}
+}
+
+func TestMissingStageIDDoesNotTakeLaterValidID(t *testing.T) {
+	snap := storedSession{
+		ActiveScene: "stage-1",
+		Scenes:      []storedScene{{ID: ""}, {ID: "stage-1"}},
+	}
+	app, err := newAppStateFromStore(defaultSettings(), snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := app.captureSessionStore()
+	if stored.Scenes[0].ID == "stage-1" || stored.Scenes[1].ID != "stage-1" || stored.ActiveScene != "stage-1" {
+		t.Fatalf("ID allocation stole a valid later ID: %+v active=%q", stored.Scenes, stored.ActiveScene)
+	}
+}
+
+func TestSessionStoreCaptureOwnsNestedSlices(t *testing.T) {
+	app, _, _ := newStoreFixture(t)
+	other, err := app.session.AddScene("Inactive stage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := app.items[0]
+	source.persistentID = "saved-source"
+	order := []string{source.persistentID}
+	otherID := app.persistentSceneID(other.ID)
+	app.sceneLayouts = map[core.SceneID]storedSceneLayout{other.ID: {Layout: "grid", LayoutOrder: order}}
+	app.pendingStageEdits = []storedStageEdits{{Scene: otherID, Order: []string{source.persistentID}}}
+	app.pendingSyncGroups = []storedSyncGroup{{Tracks: []storedTrackRef{{Source: source.persistentID}}}}
+
+	snapshot := app.captureSessionStore()
+	order[0] = "changed"
+	app.pendingStageEdits[0].Order[0] = "changed"
+	app.pendingSyncGroups[0].Tracks[0].Source = "changed"
+
+	if got := snapshot.Scenes[1].LayoutOrder; !slices.Equal(got, []string{source.persistentID}) {
+		t.Fatalf("captured layout changed: %v", got)
+	}
+	if got := snapshot.StageEdits[0].Order; !slices.Equal(got, []string{source.persistentID}) {
+		t.Fatalf("captured stage edits changed: %v", got)
+	}
+	if got := snapshot.SyncGroups[0].Tracks[0].Source; got != source.persistentID {
+		t.Fatalf("captured sync group changed: %q", got)
 	}
 }
 

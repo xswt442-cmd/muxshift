@@ -667,14 +667,12 @@ func (a *appState) stage(c *ui.Context) {
 				ui.Text(c, a.tr("No picture yet", "还没有画面")).
 					FontSize(textTitle).TextColor(colorText)
 				if hasSources {
-					ui.Text(c, a.tr("This scene holds no picture. Add one in the console's sources.",
-						"这个场景还没有画面，在控制台的「来源」里把它放上来。")).
+					ui.Text(c, a.tr("Show a source or add an existing source from the console.",
+						"可在控制台显示来源，或添加已有来源。")).
 						FontSize(textSmall).TextColor(colorDim)
 					if ui.Button(c.Key("empty-console"), a.tr("Show the sources", "显示来源")).Height(26).
 						Padding(0, spaceMd).Background(colorAccent).TextColor(colorAccentText).Clicked() {
-						delete(a.dockHidden, dockSources)
-						a.dockUp = true
-						a.invalidate()
+						a.showSourcesPanel()
 					}
 					return
 				}

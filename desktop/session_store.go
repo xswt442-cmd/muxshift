@@ -16,12 +16,15 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/xswt442-cmd/muxshift/core"
 )
+
+var traceSessionSaveTiming = os.Getenv("MUXSHIFT_SESSION_SAVE_TIMING") == "1"
 
 // storedSession is one run's arrangement, as written to disk.
 type storedSession struct {
@@ -65,10 +68,11 @@ type storedShift struct {
 // storedScene is one scene's name and the sources it shows and hears. The track
 // ids are not stable across a restart, so each entry names the source instead.
 type storedScene struct {
-	ID    string        `json:"id,omitempty"`
-	Name  string        `json:"name,omitempty"`
-	Video []string      `json:"video,omitempty"`
-	Audio []storedAudio `json:"audio,omitempty"`
+	ID      string        `json:"id,omitempty"`
+	Name    string        `json:"name,omitempty"`
+	Video   []string      `json:"video,omitempty"`
+	Audio   []storedAudio `json:"audio,omitempty"`
+	Members []string      `json:"members"`
 	storedSceneLayout
 }
 
@@ -110,7 +114,8 @@ func sessionStorePath(settingsPath string) string {
 // nothing after a restart while a source id does.
 func (a *appState) captureSessionStore() storedSession {
 	activeLayout := a.captureSceneLayout()
-	snap := storedSession{ActiveScene: string(a.scene), Layout: activeLayout.Layout, LayoutOrder: activeLayout.LayoutOrder}
+	activeID := a.persistentSceneID(a.scene)
+	snap := storedSession{ActiveScene: activeID, Layout: activeLayout.Layout, LayoutOrder: slices.Clone(activeLayout.LayoutOrder)}
 	owner := make(map[core.TrackID]string, len(a.items)*2)
 	trackRefs := make(map[core.TrackID]storedTrackRef, len(a.items)*2)
 	for _, it := range a.items {
@@ -145,7 +150,9 @@ func (a *appState) captureSessionStore() storedSession {
 			NeedsReselect: needsReselect,
 		})
 	}
-	for _, scene := range a.session.Scenes() {
+	scenes := a.session.Scenes()
+	sceneIDs := make(map[core.SceneID]string, len(scenes))
+	for _, scene := range scenes {
 		layout := a.sceneLayouts[scene.ID]
 		if scene.ID == a.scene {
 			layout = activeLayout
@@ -153,7 +160,15 @@ func (a *appState) captureSessionStore() storedSession {
 		if layout.Layout == "" {
 			layout.Layout = layoutFocus.String()
 		}
-		stored := storedScene{ID: string(scene.ID), Name: scene.Name, storedSceneLayout: layout}
+		id := a.persistentSceneID(scene.ID)
+		sceneIDs[scene.ID] = id
+		stored := storedScene{ID: id, Name: scene.Name, storedSceneLayout: cloneStoredSceneLayout(layout), Members: []string{}}
+		members := a.sceneMembers[scene.ID]
+		for _, it := range a.items {
+			if members == nil || members[it.persistentID] {
+				stored.Members = append(stored.Members, it.persistentID)
+			}
+		}
 		videoSources := make(map[string]bool, len(scene.Video))
 		audioSources := make(map[string]bool, len(scene.Audio))
 		for _, track := range scene.Video {
@@ -212,13 +227,13 @@ func (a *appState) captureSessionStore() storedSession {
 			copy(stored.Audio[insertAt+1:], stored.Audio[insertAt:])
 			stored.Audio[insertAt] = pending.audio
 		}
-		snap.Scenes = append(snap.Scenes, stored)
-	}
-	sceneIDs := make(map[core.SceneID]string, len(snap.Scenes))
-	for i, scene := range a.session.Scenes() {
-		if i < len(snap.Scenes) {
-			sceneIDs[scene.ID] = string(scene.ID)
+		for _, source := range stored.Video {
+			stored.Members = appendUniqueString(stored.Members, source)
 		}
+		for _, level := range stored.Audio {
+			stored.Members = appendUniqueString(stored.Members, level.Source)
+		}
+		snap.Scenes = append(snap.Scenes, stored)
 	}
 	for sceneID, edits := range a.edits {
 		if edits == nil {
@@ -267,7 +282,10 @@ func (a *appState) captureSessionStore() storedSession {
 		}
 		snap.SyncGroups = append(snap.SyncGroups, stored)
 	}
-	snap.SyncGroups = append(snap.SyncGroups, a.pendingSyncGroups...)
+	for _, pending := range a.pendingSyncGroups {
+		pending.Tracks = slices.Clone(pending.Tracks)
+		snap.SyncGroups = append(snap.SyncGroups, pending)
+	}
 	if a.sync != nil && a.sync.timeline != nil {
 		for _, shift := range a.sync.timeline.Shifts() {
 			if ref := trackRefs[shift.Track]; ref.Source != "" {
@@ -277,6 +295,40 @@ func (a *appState) captureSessionStore() storedSession {
 	}
 	snap.Shifts = append(snap.Shifts, a.pendingShifts...)
 	return snap
+}
+
+func cloneStoredSceneLayout(layout storedSceneLayout) storedSceneLayout {
+	layout.LayoutOrder = slices.Clone(layout.LayoutOrder)
+	return layout
+}
+
+func (a *appState) persistentSceneID(id core.SceneID) string {
+	if id == "" {
+		return ""
+	}
+	if stored := a.scenePersistentIDs[id]; stored != "" {
+		return stored
+	}
+	if a.scenePersistentIDs == nil {
+		a.scenePersistentIDs = make(map[core.SceneID]string)
+	}
+	for stored, runtime := range a.persistentSceneIDs {
+		if runtime == id && stored != "" {
+			a.scenePersistentIDs[id] = stored
+			return stored
+		}
+	}
+	if a.persistentSceneIDs == nil {
+		a.persistentSceneIDs = make(map[string]core.SceneID)
+	}
+	for n := 1; ; n++ {
+		candidate := fmt.Sprintf("stage-%d", n)
+		if a.persistentSceneIDs[candidate] == "" {
+			a.scenePersistentIDs[id] = candidate
+			a.persistentSceneIDs[candidate] = id
+			return candidate
+		}
+	}
 }
 
 func (a *appState) captureSceneLayout() storedSceneLayout {
@@ -387,6 +439,13 @@ func containsString(values []string, value string) bool {
 		}
 	}
 	return false
+}
+
+func appendUniqueString(values []string, value string) []string {
+	if value != "" && !containsString(values, value) {
+		return append(values, value)
+	}
+	return values
 }
 
 func (a *appState) itemByPersistentID(id string) *item {
@@ -548,7 +607,14 @@ func (a *appState) saveSession() error {
 	if a.session == nil || a.sessionPath == "" || !a.sessionWriteEnabled {
 		return nil
 	}
+	var started time.Time
+	if traceSessionSaveTiming {
+		started = time.Now()
+	}
 	snap := a.captureSessionStore()
+	if !started.IsZero() {
+		log.Printf("session timing: capture_us=%d", time.Since(started).Microseconds())
+	}
 	a.sessionSaveMu.Lock()
 	a.sessionSaveSeq++
 	a.sessionSavePending = &snap
@@ -587,7 +653,13 @@ func (a *appState) writeSessionSnapshotLocked(snap storedSession) error {
 	if writer == nil {
 		writer = saveSessionStore
 	}
-	return writer(a.sessionPath, snap)
+	if !traceSessionSaveTiming {
+		return writer(a.sessionPath, snap)
+	}
+	started := time.Now()
+	err := writer(a.sessionPath, snap)
+	log.Printf("session timing: write_us=%d ok=%t", time.Since(started).Microseconds(), err == nil)
+	return err
 }
 
 func (a *appState) finishSessionSnapshot(seq uint64, err error) {
@@ -856,6 +928,7 @@ func newAppStateFromStore(loaded settings, snap storedSession) (*appState, error
 	app := newAppShell(session, "", "", loaded)
 	app.pendingBindings = make(map[core.SceneID]map[string]pendingSceneBinding)
 	app.sceneLayouts = make(map[core.SceneID]storedSceneLayout)
+	app.sceneMembers = make(map[core.SceneID]map[string]bool)
 	app.pendingStageEdits = append([]storedStageEdits(nil), snap.StageEdits...)
 	app.pendingSyncGroups = append([]storedSyncGroup(nil), snap.SyncGroups...)
 	app.pendingShifts = append([]storedShift(nil), snap.Shifts...)
@@ -896,8 +969,31 @@ func newAppStateFromStore(loaded settings, snap storedSession) (*appState, error
 
 	var first core.SceneID
 	sceneIDs := make(map[string]core.SceneID, len(snap.Scenes))
+	persistentIDs := make([]string, len(snap.Scenes))
+	reservedIDs := make(map[string]bool, len(snap.Scenes))
+	for i, stored := range snap.Scenes {
+		if stored.ID != "" && !reservedIDs[stored.ID] {
+			persistentIDs[i] = stored.ID
+			reservedIDs[stored.ID] = true
+		}
+	}
+	nextID := 1
+	for i := range persistentIDs {
+		if persistentIDs[i] != "" {
+			continue
+		}
+		for {
+			candidate := fmt.Sprintf("stage-%d", nextID)
+			nextID++
+			if !reservedIDs[candidate] {
+				persistentIDs[i] = candidate
+				reservedIDs[candidate] = true
+				break
+			}
+		}
+	}
 	var restoreErr error
-	for _, stored := range snap.Scenes {
+	for sceneIndex, stored := range snap.Scenes {
 		scene, err := session.AddScene(stored.Name)
 		if err != nil {
 			return nil, err
@@ -905,17 +1001,62 @@ func newAppStateFromStore(loaded settings, snap storedSession) (*appState, error
 		if first == "" {
 			first = scene.ID
 		}
-		if stored.ID != "" {
-			sceneIDs[stored.ID] = scene.ID
-		}
+		persistentID := persistentIDs[sceneIndex]
+		sceneIDs[persistentID] = scene.ID
 		layout := stored.storedSceneLayout
 		if layout.Layout == "" {
 			layout = storedSceneLayout{Layout: snap.Layout, LayoutOrder: snap.LayoutOrder}
 		}
 		layout.LayoutOrder = append([]string(nil), layout.LayoutOrder...)
 		app.sceneLayouts[scene.ID] = layout
+		members := make(map[string]bool)
+		app.sceneMembers[scene.ID] = members
+		for _, source := range stored.Members {
+			if byID[source] != nil {
+				members[source] = true
+			}
+		}
+		if stored.Members == nil && len(snap.Scenes) == 1 {
+			for source := range byID {
+				members[source] = true
+			}
+		}
+		if stored.Members == nil {
+			for _, edit := range snap.StageEdits {
+				if edit.Scene != stored.ID {
+					continue
+				}
+				for _, box := range edit.Boxes {
+					if byID[box.Source] != nil {
+						members[box.Source] = true
+					}
+				}
+				for _, source := range append(slices.Clone(edit.Order), edit.Locked...) {
+					if byID[source] != nil {
+						members[source] = true
+					}
+				}
+			}
+			if stored.ID == snap.ActiveScene {
+				for _, source := range snap.LayoutOrder {
+					if byID[source] != nil {
+						members[source] = true
+					}
+				}
+			}
+			if stored.storedSceneLayout.LayoutOrder != nil {
+				for _, source := range stored.storedSceneLayout.LayoutOrder {
+					if byID[source] != nil {
+						members[source] = true
+					}
+				}
+			}
+		}
 		video := make([]core.TrackID, 0, len(stored.Video))
 		for index, source := range stored.Video {
+			if byID[source] != nil {
+				members[source] = true
+			}
 			if it := byID[source]; it != nil && it.video != "" {
 				video = append(video, it.video)
 			} else if byID[source] != nil {
@@ -932,6 +1073,7 @@ func newAppStateFromStore(loaded settings, snap storedSession) (*appState, error
 			if it == nil {
 				continue
 			}
+			members[level.Source] = true
 			if it.audio == "" {
 				copy := level
 				app.setPendingAudio(scene.ID, level.Source, copy, index)
@@ -956,6 +1098,10 @@ func newAppStateFromStore(loaded settings, snap storedSession) (*appState, error
 	}
 	app.output = output.ID
 	app.persistentSceneIDs = sceneIDs
+	app.scenePersistentIDs = make(map[core.SceneID]string, len(sceneIDs))
+	for persistent, runtime := range sceneIDs {
+		app.scenePersistentIDs[runtime] = persistent
+	}
 	app.restorePersistentMetadata(sceneIDs)
 	app.apply()
 	return app, nil
@@ -1183,7 +1329,7 @@ func (a *appState) forgetPendingSource(source string) {
 	}
 	a.pendingLayoutOrder = removeString(a.pendingLayoutOrder, source)
 	for id, layout := range a.sceneLayouts {
-		layout.LayoutOrder = removeString(layout.LayoutOrder, source)
+		layout.LayoutOrder = removeString(slices.Clone(layout.LayoutOrder), source)
 		a.sceneLayouts[id] = layout
 	}
 	for i := range a.pendingStageEdits {

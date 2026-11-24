@@ -355,9 +355,9 @@ func (a *appState) dockSourcesBody(c *ui.Context) {
 	ui.Row(c).WidthPercent(100).Height(28).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
 		a.iconButton(c, "dock-src-add", lucide.Plus(), a.tr("add a source", "添加来源"), false,
 			a.openAddSource)
-		a.iconButton(c, "dock-src-remove", lucide.Minus(), a.tr("remove the selected source", "移除选中的来源"), false, func() {
+		a.iconButton(c, "dock-src-remove", lucide.Minus(), a.tr("remove from this stage", "从当前舞台移除"), false, func() {
 			if it := a.find(a.selected); it != nil {
-				a.runCommand(command{Kind: commandRemove, Source: it.source.ID})
+				a.unlinkStageMember(it)
 			}
 		})
 		a.iconButton(c, "dock-src-up", lucide.ChevronUp(), a.tr("toward the front", "往前一层"), false, func() {
@@ -376,14 +376,64 @@ func (a *appState) dockSourcesBody(c *ui.Context) {
 		}
 	})
 	a.importFailureNotice(c)
-	if len(a.items) == 0 {
-		ui.Text(c, a.tr("No sources yet.", "还没有来源。")).FontSize(textCaption).
-			TextColor(colorDim).Wrap()
-		return
-	}
+	a.stageCatalog(c)
+	memberCount := 0
 	for i, it := range a.items {
-		a.sourceEntry(c, it, i, true, placed)
+		if !a.isStageMember(it) {
+			continue
+		}
+		memberCount++
+		row := it
+		ui.Row(c).WidthPercent(100).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
+			a.sourceEntry(c, row, i, true, placed)
+			a.iconButton(c, "dock-unlink-"+string(itemKey(row)), lucide.X(),
+				a.tr("remove from this stage", "从当前舞台移除"), false, func() {
+					a.unlinkStageMember(row)
+				})
+		})
 	}
+	if memberCount == 0 {
+		message := a.tr("No sources yet.", "还没有来源。")
+		if len(a.items) > 0 {
+			message = a.tr("No sources on this stage.", "当前舞台没有来源。")
+		}
+		ui.Text(c, message).FontSize(textCaption).TextColor(colorDim).Wrap()
+	}
+}
+
+// stageCatalog exposes session sources that are not linked to the active
+// stage. Adding one links that shared source; it never creates another player.
+func (a *appState) stageCatalog(c *ui.Context) {
+	ui.Column(c).WidthPercent(100).Gap(spaceXs).Children(func() {
+		label := a.tr("Shared source catalog", "共享来源目录")
+		if a.stageCatalogOpen {
+			label = a.tr("Hide source catalog", "收起来源目录")
+		}
+		if ui.Button(c.Key("stage-catalog-toggle"), label).Height(26).Clicked() {
+			a.stageCatalogOpen = !a.stageCatalogOpen
+		}
+		if !a.stageCatalogOpen {
+			return
+		}
+		ui.Text(c, a.tr("Unlinking keeps the source and player here. Delete it only from this catalog.", "从舞台移除会保留目录和播放器；仅在此目录中彻底删除。")).
+			FontSize(textMicro).TextColor(colorDim).Wrap()
+		for _, it := range a.items {
+			if a.isStageMember(it) {
+				continue
+			}
+			row := it
+			ui.Row(c).WidthPercent(100).Height(28).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, sourceDisplayName(row)).FontSize(textSmall).TextColor(colorText).Grow(1).MinWidth(0).SingleLine()
+				if ui.Button(c.Key("stage-link-"+string(itemKey(row))), a.tr("Add Existing", "添加现有来源")).Height(24).Clicked() {
+					a.linkStageMember(row)
+					a.stageCatalogOpen = false
+				}
+				if !a.sourceHasStageMember(row.persistentID) && ui.Button(c.Key("catalog-delete-"+string(itemKey(row))), a.tr("Delete", "删除")).Height(24).Clicked() {
+					a.removeCatalogSource(row)
+				}
+			})
+		}
+	})
 }
 
 // syncBadge says, in two words, whether the source shares a clock with the
@@ -439,10 +489,13 @@ func (a *appState) dockRowsBody(c *ui.Context) {
 	ui.Column(c).Fill().WidthPercent(100).Padding(spaceSm, spaceSm).Gap(spaceXs).Children(func() {
 		ui.Row(c).WidthPercent(100).Height(22).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, a.tr("Source", "来源")).FontSize(textMicro).TextColor(colorDim).Grow(1).MinWidth(0)
-			ui.Text(c, a.tr("Level", "音量")).FontSize(textMicro).TextColor(colorDim).Width(160)
+			ui.Text(c, a.tr("Level", "音量")).FontSize(textMicro).TextColor(colorDim).Width(220)
 			ui.Text(c, a.tr("Offset", "偏移")).FontSize(textMicro).TextColor(colorDim).Width(190)
 		})
 		for i, it := range a.items {
+			if !a.isStageMember(it) {
+				continue
+			}
 			row, index := it, i
 			ui.Box(c).WidthPercent(100).Height(48).Radius(radiusCard).Background(colorPanel).
 				Border(1, colorLineSoft).Padding(spaceXs, spaceSm).Children(func() {
@@ -471,8 +524,13 @@ func (a *appState) dockRowsBody(c *ui.Context) {
 						} else {
 							state += " · paused"
 						}
-						ui.Text(c, state).FontSize(textMicro).TextColor(colorDim).
-							MinWidth(0).SingleLine()
+						status := a.mixerChannelRouteLabel(row)
+						if status != "" {
+							status += " · "
+						}
+						status += state
+						ui.Text(c, status).FontSize(textMicro).TextColor(colorDim).
+							MinWidth(0).SingleLine().Tooltip(a.localizedMixerLine(row))
 					})
 					key := string(itemKey(row))
 					visibleLabel := a.tr("Hide", "隐藏")
@@ -508,23 +566,16 @@ func (a *appState) dockRowsBody(c *ui.Context) {
 						a.tr("toward the back", "往后一层"), false, func() {
 							a.lowerStage(row.source.ID, false)
 						})
-					ui.Row(c).Width(160).Gap(2).AlignItems(ui.Center).Children(func() {
-						muted := a.sourceMuted(row)
-						icon := lucide.Volume2()
-						tint := colorTextDim
-						if muted {
-							icon = lucide.VolumeX()
-							tint = colorDim
-						}
-						a.quietIconButton(c, "row-mute-"+string(row.source.ID), icon,
-							a.sourceMuteTooltip(row), tint, func() {
-								a.runCommand(command{Kind: commandMute, Source: row.source.ID})
-							})
-						if a.volumeSlider(c, "row-vol-"+string(row.source.ID), &row.volume, 84) {
-							a.runCommand(command{Kind: commandVolume, Source: row.source.ID, Volume: row.volume})
-						}
-						a.numericReadout(c, fmt.Sprintf("%.0f%%", row.volume*100), 42)
-					})
+					if row.audio != "" {
+						ui.Row(c).Width(220).Gap(2).AlignItems(ui.Center).Children(func() {
+							a.mixerActions(c, row, "row-mix")
+							level := a.mixerLevel(row)
+							if a.volumeSlider(c, "row-vol-"+string(row.source.ID), &level, 72) {
+								a.runCommand(command{Kind: commandVolume, Source: row.source.ID, Volume: level})
+							}
+							a.numericReadout(c, fmt.Sprintf("%.0f%%", level*100), 38)
+						})
+					}
 					ui.Row(c).Width(190).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
 						a.offsetStepper(c, "row-step-"+string(row.source.ID), a.entryOf(row).Offset,
 							a.settingsNudge(1), func(delta time.Duration) {
@@ -545,9 +596,9 @@ func (a *appState) dockRowsBody(c *ui.Context) {
 						a.eyeTip(row), a.eyeTint(row), func() {
 							a.toggleVideo(index)
 						})
-					a.iconButton(c, "row-remove-"+string(row.source.ID), lucide.X(),
-						a.tr("remove this source", "移除这个来源"), false, func() {
-							a.runCommand(command{Kind: commandRemove, Source: row.source.ID})
+					a.iconButton(c, "row-unlink-"+string(itemKey(row)), lucide.X(),
+						a.tr("remove from this stage", "从当前舞台移除"), false, func() {
+							a.unlinkStageMember(row)
 						})
 				})
 			})
@@ -557,6 +608,7 @@ func (a *appState) dockRowsBody(c *ui.Context) {
 				"这里还是空的。用 ＋ 添加文件或地址。")).
 				FontSize(textCaption).TextColor(colorDim).Padding(spaceSm, spaceSm)
 		}
+		a.stageCatalog(c)
 	})
 }
 
@@ -585,27 +637,41 @@ func (a *appState) dockMixerBody(c *ui.Context) {
 			a.runCommand(command{Kind: commandMasterMute})
 		}
 	})
-	if len(a.items) == 0 {
+	memberCount := 0
+	for _, it := range a.items {
+		if a.isStageMember(it) {
+			memberCount++
+		}
+	}
+	if memberCount == 0 {
 		ui.Text(c, a.tr("Nothing to mix yet.", "还没有可调的声音。")).FontSize(textCaption).
 			TextColor(colorDim).Wrap()
 		return
 	}
 	for _, it := range a.items {
-		a.mixerChannel(c, it)
+		if a.isStageMember(it) {
+			a.mixerChannel(c, it)
+		}
 	}
 }
 
 // syncReference is the source the others are measured against: the one picked
 // in this panel, or the first picture on the stage when nobody picked one.
 func (a *appState) syncReference() *item {
-	if it := a.find(a.syncRef); it != nil {
+	if it := a.find(a.syncRef); it != nil && a.isStageMember(it) {
 		return it
 	}
 	return a.firstShown()
 }
 
 func (a *appState) dockSyncBody(c *ui.Context) {
-	if len(a.items) == 0 {
+	memberCount := 0
+	for _, it := range a.items {
+		if a.isStageMember(it) {
+			memberCount++
+		}
+	}
+	if memberCount == 0 {
 		ui.Text(c, a.tr("Nothing to line up yet.", "还没有可对齐的来源。")).FontSize(textCaption).
 			TextColor(colorDim).Wrap()
 		return
@@ -626,6 +692,9 @@ func (a *appState) dockSyncBody(c *ui.Context) {
 		}
 	})
 	for i, it := range a.items {
+		if !a.isStageMember(it) {
+			continue
+		}
 		isRef := reference != nil && it.source.ID == reference.source.ID
 		row := it
 		edge := colorLineSoft

@@ -146,16 +146,22 @@ func (a *appState) runCommand(cmd command) commandResult {
 
 	switch cmd.Kind {
 	case commandPause, commandPlay:
-		var problems []string
-		if cmd.Kind == commandPause {
-			problems = a.pauseAll()
-		} else {
-			problems = a.playAll()
+		plan, err := a.stageTransportPlan()
+		if err != nil {
+			return finish(err, "")
 		}
+		if len(plan.items) == 0 {
+			return finish(errors.New("the current stage has no players to control"), "no players on the current stage")
+		}
+		play := cmd.Kind == commandPlay
+		problems := a.applyTransportPlan(plan, play)
 		if len(problems) > 0 {
-			return finish(errors.New(problems[0]), fmt.Sprintf("%d member(s) did not accept it", len(problems)))
+			return finish(errors.New(problems[0]), fmt.Sprintf("%d stage or sync-group player(s) did not accept it", len(problems)))
 		}
-		return finish(nil, "every member accepted it")
+		if plan.syncGroup {
+			return finish(nil, "stage players and the intersecting sync group accepted it")
+		}
+		return finish(nil, "stage players accepted it")
 
 	case commandReload:
 		it, _, err := a.itemBySource(cmd.Source)
@@ -173,6 +179,9 @@ func (a *appState) runCommand(cmd command) commandResult {
 		it, index, err := a.itemBySource(cmd.Source)
 		if err != nil {
 			return finish(err, "")
+		}
+		if !a.isStageMember(it) {
+			return finish(errors.New("link this source to the current stage from the shared catalog first"), "")
 		}
 		result.Generation = it.generation
 		switch cmd.Kind {
@@ -239,6 +248,7 @@ func (a *appState) runCommand(cmd command) commandResult {
 		a.importToken++
 		token := a.importToken
 		a.importing = uri
+		a.importScene = a.scene
 		a.importText = ""
 		a.importSince = time.Now()
 		a.importCancel = cancel
@@ -259,6 +269,7 @@ func (a *appState) runCommand(cmd command) commandResult {
 		}
 		a.startupMediaQueue = nil
 		a.pendingImportOrigin = originAdded
+		a.importScene = ""
 		a.retryTargetID = ""
 		a.closeImportTicker()
 		a.importing = ""

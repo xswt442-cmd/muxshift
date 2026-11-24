@@ -357,6 +357,89 @@ func (a *appState) sourceInExplicitGroup(it *item) bool {
 	return false
 }
 
+// transportPlan is the set of players the stage transport reads or controls.
+// A matching existing sync group is included as a whole, while other stage
+// members remain independent players.
+type transportPlan struct {
+	items     []*item
+	syncGroup bool
+}
+
+// stageTransportPlan selects current stage members and adds the current sync
+// group only when a stage target belongs to it. It does not create or change a
+// group, and route or picture visibility does not affect stage membership.
+func (a *appState) stageTransportPlan() (transportPlan, error) {
+	if a == nil || a.session == nil {
+		return transportPlan{}, fmt.Errorf("no active session")
+	}
+	if _, err := a.session.Scene(a.scene); err != nil {
+		return transportPlan{}, err
+	}
+
+	plan := transportPlan{items: make([]*item, 0, len(a.items))}
+	targets := make(map[*item]bool, len(a.items))
+	for _, it := range a.items {
+		if it == nil || it.player == nil || !a.isStageMember(it) {
+			continue
+		}
+		plan.items = append(plan.items, it)
+		targets[it] = true
+	}
+
+	group, ok := a.existingGroup()
+	if !ok {
+		return plan, nil
+	}
+	groupTracks := make(map[core.TrackID]bool, len(group.Tracks))
+	for _, track := range group.Tracks {
+		groupTracks[track] = true
+	}
+	intersects := false
+	for it := range targets {
+		if groupTracks[it.video] || groupTracks[it.audio] {
+			intersects = true
+			break
+		}
+	}
+	if !intersects {
+		return plan, nil
+	}
+
+	plan.syncGroup = true
+	for _, it := range a.items {
+		if it == nil || it.player == nil || (!groupTracks[it.video] && !groupTracks[it.audio]) || targets[it] {
+			continue
+		}
+		plan.items = append(plan.items, it)
+		targets[it] = true
+	}
+	return plan, nil
+}
+
+// applyTransportPlan applies a previously selected stage plan. The shared
+// event clock moves only when the plan includes its sync group.
+func (a *appState) applyTransportPlan(plan transportPlan, play bool) []string {
+	if plan.syncGroup && a.sync != nil && a.sync.playhead != nil {
+		if play {
+			a.sync.playhead.Play()
+		} else {
+			a.sync.playhead.Pause()
+		}
+	}
+	problems := make([]string, 0, 1)
+	for _, it := range plan.items {
+		if play {
+			it.player.Play()
+		} else {
+			it.player.Pause()
+		}
+		if err := it.player.Err(); err != nil {
+			problems = append(problems, fmt.Sprintf("%s: %v", a.name(it), err))
+		}
+	}
+	return problems
+}
+
 // name labels a source in group messages so a failure names the source it came
 // from instead of only the error text.
 func (a *appState) name(it *item) string {

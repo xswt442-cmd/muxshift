@@ -18,8 +18,9 @@ never copies cookies, request headers, or keys.
   one typed in by hand. The popup distinguishes scanning, pairing, sending, and
   acceptance; acceptance means the desktop accepted the import command, not
   that the media opened. Check Stage → Sources for its status and any later failure.
-- Resolve and send use the scanned active page. Reopen the popup to scan again
-  if the tab switches, navigates, or reloads.
+- Resolve and send use the scanned active page. If the tab switches, navigates,
+  or reloads, the popup disables the old selection and asks you to reopen it
+  for a fresh scan.
 
 There is no native messaging host. The window prints a six-digit pairing code
 on the Diagnostics page; typing it in the popup once exchanges it for a token

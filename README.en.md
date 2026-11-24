@@ -22,7 +22,7 @@
 ## What it does
 
 - **Several sources in one session**: each source keeps its own audio and video tracks, and a scene picks which picture is shown and which sound is played. Volume is set per source.
-- A normal desktop launch reopens saved sources. Each stage keeps its layout, primary picture, and audio routing, and a temporary launch with `-media` preserves the saved session.
+- A normal desktop launch reopens saved sources. Each stage keeps its source list, layout, primary picture, and audio routing. A temporary launch with `-media` preserves the saved session.
 - On the stage, show or hide each source, make it primary, or play and pause it independently. Sources in a sync group use the group transport.
 - **Manual alignment**: nudge one source against another in steps of 0.1 s. A playlist that carries PDT also yields a cross-source suggestion; the automatic result is only a suggestion and never writes the timeline.
 - **Replay of a live stream**: live segments stay in a bounded directory, the remaining range is reported, and one span can be cut into a recording you can play back.

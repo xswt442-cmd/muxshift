@@ -11,6 +11,7 @@ This changelog records completed changes that matter to someone using MuxShift. 
 **新增**
 
 - 桌面端分别保存各舞台的布局、主画面和音频分配。来源面板可逐路显示、暂停和恢复播放。
+- 各舞台可从共享目录添加已有来源。解除一个舞台的引用后，其他舞台仍可使用该来源。
 
 **改进**
 
@@ -20,12 +21,16 @@ This changelog records completed changes that matter to someone using MuxShift. 
 
 - 点击编辑位置时会选中一个可见画面，短窗口也能操作下沿的缩放把手。
 - 来源按保存顺序恢复，临时打不开时可取消恢复并保留原有分配。拖动音量等连续保存不会再因两个计时器同时写入而卡住。
+- 暂时离线的来源保留原舞台的摆位和路由，即使删除过其他舞台并再次重启。
+- 舞台播放控制以当前舞台为范围，只有舞台包含活动同步组成员时才会控制该组。观看模式的播放按钮和空格键使用同一规则。
+- 浏览器扩展在解析期间遇到换页或重载时会提示重新扫描，并禁用旧候选。
 
 ### English
 
 **Added**
 
 - The desktop saves each stage's layout, primary picture, and audio routing. The Sources panel can show, pause, and resume individual sources.
+- Each stage can add existing sources from the shared catalog. Unlinking a source from one stage leaves it available to other stages.
 
 **Improved**
 
@@ -35,6 +40,9 @@ This changelog records completed changes that matter to someone using MuxShift. 
 
 - Position editing selects a visible picture and keeps the bottom resize handles reachable in short windows.
 - Sources reopen in the saved order, and cancelling recovery keeps the original assignments. Overlapping autosaves no longer deadlock during continuous changes such as volume drags.
+- Temporarily unavailable sources retain their original stage placement and routing after deleting another stage and restarting again.
+- Stage transport controls the current stage and includes the active sync group only when the stage has a member in that group. The viewing controls and Space shortcut use the same rule.
+- The extension asks for a fresh scan and disables old candidates when a page changes or reloads during resolution.
 
 ## [0.0.4] - 2026-11-22
 

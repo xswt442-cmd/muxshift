@@ -1153,12 +1153,14 @@ func (a *appState) applyAppearanceNow() {
 	a.dvrInputs = dvrInputs
 	a.draftCleared = cleared
 	a.settingsErr = ""
-	a.settingsNote = a.tr("appearance applied and saved immediately", "外观已立即应用并保存")
+	a.settingsNote = ""
 	if err := a.saveSettingsSerialized(next, a.saveTicket()); err != nil {
+		a.settingsSaved.Store(false)
 		a.settingsErr = fmt.Sprintf("applied, but saving failed: %v", err)
 		return
 	}
 	a.settingsSaved.Store(true)
+	a.settingsNote = a.tr("appearance applied and saved immediately", "外观已立即应用并保存")
 	a.invalidate()
 }
 
@@ -1177,12 +1179,14 @@ func (a *appState) resetAppearanceNow() {
 	a.dvrInputs = dvrInputs
 	a.draftCleared = cleared
 	a.settingsErr = ""
-	a.settingsNote = a.tr("appearance defaults applied and saved immediately", "外观默认值已立即应用并保存")
+	a.settingsNote = ""
 	if err := a.saveSettingsSerialized(next, a.saveTicket()); err != nil {
+		a.settingsSaved.Store(false)
 		a.settingsErr = fmt.Sprintf("applied, but saving failed: %v", err)
 		return
 	}
 	a.settingsSaved.Store(true)
+	a.settingsNote = a.tr("appearance defaults applied and saved immediately", "外观默认值已立即应用并保存")
 	a.invalidate()
 }
 

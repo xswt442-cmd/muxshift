@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/xswt442-cmd/muxshift/core"
+	"github.com/xswt442-cmd/muxshift/internal/filelock"
 )
 
 var traceSessionSaveTiming = os.Getenv("MUXSHIFT_SESSION_SAVE_TIMING") == "1"
@@ -109,6 +110,13 @@ func sessionStorePath(settingsPath string) string {
 		return ""
 	}
 	return settingsPath + ".session.json"
+}
+
+func lockSessionStore(path string) (*filelock.Lock, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	return filelock.Acquire(path+".lock", true)
 }
 
 // captureSessionStore reads the live session into a snapshot. Track ids are
@@ -472,7 +480,7 @@ func (a *appState) preserveSourceBeforeReplacement(it *item) {
 		for index, track := range scene.Video {
 			if track == oldVideo {
 				binding.video = true
-				binding.videoIndex = index
+				binding.videoIndex = expandedPendingIndex(index, a.pendingBindings[scene.ID], func(b pendingSceneBinding) (int, bool) { return b.videoIndex, b.video })
 				break
 			}
 		}
@@ -480,7 +488,7 @@ func (a *appState) preserveSourceBeforeReplacement(it *item) {
 			if level.Track == oldAudio {
 				copy := storedAudio{Source: it.persistentID, Volume: level.Volume, Muted: level.Muted}
 				binding.audio = &copy
-				binding.audioIndex = index
+				binding.audioIndex = expandedPendingIndex(index, a.pendingBindings[scene.ID], func(b pendingSceneBinding) (int, bool) { return b.audioIndex, b.audio != nil })
 				break
 			}
 		}
@@ -503,10 +511,8 @@ func (a *appState) preserveSourceBeforeReplacement(it *item) {
 				filtered.Boxes = append(filtered.Boxes, box)
 			}
 		}
-		for _, source := range edits.Order {
-			if source == it.persistentID {
-				filtered.Order = append(filtered.Order, source)
-			}
+		if slices.Contains(edits.Order, it.persistentID) {
+			filtered.Order = slices.Clone(edits.Order)
 		}
 		for _, source := range edits.Locked {
 			if source == it.persistentID {
@@ -763,9 +769,8 @@ func persistentURI(raw string) (string, bool) {
 	return raw, false
 }
 
-// saveSessionStore writes the snapshot atomically: a temp file in the same
-// directory is written, flushed and renamed over the target, so a crash cannot
-// leave a half file that the next start reads as a session.
+// saveSessionStore writes and flushes a complete temporary snapshot in the
+// same directory before replacing the target.
 func saveSessionStore(path string, snap storedSession) error {
 	if path == "" {
 		return errors.New("there is no configuration directory to save the session into")
@@ -1371,16 +1376,16 @@ func (a *appState) forgetPendingSource(source string) {
 	}
 	groups := a.pendingSyncGroups[:0]
 	for _, group := range a.pendingSyncGroups {
-		keep := group.Reference.Source != source
-		for _, track := range group.Tracks {
-			if track.Source == source {
-				keep = false
-				break
-			}
+		group.Tracks = slices.DeleteFunc(group.Tracks, func(track storedTrackRef) bool {
+			return track.Source == source
+		})
+		if len(group.Tracks) == 0 {
+			continue
 		}
-		if keep {
-			groups = append(groups, group)
+		if group.Reference.Source == source {
+			group.Reference = group.Tracks[0]
 		}
+		groups = append(groups, group)
 	}
 	a.pendingSyncGroups = groups
 	shifts := a.pendingShifts[:0]

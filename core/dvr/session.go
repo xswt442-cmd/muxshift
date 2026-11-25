@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/xswt442-cmd/muxshift/core"
+	"github.com/xswt442-cmd/muxshift/internal/filelock"
 )
 
 const (
@@ -39,11 +40,6 @@ const (
 	// in the cache root belongs to someone else and is left alone.
 	sessionPrefix = "session-"
 )
-
-// errNoLock says a session directory has no lock file. The sweep cannot tell
-// whether that session is live, so it keeps the directory: creating a lock to
-// find out would turn an unknown directory into a dead one by accident.
-var errNoLock = errors.New("the session has no lock file")
 
 // marker is the record a session leaves next to its cache. The id must match
 // the directory name: a directory whose marker describes another session is
@@ -73,7 +69,7 @@ type Session struct {
 	// ID is the random id in the directory name and the marker.
 	ID string
 
-	lock   *fileLock
+	lock   *filelock.Lock
 	record marker
 	close  bool
 }
@@ -104,14 +100,14 @@ func OpenSession(root string) (*Session, error) {
 			return nil, fmt.Errorf("%w: session directory: %v", ErrNoSpace, err)
 		}
 	}
-	lock, err := lockFile(filepath.Join(dir, lockName))
+	lock, err := filelock.Acquire(filepath.Join(dir, lockName), true)
 	if err != nil {
 		cleanup()
 		return nil, fmt.Errorf("%w: session lock: %v", ErrNoSpace, err)
 	}
 	record := marker{Version: markerVersion, App: markerApp, ID: id, PID: os.Getpid(), StartedAt: time.Now().UTC()}
 	if err := writeMarker(filepath.Join(dir, MarkerName), record); err != nil {
-		lock.release()
+		lock.Close()
 		cleanup()
 		return nil, err
 	}
@@ -244,7 +240,7 @@ func (s *Session) releaseLock() error {
 	if s.lock == nil {
 		return nil
 	}
-	err := s.lock.release()
+	err := s.lock.Close()
 	s.lock = nil
 	if err != nil {
 		return fmt.Errorf("%w: release session lock: %v", ErrNoSpace, err)
@@ -359,15 +355,15 @@ func sweepOne(dir string) (reason string, live bool, err error) {
 		return "the marker names another directory", false, nil
 	}
 	lockPath := filepath.Join(dir, lockName)
-	lock, err := openExistingLock(lockPath)
+	lock, err := filelock.Acquire(lockPath, false)
 	releaseLock := func() error {
 		if lock == nil {
 			return nil
 		}
-		return lock.release()
+		return lock.Close()
 	}
 	switch {
-	case errors.Is(err, errNoLock):
+	case errors.Is(err, os.ErrNotExist):
 		// A session that wrote "removing" and no longer holds its lock was
 		// killed after it decided to go away: nothing is using the directory,
 		// so the next boot finishes what the killed process started. A marker
@@ -376,7 +372,7 @@ func sweepOne(dir string) (reason string, live bool, err error) {
 		if record.State != markerRemoving {
 			return "the session has no lock file, so it cannot be confirmed dead", false, nil
 		}
-	case errors.Is(err, errLocked):
+	case errors.Is(err, filelock.ErrLocked):
 		return "", true, nil
 	case err != nil:
 		return "the lock cannot be taken: " + err.Error(), false, nil

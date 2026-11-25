@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/xswt442-cmd/muxshift/core"
+	"github.com/xswt442-cmd/muxshift/internal/filelock"
 )
 
 // newStoreFixture builds a session with one named scene, one named source, one
@@ -133,6 +134,44 @@ func TestLateImportFailureRemovesSourceAndSchedulesSave(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("the late failure did not schedule a session save")
+	}
+}
+
+func TestSessionStoreAllowsOnlyOneWriter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config", "settings.json.session.json")
+	lock, err := lockSessionStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if second, err := lockSessionStore(path); !errors.Is(err, filelock.ErrLocked) {
+		second.Close()
+		t.Fatalf("second writer: %v, want occupied session", err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	next, err := lockSessionStore(path)
+	if err != nil {
+		t.Fatalf("reacquire released session: %v", err)
+	}
+	next.Close()
+}
+
+func TestDeletingPendingSourceKeepsRemainingSyncTracks(t *testing.T) {
+	a := &appState{pendingSyncGroups: []storedSyncGroup{{
+		Reference: storedTrackRef{Source: "a", Kind: "audio"},
+		Tracks: []storedTrackRef{
+			{Source: "a", Kind: "audio"}, {Source: "b", Kind: "audio"}, {Source: "c", Kind: "video"},
+		},
+	}}}
+	a.forgetPendingSource("a")
+	if len(a.pendingSyncGroups) != 1 {
+		t.Fatalf("pending sync groups: %+v", a.pendingSyncGroups)
+	}
+	group := a.pendingSyncGroups[0]
+	if len(group.Tracks) != 2 || group.Reference != group.Tracks[0] || group.Reference.Source != "b" {
+		t.Fatalf("remaining sync group: %+v", group)
 	}
 }
 

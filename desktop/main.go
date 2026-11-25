@@ -19,6 +19,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -35,6 +36,7 @@ import (
 	"github.com/xswt442-cmd/muxshift/core/dvr"
 	"github.com/xswt442-cmd/muxshift/desktop/internal/version"
 	"github.com/xswt442-cmd/muxshift/desktop/internal/win"
+	"github.com/xswt442-cmd/muxshift/internal/filelock"
 )
 
 // mygoRunOnMain runs fn on the thread that draws the window and waits for it.
@@ -969,6 +971,28 @@ func main() {
 	path := settingsPath(*settingsFile)
 	loaded, note := loadSettings(path)
 	sessionPath := sessionStorePath(path)
+	if *scenario != "" {
+		isolated, err := os.MkdirTemp(*dir, "session-")
+		if err != nil {
+			log.Fatalf("muxshift-desktop: cannot isolate the scenario session: %v", err)
+		}
+		sessionPath = filepath.Join(isolated, "session.json")
+	}
+	var sessionLock *filelock.Lock
+	var lockNote string
+	if len(media) == 0 && sessionPath != "" {
+		lock, err := lockSessionStore(sessionPath)
+		switch {
+		case err == nil:
+			sessionLock = lock
+			defer sessionLock.Close()
+		case errors.Is(err, filelock.ErrLocked):
+			lockNote = "another MuxShift window owns this session; session saving is disabled"
+		default:
+			lockNote = "could not lock the session file; session saving is disabled"
+			log.Printf("session: lock failed: %v", err)
+		}
+	}
 	// The command line wins when it names sources: those are what the run is
 	// about. Without it the saved arrangement comes back, and one source that
 	// cannot reopen keeps its error instead of stopping the start.
@@ -1004,9 +1028,12 @@ func main() {
 	// A temporary -media run is isolated from the saved arrangement. A session
 	// file that failed to load is likewise protected until the user can recover
 	// it; startup must never replace either with an empty/default snapshot.
-	s.sessionWriteEnabled = len(media) == 0 && storeNote == ""
+	s.sessionWriteEnabled = sessionLock != nil && storeNote == ""
 	if storeNote != "" {
 		s.sessionErr = storeNote + "; saving is disabled to preserve the original session file"
+	} else if lockNote != "" {
+		s.sessionErr = lockNote
+		log.Printf("session: %s", lockNote)
 	}
 	// A check that takes pictures should not take sound with it: the same master
 	// mute the overlay offers is switched on before the first source is opened,
@@ -1194,9 +1221,9 @@ func main() {
 				// Save the arrangement last, while the session and the players
 				// are still alive, so the next start comes back to it.
 				s.saveSession()
-				if err := s.flushSessionSave(); err != nil {
-					log.Printf("session: final save failed (%v)", err)
-				}
+			}
+			if err := s.flushSessionSave(); err != nil {
+				log.Printf("session: final save failed (%v)", err)
 			}
 			s.release()
 		})

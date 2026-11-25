@@ -494,9 +494,6 @@ func (a *appState) fitStage(id core.SourceID) {
 // pictures back where the layout preset puts them.
 func (a *appState) resetStage() {
 	a.forgetPendingStageEdits(a.scene)
-	if a.edits == nil {
-		return
-	}
 	delete(a.edits, a.scene)
 	a.drag = dragState{}
 	a.boxFields = boxFields{}

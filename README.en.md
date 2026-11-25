@@ -22,7 +22,8 @@
 ## What it does
 
 - **Several sources in one session**: each source keeps its own audio and video tracks, and a scene picks which picture is shown and which sound is played. Volume is set per source.
-- A normal desktop launch restores the stage arrangement and opens the sources used by the current stage. A temporary launch with `-media` preserves the saved session.
+- A normal desktop launch restores the stage arrangement and opens sources on the active stage that can be recovered. Signed addresses with query parameters are omitted from the saved session. Their sources and stage assignments are restored, and you can choose a new address in Stage → Sources.
+- A temporary launch with `-media` preserves the saved session. When multiple windows use the same session file, only the window holding the file lock can save it.
 - Use the Sources panel to show, play, pause, or refresh an individual source. A live master playlist with multiple playable variants offers a quality choice for that source.
 - **Manual alignment**: nudge one source against another in steps of 0.1 s. A playlist that carries PDT also yields a cross-source suggestion; the automatic result is only a suggestion and never writes the timeline.
 - **Replay of a live stream**: live segments stay in a bounded directory, the remaining range is reported, and one span can be cut into a recording you can play back.
@@ -63,6 +64,8 @@ It prints a `http://127.0.0.1:<port>/?token=<token>` URL. The token appears once
 
 Behind a proxy: the desktop app reads `HTTP_PROXY`/`HTTPS_PROXY` first, then the Windows Internet Settings proxy, applying the HTTP and HTTPS entries separately. The `ProxyOverride` exclusion list is not applied yet; loopback addresses are always reached directly.
 
+Public HLS playlist reads connect only to verified public addresses. Plain HTTP playlists can use a direct connection or SOCKS. HTTPS playlists also support forwarding through CONNECT.
+
 ## Adding a source
 
 `+ Source` opens one panel with three choices:
@@ -71,11 +74,11 @@ Behind a proxy: the desktop app reads `HTTP_PROXY`/`HTTPS_PROXY` first, then the
 - **Media link** takes an http(s) HLS playlist or a directly readable media file. The desktop reads what the address actually serves rather than trusting its extension, so a web page, a 404, or an unsupported type is reported as an error.
 - **Website address** opens the page in the system browser. Once paired, the browser extension can hand media addresses on the page to the desktop.
 
-In Settings → About → Browser extension, choose "Open the folder", or open the `extension` folder in the install directory. Enable developer mode in `edge://extensions` or `chrome://extensions` and load the unpacked extension. Enter the one-time code from the desktop's Diagnostics page in the popup to pair without a Native Host.
+In Settings → About → Browser extension, choose "Open the folder", or open the `extension` folder in the install directory. Enable developer mode in `edge://extensions` or `chrome://extensions` and load the unpacked extension. Enter the one-time code from the desktop's Diagnostics page in the popup to pair without a Native Host. Closing the desktop window ends the pairing. Use a new code the next time you open it.
 
 Ordinary candidates appear in the popup's main view and support keyboard selection. Supported live pages offer “Resolve and send”. After navigating or reloading, reopen the popup to scan again. Check Stage → Sources in the desktop app for the import result.
 
-On Bilibili, Twitch, Kick, and YouTube live pages, the popup adds a “Resolve and send” action. The desktop receives one signed URL and no cookie; a stream with `#EXT-X-KEY` is refused, and a stream without `#EXT-X-ENDLIST` opens as live and starts on its own. A master with a separate audio rendition is also refused, because the current player opens one address and cannot keep the video plus a second audio playlist. The extension's mirror pick is best-effort: a cross-origin opaque response cannot prove a mirror plays, so the desktop still refuses an address by its playlist contents. After the popup says the desktop accepted the request, the desktop's Sources page remains the source of truth for media opening and failure status.
+On Bilibili, Twitch, Kick, and YouTube live pages, the popup adds a “Resolve and send” action. The desktop receives a signed URL without cookies. It refuses playlists whose `#EXT-X-KEY` or `#EXT-X-SESSION-KEY` declares encryption, and accepts `METHOD=NONE`. A playlist without `#EXT-X-ENDLIST` opens as live and starts automatically. The player opens a single address, so it refuses masters with a separate audio rendition. An opaque cross-origin response can indicate that a mirror answered. The desktop still reads the playlist to determine whether it can open it. After the popup reports that the desktop accepted the request, check Sources for playback status and media errors.
 
 Whether a page can hand anything over is up to the page. `blob:`/MSE players, pages behind a login or DRM, and cross-origin restrictions are not worked around, only explained. Only http(s) addresses are accepted, and no cookies, request headers, or keys are passed on.
 

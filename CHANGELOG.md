@@ -25,8 +25,10 @@ This changelog records completed changes that matter to someone using MuxShift. 
 
 - 点击编辑位置时会选中一个可见画面，短窗口也能操作下沿的缩放把手。
 - 来源按保存顺序恢复，临时打不开时可取消恢复并保留原有分配。拖动音量等连续保存不会再因两个计时器同时写入而卡住。
+- 同一个会话文件只允许一个窗口保存，避免旧窗口覆盖较新的舞台布置。
 - 离线来源保留待恢复的舞台摆位和音视频分配。
 - 启动优先打开当前舞台使用的来源。切走后停用新舞台不再使用的播放器。
+- 读取公网 HLS 播放列表时，重定向和子列表不能转到本地地址。
 - 舞台播放控制以当前舞台为范围，只有舞台包含活动同步组成员时才会控制该组。观看模式的播放按钮和空格键使用同一规则。
 - 浏览器扩展在解析期间遇到换页或重载时会提示重新扫描，并禁用旧候选。
 
@@ -49,8 +51,10 @@ This changelog records completed changes that matter to someone using MuxShift. 
 
 - Position editing selects a visible picture and keeps the bottom resize handles reachable in short windows.
 - Sources reopen in the saved order, and cancelling recovery keeps the original assignments. Overlapping autosaves no longer deadlock during continuous changes such as volume drags.
+- Only one window can save a given session file, so an older window cannot overwrite a newer stage arrangement.
 - Unavailable sources retain pending stage placement and audio and video assignments.
 - Startup opens sources used by the current stage first. Stage changes stop players the new stage no longer uses.
+- Public HLS playlist reads block redirects and child playlists that point to local addresses.
 - Stage transport controls the current stage and includes the active sync group only when the stage has a member in that group. The viewing controls and Space shortcut use the same rule.
 - The extension asks for a fresh scan and disables old candidates when a page changes or reloads during resolution.
 

@@ -391,6 +391,7 @@ func (a *appState) dockSourcesBody(c *ui.Context) {
 					a.unlinkStageMember(row)
 				})
 		})
+		a.stageShareControl(c, row)
 	}
 	if memberCount == 0 {
 		message := a.tr("No sources yet.", "还没有来源。")
@@ -418,13 +419,13 @@ func (a *appState) stageCatalog(c *ui.Context) {
 		ui.Text(c, a.tr("Sources stay here after you remove them from a stage.", "从舞台移除的来源仍保留在这里。")).
 			FontSize(textMicro).TextColor(colorDim).Wrap()
 		for _, it := range a.items {
-			if a.isStageMember(it) {
+			if it.stageOnly || a.isStageMember(it) {
 				continue
 			}
 			row := it
 			ui.Row(c).WidthPercent(100).Height(28).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, sourceDisplayName(row)).FontSize(textSmall).TextColor(colorText).Grow(1).MinWidth(0).SingleLine()
-				if ui.Button(c.Key("stage-link-"+string(itemKey(row))), a.tr("Add Existing", "添加现有来源")).Height(24).Clicked() {
+				if ui.Button(c.Key("stage-link-"+string(itemKey(row))), a.tr("Add to this stage", "添加到此舞台")).Height(24).Clicked() {
 					a.linkStageMember(row)
 					a.stageCatalogOpen = false
 				}
@@ -434,6 +435,18 @@ func (a *appState) stageCatalog(c *ui.Context) {
 			})
 		}
 	})
+}
+
+func (a *appState) stageShareControl(c *ui.Context, it *item) {
+	if !it.stageOnly || a.selected != itemKey(it) {
+		return
+	}
+	if ui.Button(c.Key("share-source-"+string(itemKey(it))), a.tr("Share source", "共享来源")).Height(24).
+		Tooltip(a.tr("Make this source available in other stages' catalogs", "让其他舞台可以从共享目录添加这一路")).Clicked() {
+		it.stageOnly = false
+		a.saveSession()
+		a.invalidate()
+	}
 }
 
 // syncBadge says, in two words, whether the source shares a clock with the
@@ -607,6 +620,12 @@ func (a *appState) dockRowsBody(c *ui.Context) {
 			ui.Text(c, a.tr("Nothing here yet. Add a file or an address with +.",
 				"这里还是空的。用 ＋ 添加文件或地址。")).
 				FontSize(textCaption).TextColor(colorDim).Padding(spaceSm, spaceSm)
+		}
+		for _, it := range a.items {
+			if a.isStageMember(it) && a.selected == itemKey(it) {
+				a.stageShareControl(c, it)
+				break
+			}
 		}
 		a.stageCatalog(c)
 	})

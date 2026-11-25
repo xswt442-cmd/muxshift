@@ -44,9 +44,18 @@ type item struct {
 	video  core.TrackID
 	audio  core.TrackID
 
-	player    desktopPlayer
-	openErr   error
-	restoring bool
+	player              desktopPlayer
+	openErr             error
+	restoring           bool
+	restoringGeneration uint64
+	// lifecyclePending is set while a stage transition closes this player's
+	// resources off the drawing thread. It prevents a second transition from
+	// starting a competing close for the same player.
+	lifecyclePending bool
+	resumePosition   time.Duration
+	resumePositionOK bool
+	resumePaused     bool
+	stageOnly        bool
 
 	// previous is the player this item opened before the current one, kept
 	// alive and drawn until the current one has a picture. See reopenPlayer.
@@ -479,6 +488,10 @@ type appState struct {
 	stageCatalogOpen     bool
 	startupSources       []storedSource
 	startupRestoreCancel context.CancelFunc
+	startupRestoreToken  uint64
+	stageGeneration      uint64
+	retryScene           core.SceneID
+	retryStageGeneration uint64
 
 	// The rename dialog edits one scene's or one source's display name. It is
 	// kept here so a redraw does not lose what was typed; see rename.go.
@@ -928,6 +941,8 @@ func (a *appState) retryUnavailableSource(it *item, uri string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	a.importing = uri
 	a.retryTargetID = it.persistentID
+	a.retryScene = a.scene
+	a.retryStageGeneration = a.stageGeneration
 	a.importSince = time.Now()
 	a.importCancel = cancel
 	a.importDone = make(chan struct{})
@@ -940,26 +955,36 @@ func (a *appState) retryUnavailableSource(it *item, uri string) error {
 }
 
 func (a *appState) startStoredSourceRestores() {
-	if len(a.startupSources) == 0 || a.closed {
+	if len(a.startupSources) == 0 || a.closed || a.startupRestoreCancel != nil {
 		return
 	}
+	a.startupRestoreToken++
+	token := a.startupRestoreToken
 	ctx, cancel := context.WithCancel(context.Background())
 	a.startupRestoreCancel = cancel
+	sceneID, generation := a.scene, a.stageGeneration
 	sem := make(chan struct{}, 3)
 	for _, stored := range a.startupSources {
 		if stored.NeedsReselect || strings.TrimSpace(stored.URI) == "" {
 			continue
 		}
 		it := a.itemByPersistentID(stored.ID)
-		if it == nil {
+		if it == nil || it.source.ID != "" || it.restoring || it.openErr != nil || !a.sceneConsumesItem(sceneID, it) {
 			continue
 		}
 		it.restoring = true
+		it.restoringGeneration = token
 		targetID, uri := stored.ID, stored.URI
 		go func() {
 			select {
 			case sem <- struct{}{}:
 			case <-ctx.Done():
+				a.mainDo(func() {
+					current := a.itemByPersistentID(targetID)
+					if current != nil && current.restoringGeneration == token {
+						current.restoring = false
+					}
+				})
 				return
 			}
 			defer func() { <-sem }()
@@ -968,11 +993,14 @@ func (a *appState) startStoredSourceRestores() {
 			probeCancel()
 			a.mainDo(func() {
 				current := a.itemByPersistentID(targetID)
+				if current != nil && current.restoringGeneration == token {
+					current.restoring = false
+				}
 				if a.closed || ctx.Err() != nil {
 					return
 				}
-				if current != nil {
-					current.restoring = false
+				if a.scene != sceneID || a.stageGeneration != generation || !a.sceneConsumesItem(sceneID, current) {
+					return
 				}
 				if current != nil && current.source.ID == "" {
 					if openErr := a.installSavedSource(current, plan, err); openErr != nil {
@@ -982,7 +1010,7 @@ func (a *appState) startStoredSourceRestores() {
 						go a.watchFirstOpen(current, current.generation)
 					}
 				}
-				if !a.hasRestoringSources() {
+				if token == a.startupRestoreToken && !a.hasRestoringSources() {
 					cancel()
 					a.startupRestoreCancel = nil
 				}
@@ -990,9 +1018,23 @@ func (a *appState) startStoredSourceRestores() {
 			})
 		}()
 	}
-	if !a.hasRestoringSources() {
+	if token == a.startupRestoreToken && !a.hasRestoringSources() {
 		cancel()
 		a.startupRestoreCancel = nil
+	}
+}
+
+func (a *appState) advanceStageGeneration() {
+	a.stageGeneration++
+	if a.startupRestoreCancel == nil {
+		return
+	}
+	a.startupRestoreCancel()
+	a.startupRestoreCancel = nil
+	for _, it := range a.items {
+		if it.restoringGeneration == a.startupRestoreToken {
+			it.restoring = false
+		}
 	}
 }
 
@@ -1049,6 +1091,16 @@ func (a *appState) landUnavailableRetry(token int, targetID, requestedURI string
 		a.retryTargetID = ""
 		return
 	}
+	if a.scene != a.retryScene || a.stageGeneration != a.retryStageGeneration {
+		a.closeImportTicker()
+		a.importing = ""
+		a.retryTargetID = ""
+		a.retryScene = ""
+		a.importText = ""
+		a.lastErr = errors.New("stage changed while the source was being reopened; retry it on the active stage")
+		a.invalidate()
+		return
+	}
 	it := a.itemByPersistentID(targetID)
 	if it == nil {
 		a.closeImportTicker()
@@ -1064,6 +1116,7 @@ func (a *appState) landUnavailableRetry(token int, targetID, requestedURI string
 	a.closeImportTicker()
 	a.importing = ""
 	a.retryTargetID = ""
+	a.retryScene = ""
 	result := commandResult{Command: command{Kind: commandRetry, Source: commandID, URI: requestedURI}, At: time.Now()}
 	if err != nil {
 		it.openErr = safeOpenError(err)
@@ -1267,7 +1320,7 @@ func (a *appState) landImport(token int, uri string, stream hls.Stream, mode imp
 	}
 	_, targetErr := a.session.Scene(target)
 	targetAvailable := targetErr == nil
-	it := &item{uri: uri, volume: a.settingsSourceVolume(), origin: origin}
+	it := &item{uri: uri, volume: a.settingsSourceVolume(), origin: origin, stageOnly: targetAvailable}
 	var err error
 	switch {
 	case probeErr != nil:
@@ -1290,11 +1343,19 @@ func (a *appState) landImport(token int, uri string, stream hls.Stream, mode imp
 		// shows it, stayed unready in this build. Opening it here gives it
 		// the frames that come before the user shows it.
 		var player *ui.VideoPlayer
-		player, err = a.openImportedPlayer(uri)
+		// A completed read still registers its source against the stage where
+		// the import began, but opening it after that stage was left would start
+		// an invisible background player. The active-stage reconciler opens it
+		// later if the user returns and the scene consumes it.
+		if target == a.scene {
+			player, err = a.openImportedPlayer(uri)
+		}
 		if err == nil {
-			it.player = player
-			it.generation++
-			wakeNetworkPlayer(it.uri, rawPlayer(player), a.generationIs(it, it.generation))
+			if player != nil {
+				it.player = player
+				it.generation++
+				wakeNetworkPlayer(it.uri, rawPlayer(player), a.generationIs(it, it.generation))
+			}
 			a.items = append(a.items, it)
 			if target == a.scene {
 				a.selected = it.source.ID
@@ -1325,7 +1386,7 @@ func (a *appState) landImport(token int, uri string, stream hls.Stream, mode imp
 			}
 			a.apply()
 			a.saveSession()
-			if live {
+			if live && it.player != nil {
 				// A live stream arrives without a timeline to align against:
 				// the picture is already moving, so the shared clock starts
 				// with it. Without this the top bar called a running stream
@@ -1340,7 +1401,7 @@ func (a *appState) landImport(token int, uri string, stream hls.Stream, mode imp
 			// frame or reported that it never will. A test without a window has
 			// no loop for the watch to run on, so it only starts where the
 			// window (or the test's own seam) can take a callback.
-			if a.window != nil || a.onMain != nil {
+			if it.player != nil && (a.window != nil || a.onMain != nil) {
 				go a.watchFirstOpen(it, it.generation)
 			}
 		} else {
@@ -1631,6 +1692,112 @@ func (a *appState) apply() {
 	}
 }
 
+// sceneConsumesItem reports whether the selected scene actually uses this
+// source for picture or sound. Membership alone is intentionally insufficient:
+// it records where a source may be used, not whether it should run now.
+func (a *appState) sceneConsumesItem(sceneID core.SceneID, it *item) bool {
+	if it == nil {
+		return false
+	}
+	if it.source.ID == "" {
+		binding := a.pendingBindings[sceneID][it.persistentID]
+		return binding.video || binding.audio != nil
+	}
+	scene, err := a.session.Scene(sceneID)
+	if err != nil {
+		return false
+	}
+	for _, track := range scene.Video {
+		if track == it.video && it.video != "" {
+			return true
+		}
+	}
+	for _, level := range scene.Audio {
+		if level.Track == it.audio && it.audio != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// reconcileScenePlayers runs after a stage change. Player close waits for
+// frames and therefore must not run in the frame callback that selected the
+// stage. Completion is checked against both the scene and its generation so a
+// rapid switch cannot restore a player for an older stage.
+func (a *appState) reconcileScenePlayers(sceneID core.SceneID, generation uint64) {
+	if a.window == nil || a.closed || a.scene != sceneID || a.stageGeneration != generation {
+		return
+	}
+	needsRestore := false
+	for _, it := range a.items {
+		needed := a.sceneConsumesItem(sceneID, it)
+		if !needed {
+			if it.player != nil && !it.lifecyclePending {
+				it.resumePaused = it.player.Ready() && !it.player.Buffering() && !it.player.Playing()
+				it.resumePositionOK = it.replay == nil && !isNetworkAddress(it.uri)
+				if it.resumePositionOK {
+					it.resumePosition = it.player.Position()
+				}
+				it.lifecyclePending = true
+				it.player.SetMuted(true)
+				it.player.Pause()
+				go func(source *item) {
+					a.close(source)
+					a.mainDo(func() {
+						source.lifecyclePending = false
+						currentScene, currentGeneration := a.scene, a.stageGeneration
+						if a.sceneConsumesItem(currentScene, source) {
+							a.reconcileScenePlayers(currentScene, currentGeneration)
+						}
+					})
+				}(it)
+			}
+			continue
+		}
+		if it.player != nil || it.lifecyclePending || it.restoring || strings.TrimSpace(it.uri) == "" {
+			continue
+		}
+		if it.source.ID == "" {
+			needsRestore = true
+			continue
+		}
+		go func(source *item) {
+			a.mainDo(func() {
+				if a.closed || a.scene != sceneID || a.stageGeneration != generation || !a.sceneConsumesItem(sceneID, source) || source.player != nil || source.lifecyclePending {
+					return
+				}
+				player, err := a.openImportedPlayer(source.uri)
+				if err == nil && player == nil {
+					err = errors.New("player open returned no player")
+				}
+				if err != nil {
+					source.openErr = safeOpenError(err)
+					a.lastErr = source.openErr
+					a.invalidate()
+					return
+				}
+				source.player = player
+				source.openErr = nil
+				source.generation++
+				if source.resumePositionOK {
+					source.player.Seek(source.resumePosition)
+				}
+				if source.resumePaused {
+					source.player.Pause()
+				}
+				source.resumePositionOK = false
+				a.closePendingWhenReady()
+				a.apply()
+				wakeNetworkPlayer(source.uri, rawPlayer(source.player), a.generationIs(source, source.generation))
+				a.invalidate()
+			})
+		}(it)
+	}
+	if needsRestore {
+		a.startStoredSourceRestores()
+	}
+}
+
 // showVideo puts a source's picture on the stage, or takes it off again when it
 // is already there. The scene keeps every shown track in the order it was added,
 // which is the order the layout places the pictures in; the audio levels are
@@ -1843,7 +2010,9 @@ func (a *appState) remove(index int) error {
 	for _, members := range a.sceneMembers {
 		delete(members, it.persistentID)
 	}
-	a.close(it)
+	if !it.lifecyclePending {
+		a.close(it)
+	}
 	a.items = append(a.items[:index], a.items[index+1:]...)
 	a.apply()
 	return nil
@@ -1926,6 +2095,9 @@ func (a *appState) close(it *item) {
 		it.shown = false
 		it.generation++
 		player = rawPlayer(it.player)
+		if player != nil {
+			player.Pause()
+		}
 		it.player = nil
 	})
 	a.waitFrames(3)
@@ -1936,7 +2108,6 @@ func (a *appState) close(it *item) {
 		}
 		return
 	}
-	mygoRunOnMain(func() { player.Pause() })
 	a.pendingMu.Lock()
 	a.pending = append(a.pending, pendingClose{player: player, lease: lease})
 	a.pendingMu.Unlock()

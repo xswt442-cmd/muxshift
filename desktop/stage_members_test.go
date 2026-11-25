@@ -63,6 +63,45 @@ func TestStageMembershipSharesSourcesWithoutSharingRoutes(t *testing.T) {
 	}
 }
 
+func TestScenePlayerActivityFollowsVideoOrAudioConsumption(t *testing.T) {
+	app, first, _ := newStoreFixture(t)
+	prepareStageMembershipFixture(t, app, first)
+	app.sceneMembers = map[core.SceneID]map[string]bool{first: {}}
+	it := app.items[0]
+	if _, err := app.session.SetSceneVideo(first); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.session.SetSceneAudio(first, it.audio, it.volume, false); err != nil {
+		t.Fatal(err)
+	}
+	second, err := app.session.AddScene("unused")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.sceneMembers[second.ID] = map[string]bool{it.persistentID: true}
+	if !app.sceneConsumesItem(first, it) {
+		t.Fatal("a scene using the source's video or audio must keep its player active")
+	}
+	if app.sceneConsumesItem(second.ID, it) {
+		t.Fatal("membership by itself must not keep an unused source player active")
+	}
+	if _, err := app.session.SetSceneAudio(second.ID, it.audio, it.volume, false); err != nil {
+		t.Fatal(err)
+	}
+	if !app.sceneConsumesItem(second.ID, it) {
+		t.Fatal("audio-only consumption must keep the source player active")
+	}
+	if _, err := app.session.RemoveSceneAudio(second.ID, it.audio); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.session.SetSceneVideo(second.ID, it.video); err != nil {
+		t.Fatal(err)
+	}
+	if !app.sceneConsumesItem(second.ID, it) {
+		t.Fatal("a shared source with video consumption must be active in both scenes")
+	}
+}
+
 func TestImportLandsInTheStageWhereItStarted(t *testing.T) {
 	app, err := newAppState(nil)
 	if err != nil {
@@ -76,12 +115,19 @@ func TestImportLandsInTheStageWhereItStarted(t *testing.T) {
 	if err := os.WriteFile(file, []byte("fixture"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	app.openPlayerForImport = func(string) (*ui.VideoPlayer, error) { return &ui.VideoPlayer{}, nil }
+	openCalls := 0
+	app.openPlayerForImport = func(string) (*ui.VideoPlayer, error) {
+		openCalls++
+		return &ui.VideoPlayer{}, nil
+	}
 	app.landImport(app.importToken, file, hls.Stream{}, importLocal, false, nil)
 	if len(app.items) != 1 {
 		t.Fatal("the completed import did not register its source")
 	}
 	imported := app.items[0]
+	if imported.player != nil || openCalls != 0 {
+		t.Fatal("an import completed for an inactive stage opened a background player")
+	}
 	if app.scene != current || app.isStageMember(imported) || app.routed(imported) {
 		t.Fatal("the completed import leaked into the current stage")
 	}
@@ -128,6 +174,77 @@ func TestOfflineLinkRecordsSameDefaultBindingsAsOnlineLink(t *testing.T) {
 	}
 	if !app.sceneMembers[target][source.persistentID] {
 		t.Fatal("offline source was not registered as a stage member")
+	}
+}
+
+func TestRemovingOfflineStageMemberPreservesRemainingOrder(t *testing.T) {
+	app, scene, _ := newStoreFixture(t)
+	prepareStageMembershipFixture(t, app, scene)
+	app.sceneMembers = map[core.SceneID]map[string]bool{scene: {}}
+	first := app.items[0]
+	if _, err := app.session.SetSceneVideo(scene); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.session.RemoveSceneAudio(scene, first.audio); err != nil {
+		t.Fatal(err)
+	}
+	first.persistentID = "source-a"
+	second := &item{persistentID: "source-b", volume: .7}
+	third := &item{persistentID: "source-c", volume: .8}
+	app.items = append(app.items, second, third)
+	for _, it := range []*item{first, second, third} {
+		it.player, it.video, it.audio = nil, "", ""
+		app.linkStageMember(it)
+	}
+	bindings := app.pendingBindings[scene]
+	if bindings["source-a"].videoIndex != 0 || bindings["source-b"].videoIndex != 1 || bindings["source-c"].videoIndex != 2 {
+		t.Fatalf("video insertion indexes before remove = %+v", bindings)
+	}
+	app.unlinkStageMember(second)
+	bindings = app.pendingBindings[scene]
+	if bindings["source-a"].videoIndex != 0 || bindings["source-c"].videoIndex != 1 {
+		t.Fatalf("remaining video indexes = %+v, want source-a then source-c", bindings)
+	}
+	snapshot := app.captureSessionStore()
+	if got := snapshot.Scenes[0].Video; len(got) != 2 || got[0] != "source-a" || got[1] != "source-c" {
+		t.Fatalf("persisted offline video order = %v", got)
+	}
+	if got := snapshot.Scenes[0].Audio; len(got) != 2 || got[0].Source != "source-a" || got[1].Source != "source-c" {
+		t.Fatalf("persisted offline audio order = %+v", got)
+	}
+}
+
+func TestRemovingLiveStageMemberKeepsOfflineSlotsOrdered(t *testing.T) {
+	app, scene, _ := newStoreFixture(t)
+	prepareStageMembershipFixture(t, app, scene)
+	live := app.items[0]
+	live.persistentID = "source-live"
+	app.sceneMembers = map[core.SceneID]map[string]bool{scene: {live.persistentID: true}}
+	offlineB := &item{persistentID: "source-b", volume: .7}
+	offlineC := &item{persistentID: "source-c", volume: .8}
+	app.items = append(app.items, offlineB, offlineC)
+	app.linkStageMember(offlineB)
+	app.linkStageMember(offlineC)
+	app.unlinkStageMember(live)
+	bindings := app.pendingBindings[scene]
+	if bindings["source-b"].videoIndex != 0 || bindings["source-c"].videoIndex != 1 ||
+		bindings["source-b"].audioIndex != 0 || bindings["source-c"].audioIndex != 1 {
+		t.Fatalf("offline indexes after live removal = %+v", bindings)
+	}
+	snapshot := app.captureSessionStore()
+	if got := snapshot.Scenes[0].Video; len(got) != 2 || got[0] != "source-b" || got[1] != "source-c" {
+		t.Fatalf("persisted video order = %v", got)
+	}
+}
+
+func TestSessionStoreReadMigratesScenesWithoutIDs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old-session.json")
+	if err := os.WriteFile(path, []byte(`{"scenes":[{"name":"First","members":[]},{"name":"Second","members":[]}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, note := loadSessionStore(path)
+	if note != "" || len(snapshot.Scenes) != 2 || snapshot.Scenes[0].ID == "" || snapshot.Scenes[1].ID == "" || snapshot.Scenes[0].ID == snapshot.Scenes[1].ID {
+		t.Fatalf("migrated scenes = %+v (note %q)", snapshot.Scenes, note)
 	}
 }
 

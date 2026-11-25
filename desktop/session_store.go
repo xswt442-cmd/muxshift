@@ -98,6 +98,7 @@ type storedSource struct {
 	Muted         bool    `json:"muted,omitempty"`
 	Shown         bool    `json:"shown,omitempty"`
 	NeedsReselect bool    `json:"needsReselect,omitempty"`
+	StageOnly     bool    `json:"stageOnly,omitempty"`
 }
 
 // sessionStorePath puts the snapshot beside the settings file, so both travel
@@ -148,6 +149,7 @@ func (a *appState) captureSessionStore() storedSession {
 			Muted:         it.muted,
 			Shown:         it.shown,
 			NeedsReselect: needsReselect,
+			StageOnly:     it.stageOnly,
 		})
 	}
 	scenes := a.session.Scenes()
@@ -866,14 +868,31 @@ func sanitizeSessionStore(snap storedSession) storedSession {
 		src.Volume = clampVolume(src.Volume)
 		out.Sources = append(out.Sources, src)
 	}
-	for _, scene := range snap.Scenes {
+	usedSceneIDs := make(map[string]bool, len(snap.Scenes))
+	for i := range snap.Scenes {
+		scene := &snap.Scenes[i]
+		if id := strings.TrimSpace(scene.ID); id != "" {
+			usedSceneIDs[id] = true
+		}
+	}
+	nextSceneID := 1
+	for i := range snap.Scenes {
+		scene := &snap.Scenes[i]
 		if strings.TrimSpace(scene.ID) == "" {
-			continue
+			for {
+				candidate := fmt.Sprintf("stage-%d", nextSceneID)
+				nextSceneID++
+				if !usedSceneIDs[candidate] {
+					scene.ID = candidate
+					usedSceneIDs[candidate] = true
+					break
+				}
+			}
 		}
 		for i := range scene.Audio {
 			scene.Audio[i].Volume = clampVolume(scene.Audio[i].Volume)
 		}
-		out.Scenes = append(out.Scenes, scene)
+		out.Scenes = append(out.Scenes, *scene)
 	}
 	if !validLayoutName(out.Layout) {
 		out.Layout = "focus"
@@ -945,6 +964,7 @@ func newAppStateFromStore(loaded settings, snap storedSession) (*appState, error
 		it.persistentID = stored.ID
 		it.persistedName = stored.Name
 		it.restored = true
+		it.stageOnly = stored.StageOnly
 		if err != nil {
 			// One source that cannot reopen must not stop the start: the item
 			// keeps its open error so the window can report it.

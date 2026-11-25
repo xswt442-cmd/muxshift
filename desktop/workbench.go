@@ -702,16 +702,19 @@ func (a *appState) selectScene(id core.SceneID) {
 		a.invalidate()
 		return
 	}
+	a.advanceStageGeneration()
 	a.activateSceneLayout(id)
 	a.reconcileStageSelection()
 	a.apply()
+	a.reconcileScenePlayers(id, a.stageGeneration)
 	a.invalidate()
 	a.saveSession()
 }
 
 // removeScene drops a scene and stays on a scene that exists.
 func (a *appState) removeScene(id core.SceneID) {
-	if id == a.scene {
+	active := id == a.scene
+	if active {
 		scenes := a.session.Scenes()
 		var next core.SceneID
 		for _, scene := range scenes {
@@ -730,6 +733,7 @@ func (a *appState) removeScene(id core.SceneID) {
 			a.invalidate()
 			return
 		}
+		a.advanceStageGeneration()
 		a.activateSceneLayout(next)
 		a.reconcileStageSelection()
 	}
@@ -747,8 +751,17 @@ func (a *appState) removeScene(id core.SceneID) {
 		delete(a.scenePersistentIDs, id)
 	}
 	delete(a.pendingBindings, id)
+	for i := len(a.items) - 1; i >= 0; i-- {
+		it := a.items[i]
+		if it.stageOnly && !a.sourceHasStageMember(it.persistentID) {
+			a.removeCatalogSource(it)
+		}
+	}
 	a.pruneStageEdits()
 	a.apply()
+	if active {
+		a.reconcileScenePlayers(a.scene, a.stageGeneration)
+	}
 	a.invalidate()
 	a.saveSession()
 }

@@ -35,7 +35,7 @@ func (a *appState) stageSourceID(it *item) string {
 }
 
 func (a *appState) linkStageMember(it *item) {
-	if a.isStageMember(it) {
+	if it == nil || it.stageOnly || a.isStageMember(it) {
 		return
 	}
 	scene, err := a.session.Scene(a.scene)
@@ -51,6 +51,11 @@ func (a *appState) linkStageMember(it *item) {
 		}
 	} else if it.video == "" {
 		index := len(scene.Video)
+		for _, pending := range a.pendingBindings[scene.ID] {
+			if pending.video {
+				index = max(index, pending.videoIndex+1)
+			}
+		}
 		if binding := a.pendingBindings[scene.ID][sourceID]; !binding.video {
 			a.setPendingVideo(scene.ID, sourceID, index)
 		}
@@ -61,7 +66,13 @@ func (a *appState) linkStageMember(it *item) {
 			return
 		}
 	} else {
-		a.setPendingAudio(scene.ID, sourceID, storedAudio{Source: sourceID, Volume: it.volume}, len(scene.Audio))
+		index := len(scene.Audio)
+		for _, pending := range a.pendingBindings[scene.ID] {
+			if pending.audio != nil {
+				index = max(index, pending.audioIndex+1)
+			}
+		}
+		a.setPendingAudio(scene.ID, sourceID, storedAudio{Source: sourceID, Volume: it.volume}, index)
 	}
 	a.materializeStageMembers(scene.ID)[sourceID] = true
 	a.selected = itemKey(it)
@@ -80,15 +91,19 @@ func (a *appState) unlinkStageMember(it *item) {
 		a.lastErr = safeOpenError(err)
 		return
 	}
+	removedVideoIndex, removedAudioIndex := -1, -1
 	if slices.Contains(scene.Video, it.video) {
+		liveIndex := slices.Index(scene.Video, it.video)
+		removedVideoIndex = expandedPendingIndex(liveIndex, a.pendingBindings[scene.ID], func(b pendingSceneBinding) (int, bool) { return b.videoIndex, b.video })
 		video := slices.DeleteFunc(scene.Video, func(track core.TrackID) bool { return track == it.video })
 		if _, err := a.session.SetSceneVideo(scene.ID, video...); err != nil {
 			a.lastErr = safeOpenError(err)
 			return
 		}
 	}
-	for _, level := range scene.Audio {
+	for audioIndex, level := range scene.Audio {
 		if level.Track == it.audio {
+			removedAudioIndex = expandedPendingIndex(audioIndex, a.pendingBindings[scene.ID], func(b pendingSceneBinding) (int, bool) { return b.audioIndex, b.audio != nil })
 			if _, err := a.session.RemoveSceneAudio(scene.ID, it.audio); err != nil {
 				a.lastErr = safeOpenError(err)
 				return
@@ -98,7 +113,15 @@ func (a *appState) unlinkStageMember(it *item) {
 	}
 	delete(a.materializeStageMembers(scene.ID), it.persistentID)
 	if bindings := a.pendingBindings[scene.ID]; bindings != nil {
+		removed := bindings[it.persistentID]
 		delete(bindings, it.persistentID)
+		if removed.video {
+			removedVideoIndex = removed.videoIndex
+		}
+		if removed.audio != nil {
+			removedAudioIndex = removed.audioIndex
+		}
+		compactPendingMemberIndexes(bindings, removedVideoIndex, removedAudioIndex)
 	}
 	a.layoutTaken = removeTrackID(a.layoutTaken, it.source.ID)
 	a.pendingLayoutOrder = removeString(a.pendingLayoutOrder, it.persistentID)
@@ -114,6 +137,10 @@ func (a *appState) unlinkStageMember(it *item) {
 		}
 	}
 	a.reconcileStageSelection()
+	if it.stageOnly && !a.sourceHasStageMember(it.persistentID) {
+		a.removeCatalogSource(it)
+		return
+	}
 	a.apply()
 	a.saveSession()
 	a.invalidate()
@@ -155,7 +182,43 @@ func (a *appState) removeCatalogSource(it *item) {
 		a.lastErr = safeOpenError(err)
 		return
 	}
+	a.saveSession()
 	a.invalidate()
+}
+
+// compactPendingMemberIndexes keeps offline members' intended order dense after
+// one is removed. Their positions share an index space with live scene tracks.
+func expandedPendingIndex(liveIndex int, bindings map[string]pendingSceneBinding, slot func(pendingSceneBinding) (int, bool)) int {
+	fullIndex := liveIndex
+	for {
+		next := liveIndex
+		for _, binding := range bindings {
+			index, exists := slot(binding)
+			if exists && index <= fullIndex {
+				next++
+			}
+		}
+		if next == fullIndex {
+			return fullIndex
+		}
+		fullIndex = next
+	}
+}
+
+func compactPendingMemberIndexes(bindings map[string]pendingSceneBinding, removedVideoIndex, removedAudioIndex int) {
+	compact := func(index int, pending func(pendingSceneBinding) bool, get func(pendingSceneBinding) int, set func(*pendingSceneBinding, int)) {
+		if index < 0 {
+			return
+		}
+		for id, binding := range bindings {
+			if pending(binding) && get(binding) > index {
+				set(&binding, get(binding)-1)
+				bindings[id] = binding
+			}
+		}
+	}
+	compact(removedVideoIndex, func(b pendingSceneBinding) bool { return b.video }, func(b pendingSceneBinding) int { return b.videoIndex }, func(b *pendingSceneBinding, n int) { b.videoIndex = n })
+	compact(removedAudioIndex, func(b pendingSceneBinding) bool { return b.audio != nil }, func(b pendingSceneBinding) int { return b.audioIndex }, func(b *pendingSceneBinding, n int) { b.audioIndex = n })
 }
 
 func (a *appState) reconcileStageSelection() {

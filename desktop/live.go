@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -26,6 +27,8 @@ const (
 	playlistReadLimit = 1 << 20
 	// playlistTimeout bounds one playlist fetch.
 	playlistTimeout = 20 * time.Second
+	// maxVariantChecks bounds menu enumeration against oversized masters.
+	maxVariantChecks = 16
 )
 
 // errProtectedPlaylist marks a stream this build will not open. It is separated
@@ -33,14 +36,58 @@ const (
 // read that failed.
 var errProtectedPlaylist = errors.New("the stream is protected")
 
+type playlistReadError struct {
+	message string
+	cause   error
+}
+
+func (e playlistReadError) Error() string { return e.message }
+
+func (e playlistReadError) Unwrap() error { return e.cause }
+
+func playlistFailure(message string, cause error) error {
+	return playlistReadError{message: redactSecrets(message + ": " + cause.Error()), cause: cause}
+}
+
 // playlistRole is what a handed-over playlist turned out to be.
 type playlistRole struct {
 	// address is the media playlist a player should open: the handed-over one
 	// when it is already a media playlist, or the chosen variant of a master.
 	address string
+	master  string
 	// live says the chosen playlist has no EXT-X-ENDLIST, so it goes on
 	// growing instead of ending.
 	live bool
+}
+
+// liveVariant is a declared master-playlist variant whose child playlist was
+// read and accepted. address is kept private because it may contain a signed
+// query needed by the player; callers must not display or log it.
+type liveVariant struct {
+	address   string
+	width     int
+	height    int
+	bandwidth int
+	live      bool
+}
+
+func (v liveVariant) String() string {
+	return fmt.Sprintf("liveVariant{width:%d height:%d bandwidth:%d}", v.width, v.height, v.bandwidth)
+}
+
+type livePlaylistKind uint8
+
+const (
+	liveMediaPlaylist livePlaylistKind = iota + 1
+	liveMasterPlaylist
+)
+
+// livePlaylistInspection describes selectable variants for a master, or the
+// single handed-over media playlist. A media playlist has no variants.
+type livePlaylistInspection struct {
+	kind     livePlaylistKind
+	role     playlistRole
+	variants []liveVariant
 }
 
 // inspectPlaylist reads a handed-over playlist and decides what to open. It
@@ -51,29 +98,123 @@ func inspectPlaylist(ctx context.Context, rawURL string) (playlistRole, error) {
 	if err != nil {
 		return playlistRole{}, err
 	}
-	if method := protectedMethod(text); method != "" {
-		return playlistRole{}, protected(method)
-	}
-	if hasSeparateAudioRendition(text) {
-		return playlistRole{}, fmt.Errorf("the master uses a separate audio rendition; this build opens streams with muxed audio only")
+	if err := validateRootPlaylist(text); err != nil {
+		return playlistRole{}, err
 	}
 	if !strings.Contains(text, "#EXT-X-STREAM-INF:") {
 		return playlistRole{address: playlistURL, live: !hasEnd(text)}, nil
 	}
-	variant, err := pickVariant(playlistURL, text)
+	variants, err := parseVariants(playlistURL, text)
 	if err != nil {
 		return playlistRole{}, err
 	}
-	child, variantURL, err := fetchPlaylist(ctx, variant)
+	chosen := chooseVariant(variants)
+	child, childURL, err := fetchPlaylist(ctx, chosen.address)
 	if err != nil {
 		return playlistRole{}, err
 	}
 	if method := protectedMethod(child); method != "" {
 		return playlistRole{}, protected(method)
 	}
-	// A master playlist may itself end with EXT-X-ENDLIST while its variants do
-	// not, so only the chosen variant answers whether the stream ends.
-	return playlistRole{address: variantURL, live: !hasEnd(child)}, nil
+	return playlistRole{address: childURL, master: playlistURL, live: !hasEnd(child)}, nil
+}
+
+// inspectLivePlaylist returns the playable variants explicitly declared by a
+// master. A child counts as usable only after its playlist has been read and
+// checked for protection and nested-master content.
+func inspectLivePlaylist(ctx context.Context, rawURL string) (livePlaylistInspection, error) {
+	text, playlistURL, err := fetchPlaylist(ctx, rawURL)
+	if err != nil {
+		return livePlaylistInspection{}, err
+	}
+	if err := validateRootPlaylist(text); err != nil {
+		return livePlaylistInspection{}, err
+	}
+	if !strings.Contains(text, "#EXT-X-STREAM-INF:") {
+		return livePlaylistInspection{
+			kind: liveMediaPlaylist,
+			role: playlistRole{address: playlistURL, live: !hasEnd(text)},
+		}, nil
+	}
+	declared, err := parseVariants(playlistURL, text)
+	if err != nil {
+		return livePlaylistInspection{}, err
+	}
+	usable := make([]liveVariant, 0, len(declared))
+	var protectedErr error
+	checks := orderedVariantChecks(declared, maxVariantChecks)
+	for _, variant := range checks {
+		if err := ctx.Err(); err != nil {
+			return livePlaylistInspection{}, err
+		}
+		checked, fetchErr := inspectDeclaredVariant(ctx, variant)
+		if fetchErr != nil {
+			if err := ctx.Err(); err != nil {
+				return livePlaylistInspection{}, err
+			}
+			if errors.Is(fetchErr, errProtectedPlaylist) && protectedErr == nil {
+				protectedErr = fetchErr
+			}
+			continue
+		}
+		usable = append(usable, checked)
+	}
+	if len(usable) == 0 {
+		if protectedErr != nil {
+			return livePlaylistInspection{}, protectedErr
+		}
+		return livePlaylistInspection{}, fmt.Errorf("%s is a master playlist that names no readable, unprotected media variant", shortURI(playlistURL))
+	}
+	chosen := chooseVariant(usable)
+	return livePlaylistInspection{
+		kind:     liveMasterPlaylist,
+		role:     playlistRole{address: chosen.address, live: chosen.live},
+		variants: usable,
+	}, nil
+}
+
+func validateRootPlaylist(text string) error {
+	if method := protectedMethod(text); method != "" {
+		return protected(method)
+	}
+	if hasSeparateAudioRendition(text) {
+		return fmt.Errorf("the master uses a separate audio rendition; this build opens streams with muxed audio only")
+	}
+	return nil
+}
+
+func inspectDeclaredVariant(ctx context.Context, variant liveVariant) (liveVariant, error) {
+	child, childURL, err := fetchPlaylist(ctx, variant.address)
+	if err != nil {
+		return liveVariant{}, err
+	}
+	if method := protectedMethod(child); method != "" {
+		return liveVariant{}, protected(method)
+	}
+	if strings.Contains(child, "#EXT-X-STREAM-INF:") || hasSeparateAudioRendition(child) {
+		return liveVariant{}, fmt.Errorf("declared variant is not a muxed media playlist")
+	}
+	variant.address = childURL
+	variant.live = !hasEnd(child)
+	return variant, nil
+}
+
+func orderedVariantChecks(variants []liveVariant, limit int) []liveVariant {
+	if len(variants) <= limit {
+		return variants
+	}
+	ordered := append([]liveVariant(nil), variants...)
+	for i := 0; i < len(ordered); i++ {
+		best := i
+		for j := i + 1; j < len(ordered); j++ {
+			if ordered[j].height > ordered[best].height ||
+				(ordered[j].height == ordered[best].height && ordered[j].bandwidth > ordered[best].bandwidth) {
+				best = j
+			}
+		}
+		ordered[i], ordered[best] = ordered[best], ordered[i]
+	}
+	return ordered[:limit]
 }
 
 func protected(method string) error {
@@ -102,15 +243,18 @@ func hasSeparateAudioRendition(text string) bool {
 // fetchPlaylist reads one playlist body and refuses anything that is not one,
 // so a page that answers with an error page cannot be mistaken for a stream.
 func fetchPlaylist(ctx context.Context, rawURL string) (string, string, error) {
+	if err := validatePlaylistURL(rawURL); err != nil {
+		return "", "", fmt.Errorf("%s is not an address this build can read: %w", shortURI(rawURL), err)
+	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return "", "", err
+		return "", "", playlistFailure("playlist request could not be created", err)
 	}
 	request.Header.Set("Accept", "application/vnd.apple.mpegurl, application/x-mpegURL, */*")
-	client := &http.Client{Timeout: playlistTimeout}
+	client := &http.Client{Timeout: playlistTimeout, CheckRedirect: playlistRedirectAllowed}
 	response, err := client.Do(request)
 	if err != nil {
-		return "", "", fmt.Errorf("%s could not be read: %w", shortURI(rawURL), err)
+		return "", "", playlistFailure(shortURI(rawURL)+" could not be read", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode > 299 {
@@ -118,7 +262,7 @@ func fetchPlaylist(ctx context.Context, rawURL string) (string, string, error) {
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, playlistReadLimit))
 	if err != nil {
-		return "", "", fmt.Errorf("%s stopped while being read: %w", shortURI(rawURL), err)
+		return "", "", playlistFailure(shortURI(rawURL)+" stopped while being read", err)
 	}
 	text := strings.TrimPrefix(string(body), "\ufeff")
 	if !strings.HasPrefix(strings.TrimSpace(text), "#EXTM3U") {
@@ -128,7 +272,49 @@ func fetchPlaylist(ctx context.Context, rawURL string) (string, string, error) {
 	if response.Request != nil && response.Request.URL != nil {
 		finalURL = response.Request.URL.String()
 	}
+	if err := validatePlaylistURL(finalURL); err != nil {
+		return "", "", fmt.Errorf("%s redirected to an address this build cannot read", shortURI(rawURL))
+	}
 	return text, finalURL, nil
+}
+
+func validatePlaylistURL(raw string) error {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(u.Scheme, "http") && !strings.EqualFold(u.Scheme, "https") {
+		return fmt.Errorf("only http and https addresses can be opened")
+	}
+	if u.Hostname() == "" || u.User != nil {
+		return fmt.Errorf("address must have a host and no embedded credentials")
+	}
+	return nil
+}
+
+func playlistRedirectAllowed(request *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return fmt.Errorf("too many playlist redirects")
+	}
+	if err := validatePlaylistURL(request.URL.String()); err != nil {
+		return err
+	}
+	if len(via) == 0 || localPlaylistHost(via[0].URL.Hostname()) {
+		return nil
+	}
+	if localPlaylistHost(request.URL.Hostname()) {
+		return fmt.Errorf("playlist redirect from a public host to a local address is refused")
+	}
+	return nil
+}
+
+func localPlaylistHost(host string) bool {
+	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+	}
+	host = strings.ToLower(host)
+	return host == "localhost" || strings.HasSuffix(host, ".localhost")
 }
 
 // pickVariant chooses the media playlist to open from a master playlist. A
@@ -136,15 +322,19 @@ func fetchPlaylist(ctx context.Context, rawURL string) (string, string, error) {
 // the largest of those wins; a master that declares no resolutions at all falls
 // back to its widest bandwidth. Nothing is guessed from the address itself.
 func pickVariant(baseURL, text string) (string, error) {
+	variants, err := parseVariants(baseURL, text)
+	if err != nil {
+		return "", err
+	}
+	return chooseVariant(variants).address, nil
+}
+
+func parseVariants(baseURL, text string) ([]liveVariant, error) {
 	base, err := url.Parse(baseURL)
 	if err != nil {
-		return "", fmt.Errorf("%s is not an address this build can read: %w", shortURI(baseURL), err)
+		return nil, fmt.Errorf("%s is not an address this build can read: %w", shortURI(baseURL), err)
 	}
-	var (
-		chosen        string
-		chosenHeight  int
-		chosenBandwit int
-	)
+	var variants []liveVariant
 	lines := strings.Split(text, "\n")
 	for index, line := range lines {
 		line = strings.TrimSpace(line)
@@ -152,8 +342,9 @@ func pickVariant(baseURL, text string) (string, error) {
 		if !strings.HasPrefix(line, tag) {
 			continue
 		}
-		bandwidth, _ := strconv.Atoi(attribute(line[len(tag):], "BANDWIDTH"))
-		height := resolutionHeight(attribute(line[len(tag):], "RESOLUTION"))
+		attributes := line[len(tag):]
+		bandwidth, _ := strconv.Atoi(attribute(attributes, "BANDWIDTH"))
+		width, height := resolution(attribute(attributes, "RESOLUTION"))
 		uri := ""
 		for next := index + 1; next < len(lines); next++ {
 			candidate := strings.TrimSpace(lines[next])
@@ -166,43 +357,50 @@ func pickVariant(baseURL, text string) (string, error) {
 		if uri == "" {
 			continue
 		}
-		better := chosen == ""
-		if !better {
-			switch {
-			case height != chosenHeight:
-				better = height > chosenHeight
-			case bandwidth != chosenBandwit:
-				better = bandwidth > chosenBandwit
-			}
-		}
-		if !better {
-			continue
-		}
 		reference, err := url.Parse(uri)
-		if err != nil {
+		if err != nil || reference.User != nil {
 			continue
 		}
-		chosen = base.ResolveReference(reference).String()
-		chosenHeight, chosenBandwit = height, bandwidth
+		resolved := base.ResolveReference(reference).String()
+		if validatePlaylistURL(resolved) != nil {
+			continue
+		}
+		variants = append(variants, liveVariant{address: resolved, width: width, height: height, bandwidth: bandwidth})
 	}
-	if chosen == "" {
-		return "", fmt.Errorf("%s is a master playlist that names no variant this build can open", shortURI(baseURL))
+	if len(variants) == 0 {
+		return nil, fmt.Errorf("%s is a master playlist that names no variant this build can open", shortURI(baseURL))
 	}
-	return chosen, nil
+	return variants, nil
+}
+
+func chooseVariant(variants []liveVariant) liveVariant {
+	chosen := variants[0]
+	for _, candidate := range variants[1:] {
+		if candidate.height > chosen.height || (candidate.height == chosen.height && candidate.bandwidth > chosen.bandwidth) {
+			chosen = candidate
+		}
+	}
+	return chosen
 }
 
 // resolutionHeight reads the picture height out of a RESOLUTION attribute. A
 // variant without one has no height, which is how sound-only renditions look.
-func resolutionHeight(resolution string) int {
-	_, height, ok := strings.Cut(resolution, "x")
+func resolutionHeight(value string) int {
+	_, height := resolution(value)
+	return height
+}
+
+func resolution(value string) (int, int) {
+	width, height, ok := strings.Cut(strings.ToLower(value), "x")
 	if !ok {
-		return 0
+		return 0, 0
 	}
-	value, err := strconv.Atoi(strings.TrimSpace(height))
-	if err != nil {
-		return 0
+	w, widthErr := strconv.Atoi(strings.TrimSpace(width))
+	h, heightErr := strconv.Atoi(strings.TrimSpace(height))
+	if widthErr != nil || heightErr != nil || w <= 0 || h <= 0 {
+		return 0, 0
 	}
-	return value
+	return w, h
 }
 
 // protectedMethod names the key method a playlist asks for, or an empty string

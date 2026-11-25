@@ -54,8 +54,14 @@ func mygoRunOnMain(fn func()) {
 // -reopen-mode keep). So the old player stays drawn until the new one has a
 // picture, and is closed then.
 func (a *appState) reopenPlayer(it *item) {
+	a.openReplacement(it, it.uri, false)
+}
+
+// openReplacement keeps the original media address until the selected
+// replacement is ready. Explicit media controls also retain the old play state.
+func (a *appState) openReplacement(it *item, uri string, retainState bool) {
 	previous := it.player
-	player, err := openPlayerOnMain(it.uri)
+	player, err := openPlayerOnMain(uri)
 	if err != nil {
 		it.openErr = safeOpenError(err)
 		return
@@ -63,7 +69,13 @@ func (a *appState) reopenPlayer(it *item) {
 	it.openErr = nil
 	var kept *handover
 	if previous != nil {
-		kept = &handover{previous: rawPlayer(previous)}
+		kept = &handover{previous: rawPlayer(previous), uri: uri, retainState: retainState}
+		if retainState {
+			kept.paused = !previous.Playing()
+			if !isNetworkAddress(it.uri) {
+				kept.position = previous.Position()
+			}
+		}
 		it.previous = previous
 	}
 	// The handover that was still waiting for an older replacement owns the
@@ -76,7 +88,10 @@ func (a *appState) reopenPlayer(it *item) {
 	it.generation++
 	generation := it.generation
 	a.apply()
-	wakeNetworkPlayer(it.uri, player, a.generationIs(it, generation))
+	if kept != nil && kept.retainState {
+		player.SetMuted(true)
+	}
+	wakeNetworkPlayer(uri, player, a.generationIs(it, generation))
 	a.closePendingWhenReady()
 	if kept != nil {
 		go a.handOver(it, generation, kept, older)
@@ -89,9 +104,13 @@ func (a *appState) reopenPlayer(it *item) {
 // picture. Exactly one goroutine releases each player: the task that started
 // the handover, or the task a later reopen hands the player over to.
 type handover struct {
-	mu       sync.Mutex
-	previous *ui.VideoPlayer
-	released bool
+	mu          sync.Mutex
+	previous    *ui.VideoPlayer
+	released    bool
+	uri         string
+	retainState bool
+	paused      bool
+	position    time.Duration
 }
 
 // take returns the player this handover still owns, or nil when it was
@@ -196,14 +215,31 @@ func (a *appState) handOver(it *item, generation int, kept *handover, older *han
 			break
 		}
 		if ready {
+			var confirmed string
 			mygoRunOnMain(func() {
 				if it.generation == generation && it.handover == kept {
 					it.previous = nil
 					it.handover = nil
+					if kept.retainState {
+						if kept.position > 0 {
+							it.player.Seek(kept.position)
+						}
+						if kept.paused {
+							it.player.Pause()
+						}
+						if it.uri != kept.uri {
+							it.uri = kept.uri
+							a.saveSession()
+						}
+						a.apply()
+					}
+					confirmed = shortURI(it.uri)
 				}
 			})
 			a.releasePlayer(kept.take())
-			log.Printf("handover: replaced the player of %s after %s", shortURI(it.uri), "a picture")
+			if confirmed != "" {
+				log.Printf("handover: replaced the player of %s after %s", confirmed, "a picture")
+			}
 			return
 		}
 		if !time.Now().Before(deadline) {
@@ -225,7 +261,11 @@ func (a *appState) handOver(it *item, generation int, kept *handover, older *han
 		it.previous = nil
 		it.handover = nil
 		it.generation++
-		it.shown = true
+		if kept.retainState {
+			a.apply()
+		} else {
+			it.shown = true
+		}
 		it.openErr = fmt.Errorf("reopen did not start within %s; kept the previous player", handoverWait)
 		keptPrevious = true
 	})

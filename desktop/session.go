@@ -56,6 +56,12 @@ type item struct {
 	resumePositionOK bool
 	resumePaused     bool
 	stageOnly        bool
+	playlistMaster   string
+	mediaMenu        bool
+	mediaLoading     bool
+	mediaCancel      context.CancelFunc
+	mediaChoices     []liveVariant
+	mediaError       string
 
 	// previous is the player this item opened before the current one, kept
 	// alive and drawn until the current one has a picture. See reopenPlayer.
@@ -873,6 +879,7 @@ type importPlan struct {
 	stream hls.Stream
 	mode   importMode
 	live   bool
+	master string
 }
 
 func inspectImport(ctx context.Context, uri string) (importPlan, error) {
@@ -896,6 +903,7 @@ func inspectImport(ctx context.Context, uri string) (importPlan, error) {
 		plan.uri = role.address
 		plan.mode = importDirect
 		plan.live = true
+		plan.master = role.master
 		return plan, nil
 	}
 	plan.stream, err = hls.Probe(ctx, uri, hls.Options{})
@@ -923,7 +931,7 @@ func inspectImport(ctx context.Context, uri string) (importPlan, error) {
 func (a *appState) importSource(ctx context.Context, uri string, token int) {
 	plan, probeErr := inspectImport(ctx, uri)
 	mygoRunOnMain(func() {
-		a.landImport(token, plan.uri, plan.stream, plan.mode, plan.live, probeErr)
+		a.landImportPlan(token, plan, probeErr)
 	})
 }
 
@@ -1026,6 +1034,14 @@ func (a *appState) startStoredSourceRestores() {
 
 func (a *appState) advanceStageGeneration() {
 	a.stageGeneration++
+	for _, it := range a.items {
+		if it.mediaCancel != nil {
+			it.mediaCancel()
+			it.mediaCancel = nil
+			it.mediaLoading = false
+		}
+		it.mediaMenu = false
+	}
 	if a.startupRestoreCancel == nil {
 		return
 	}
@@ -1074,7 +1090,7 @@ func (a *appState) advanceCommandLineSources() {
 				return
 			}
 			a.pendingImportOrigin = originCommandLine
-			a.landImport(token, plan.uri, plan.stream, plan.mode, plan.live, err)
+			a.landImportPlan(token, plan, err)
 			a.advanceCommandLineSources()
 		})
 	}()
@@ -1182,6 +1198,9 @@ func (a *appState) installSavedSource(it *item, plan importPlan, inspectErr erro
 				candidate.persistedName = savedName
 				candidate.restored = true
 				candidate.shown = wasShown
+				if plan.master != "" || it.uri != candidate.uri {
+					it.playlistMaster = plan.master
+				}
 				it.uri = candidate.uri
 				it.source = candidate.source
 				it.video = candidate.video
@@ -1299,6 +1318,11 @@ func (a *appState) itemBySourceID(id core.SourceID) *item {
 // the Sources page while the read runs, so without that frame it keeps showing
 // "Reading…" and the old source count until something else happens to draw.
 func (a *appState) landImport(token int, uri string, stream hls.Stream, mode importMode, live bool, probeErr error) {
+	a.landImportPlan(token, importPlan{uri: uri, stream: stream, mode: mode, live: live}, probeErr)
+}
+
+func (a *appState) landImportPlan(token int, plan importPlan, probeErr error) {
+	uri, stream, mode, live := plan.uri, plan.stream, plan.mode, plan.live
 	if token != a.importToken {
 		// Cancel already cleared the busy state and said so; this landing is
 		// from the read it stopped and must not add anything.
@@ -1320,7 +1344,7 @@ func (a *appState) landImport(token int, uri string, stream hls.Stream, mode imp
 	}
 	_, targetErr := a.session.Scene(target)
 	targetAvailable := targetErr == nil
-	it := &item{uri: uri, volume: a.settingsSourceVolume(), origin: origin, stageOnly: targetAvailable}
+	it := &item{uri: uri, volume: a.settingsSourceVolume(), origin: origin, stageOnly: targetAvailable, playlistMaster: plan.master}
 	var err error
 	switch {
 	case probeErr != nil:
@@ -1672,9 +1696,14 @@ func (a *appState) apply() {
 			continue
 		}
 		it.shown = shown[it.video]
+		player := it.player
+		if it.handover != nil && it.handover.retainState && it.previous != nil {
+			player.SetMuted(true)
+			player = it.previous
+		}
 		level, ok := levels[it.audio]
 		if !ok {
-			it.player.SetMuted(true)
+			player.SetMuted(true)
 			continue
 		}
 		// A source whose place on the shared timeline is unknown makes no claim
@@ -1685,9 +1714,9 @@ func (a *appState) apply() {
 		if !muted && a.protectedSilence(it) {
 			muted = true
 		}
-		it.player.SetMuted(muted)
+		player.SetMuted(muted)
 		if !muted {
-			it.player.SetVolume(a.volumeFor(level.Volume))
+			player.SetVolume(a.volumeFor(level.Volume))
 		}
 	}
 }
@@ -2000,6 +2029,10 @@ func (a *appState) remove(index int) error {
 	it, err := a.at(index)
 	if err != nil {
 		return err
+	}
+	if it.mediaCancel != nil {
+		it.mediaCancel()
+		it.mediaCancel = nil
 	}
 	if it.source.ID != "" {
 		if err := a.session.RemoveSource(it.source.ID); err != nil {

@@ -91,14 +91,15 @@ type storedAudio struct {
 // storedSource is one source: how to reopen it and how it was set up. The URI
 // is the address already in memory; no credentials are stored.
 type storedSource struct {
-	ID            string  `json:"id,omitempty"`
-	URI           string  `json:"uri,omitempty"`
-	Name          string  `json:"name,omitempty"`
-	Volume        float64 `json:"volume"`
-	Muted         bool    `json:"muted,omitempty"`
-	Shown         bool    `json:"shown,omitempty"`
-	NeedsReselect bool    `json:"needsReselect,omitempty"`
-	StageOnly     bool    `json:"stageOnly,omitempty"`
+	ID             string  `json:"id,omitempty"`
+	URI            string  `json:"uri,omitempty"`
+	Name           string  `json:"name,omitempty"`
+	Volume         float64 `json:"volume"`
+	Muted          bool    `json:"muted,omitempty"`
+	Shown          bool    `json:"shown,omitempty"`
+	NeedsReselect  bool    `json:"needsReselect,omitempty"`
+	StageOnly      bool    `json:"stageOnly,omitempty"`
+	PlaylistMaster string  `json:"playlistMaster,omitempty"`
 }
 
 // sessionStorePath puts the snapshot beside the settings file, so both travel
@@ -137,19 +138,21 @@ func (a *appState) captureSessionStore() storedSession {
 	}
 	for _, it := range a.items {
 		uri, needsReselect := persistentURI(it.uri)
+		master, _ := persistentURI(it.playlistMaster)
 		name := it.source.Name
 		if name == "" {
 			name = it.persistedName
 		}
 		snap.Sources = append(snap.Sources, storedSource{
-			ID:            it.persistentID,
-			URI:           uri,
-			Name:          name,
-			Volume:        it.volume,
-			Muted:         it.muted,
-			Shown:         it.shown,
-			NeedsReselect: needsReselect,
-			StageOnly:     it.stageOnly,
+			ID:             it.persistentID,
+			URI:            uri,
+			Name:           name,
+			Volume:         it.volume,
+			Muted:          it.muted,
+			Shown:          it.shown,
+			NeedsReselect:  needsReselect,
+			StageOnly:      it.stageOnly,
+			PlaylistMaster: master,
 		})
 	}
 	scenes := a.session.Scenes()
@@ -866,6 +869,7 @@ func sanitizeSessionStore(snap storedSession) storedSession {
 			src.NeedsReselect = true
 		}
 		src.Volume = clampVolume(src.Volume)
+		src.PlaylistMaster, _ = persistentURI(src.PlaylistMaster)
 		out.Sources = append(out.Sources, src)
 	}
 	usedSceneIDs := make(map[string]bool, len(snap.Scenes))
@@ -965,6 +969,7 @@ func newAppStateFromStore(loaded settings, snap storedSession) (*appState, error
 		it.persistedName = stored.Name
 		it.restored = true
 		it.stageOnly = stored.StageOnly
+		it.playlistMaster = stored.PlaylistMaster
 		if err != nil {
 			// One source that cannot reopen must not stop the start: the item
 			// keeps its open error so the window can report it.

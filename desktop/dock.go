@@ -392,6 +392,7 @@ func (a *appState) dockSourcesBody(c *ui.Context) {
 				})
 		})
 		a.stageShareControl(c, row)
+		a.sourceMediaControls(c, row)
 	}
 	if memberCount == 0 {
 		message := a.tr("No sources yet.", "还没有来源。")
@@ -624,6 +625,7 @@ func (a *appState) dockRowsBody(c *ui.Context) {
 		for _, it := range a.items {
 			if a.isStageMember(it) && a.selected == itemKey(it) {
 				a.stageShareControl(c, it)
+				a.sourceMediaControls(c, it)
 				break
 			}
 		}

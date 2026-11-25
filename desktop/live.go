@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -46,6 +47,10 @@ func (e playlistReadError) Error() string { return e.message }
 func (e playlistReadError) Unwrap() error { return e.cause }
 
 func playlistFailure(message string, cause error) error {
+	var addressErr *url.Error
+	if errors.As(cause, &addressErr) {
+		cause = addressErr.Err
+	}
 	return playlistReadError{message: redactSecrets(message + ": " + cause.Error()), cause: cause}
 }
 
@@ -94,7 +99,7 @@ type livePlaylistInspection struct {
 // returns the handed-over address unchanged for a media playlist, and refuses
 // a protected stream outright.
 func inspectPlaylist(ctx context.Context, rawURL string) (playlistRole, error) {
-	text, playlistURL, err := fetchPlaylist(ctx, rawURL)
+	text, playlistURL, err := fetchPlaylist(ctx, rawURL, true)
 	if err != nil {
 		return playlistRole{}, err
 	}
@@ -108,22 +113,18 @@ func inspectPlaylist(ctx context.Context, rawURL string) (playlistRole, error) {
 	if err != nil {
 		return playlistRole{}, err
 	}
-	chosen := chooseVariant(variants)
-	child, childURL, err := fetchPlaylist(ctx, chosen.address)
+	chosen, err := inspectDeclaredVariant(ctx, chooseVariant(variants), isLocalPlaylistURL(playlistURL))
 	if err != nil {
 		return playlistRole{}, err
 	}
-	if method := protectedMethod(child); method != "" {
-		return playlistRole{}, protected(method)
-	}
-	return playlistRole{address: childURL, master: playlistURL, live: !hasEnd(child)}, nil
+	return playlistRole{address: chosen.address, master: playlistURL, live: chosen.live}, nil
 }
 
 // inspectLivePlaylist returns the playable variants explicitly declared by a
 // master. A child counts as usable only after its playlist has been read and
 // checked for protection and nested-master content.
 func inspectLivePlaylist(ctx context.Context, rawURL string) (livePlaylistInspection, error) {
-	text, playlistURL, err := fetchPlaylist(ctx, rawURL)
+	text, playlistURL, err := fetchPlaylist(ctx, rawURL, true)
 	if err != nil {
 		return livePlaylistInspection{}, err
 	}
@@ -140,26 +141,37 @@ func inspectLivePlaylist(ctx context.Context, rawURL string) (livePlaylistInspec
 	if err != nil {
 		return livePlaylistInspection{}, err
 	}
-	usable := make([]liveVariant, 0, len(declared))
+	usable := make([]liveVariant, 0, min(maxVariantChecks, len(declared)))
+	seen := make(map[string]bool)
+	allowLocal := isLocalPlaylistURL(playlistURL)
 	var protectedErr error
 	checks := orderedVariantChecks(declared, maxVariantChecks)
 	for _, variant := range checks {
 		if err := ctx.Err(); err != nil {
-			return livePlaylistInspection{}, err
+			break
 		}
-		checked, fetchErr := inspectDeclaredVariant(ctx, variant)
+		checked, fetchErr := inspectDeclaredVariant(ctx, variant, allowLocal)
 		if fetchErr != nil {
 			if err := ctx.Err(); err != nil {
-				return livePlaylistInspection{}, err
+				break
 			}
 			if errors.Is(fetchErr, errProtectedPlaylist) && protectedErr == nil {
 				protectedErr = fetchErr
 			}
 			continue
 		}
-		usable = append(usable, checked)
+		if !seen[checked.address] {
+			seen[checked.address] = true
+			usable = append(usable, checked)
+		}
+	}
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return livePlaylistInspection{}, ctx.Err()
 	}
 	if len(usable) == 0 {
+		if err := ctx.Err(); err != nil {
+			return livePlaylistInspection{}, err
+		}
 		if protectedErr != nil {
 			return livePlaylistInspection{}, protectedErr
 		}
@@ -183,15 +195,16 @@ func validateRootPlaylist(text string) error {
 	return nil
 }
 
-func inspectDeclaredVariant(ctx context.Context, variant liveVariant) (liveVariant, error) {
-	child, childURL, err := fetchPlaylist(ctx, variant.address)
+func inspectDeclaredVariant(ctx context.Context, variant liveVariant, allowLocal bool) (liveVariant, error) {
+	child, childURL, err := fetchPlaylist(ctx, variant.address, allowLocal)
 	if err != nil {
 		return liveVariant{}, err
 	}
 	if method := protectedMethod(child); method != "" {
 		return liveVariant{}, protected(method)
 	}
-	if strings.Contains(child, "#EXT-X-STREAM-INF:") || hasSeparateAudioRendition(child) {
+	if strings.Contains(child, "#EXT-X-STREAM-INF:") || strings.Contains(child, "#EXT-X-I-FRAME-STREAM-INF:") ||
+		hasSeparateAudioRendition(child) || (!strings.Contains(child, "#EXTINF:") && !strings.Contains(child, "#EXT-X-PART:")) {
 		return liveVariant{}, fmt.Errorf("declared variant is not a muxed media playlist")
 	}
 	variant.address = childURL
@@ -203,8 +216,8 @@ func orderedVariantChecks(variants []liveVariant, limit int) []liveVariant {
 	if len(variants) <= limit {
 		return variants
 	}
-	ordered := append([]liveVariant(nil), variants...)
-	for i := 0; i < len(ordered); i++ {
+	ordered := slices.Clone(variants)
+	for i := 0; i < limit; i++ {
 		best := i
 		for j := i + 1; j < len(ordered); j++ {
 			if ordered[j].height > ordered[best].height ||
@@ -242,7 +255,7 @@ func hasSeparateAudioRendition(text string) bool {
 
 // fetchPlaylist reads one playlist body and refuses anything that is not one,
 // so a page that answers with an error page cannot be mistaken for a stream.
-func fetchPlaylist(ctx context.Context, rawURL string) (string, string, error) {
+func fetchPlaylist(ctx context.Context, rawURL string, allowLocal bool) (string, string, error) {
 	if err := validatePlaylistURL(rawURL); err != nil {
 		return "", "", fmt.Errorf("%s is not an address this build can read: %w", shortURI(rawURL), err)
 	}
@@ -251,7 +264,10 @@ func fetchPlaylist(ctx context.Context, rawURL string) (string, string, error) {
 		return "", "", playlistFailure("playlist request could not be created", err)
 	}
 	request.Header.Set("Accept", "application/vnd.apple.mpegurl, application/x-mpegURL, */*")
-	client := &http.Client{Timeout: playlistTimeout, CheckRedirect: playlistRedirectAllowed}
+	client := &http.Client{
+		Timeout: playlistTimeout, CheckRedirect: playlistRedirectAllowed,
+		Transport: playlistTransport{allowLocal: allowLocal && isLocalPlaylistURL(rawURL)},
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		return "", "", playlistFailure(shortURI(rawURL)+" could not be read", err)
@@ -281,7 +297,7 @@ func fetchPlaylist(ctx context.Context, rawURL string) (string, string, error) {
 func validatePlaylistURL(raw string) error {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
-		return err
+		return fmt.Errorf("address has invalid URL syntax")
 	}
 	if !strings.EqualFold(u.Scheme, "http") && !strings.EqualFold(u.Scheme, "https") {
 		return fmt.Errorf("only http and https addresses can be opened")
@@ -299,13 +315,19 @@ func playlistRedirectAllowed(request *http.Request, via []*http.Request) error {
 	if err := validatePlaylistURL(request.URL.String()); err != nil {
 		return err
 	}
-	if len(via) == 0 || localPlaylistHost(via[0].URL.Hostname()) {
-		return nil
-	}
 	if localPlaylistHost(request.URL.Hostname()) {
-		return fmt.Errorf("playlist redirect from a public host to a local address is refused")
+		for _, previous := range via {
+			if !localPlaylistHost(previous.URL.Hostname()) {
+				return fmt.Errorf("playlist redirect from a public host to a local address is refused")
+			}
+		}
 	}
 	return nil
+}
+
+func isLocalPlaylistURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && localPlaylistHost(u.Hostname())
 }
 
 func localPlaylistHost(host string) bool {

@@ -279,8 +279,10 @@ func (a *appState) stageEditing(c *ui.Context, geometry []stagePlacement, sizeW,
 		// Pressed() stays true for as long as the pointer is down, so the
 		// gesture is started once, not once per frame.
 		if !a.drag.active {
-			if spot, ok := topmostAt(geometry, a.hoverX, a.hoverY); ok {
+			spot, ok := stagePressTarget(geometry, a.selected, editing && !a.stageLocked(a.selected), a.hoverX, a.hoverY)
+			if ok {
 				a.selectFromStage(spot.item)
+				editing = a.editMode
 				kind := handleNone
 				if editing {
 					kind = spot.box.handleAt(a.hoverX, a.hoverY)
@@ -319,6 +321,22 @@ func (a *appState) stageEditing(c *ui.Context, geometry []stagePlacement, sizeW,
 	}
 }
 
+// stagePressTarget keeps canvas selection intuitive in overlaps: the topmost
+// picture receives a normal click, while a visible handle on the selected
+// picture remains directly targetable even when another picture covers it.
+// The source list can therefore select a lower picture and its handles can
+// still start a resize without changing the stacking order.
+func stagePressTarget(geometry []stagePlacement, selected core.SourceID, editing bool, x, y float32) (stagePlacement, bool) {
+	if editing && selected != "" {
+		for _, spot := range geometry {
+			if itemKey(spot.item) == selected && spot.box.handleAt(x, y) != handleNone {
+				return spot, true
+			}
+		}
+	}
+	return topmostAt(geometry, x, y)
+}
+
 // topmostAt reports the last (topmost) picture whose box holds the point.
 func topmostAt(geometry []stagePlacement, x, y float32) (stagePlacement, bool) {
 	for i := len(geometry) - 1; i >= 0; i-- {
@@ -346,6 +364,29 @@ func boxPixels(b stageBox, w, h float32) stageBox {
 func (a *appState) selectFromStage(it *item) {
 	a.selected = it.source.ID
 	a.boxFields = boxFields{}
+	if !a.editMode {
+		a.editMode = true
+		a.editNote = a.tr("Drag the picture to move it, or drag a handle to resize it.", "拖动画面调整位置，拖动把手调整大小。")
+	}
+	a.invalidate()
+}
+
+// selectStageSource keeps list selection useful even for a source that has
+// no picture to edit in the current arrangement.
+func (a *appState) selectStageSource(it *item) {
+	for _, spot := range a.stageGeometry() {
+		if spot.item == it {
+			a.selectFromStage(it)
+			return
+		}
+	}
+	a.selected = itemKey(it)
+	a.boxFields = boxFields{}
+	a.editNote = ""
+	if it.shown {
+		a.editMode = true
+		a.editNote = a.tr("Choose Free layout to place this picture.", "切换到「自由布局」即可摆放这路画面。")
+	}
 	a.invalidate()
 }
 

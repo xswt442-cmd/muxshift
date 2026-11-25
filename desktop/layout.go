@@ -30,9 +30,10 @@ const (
 	layoutPip                     // one picture with the second in a corner
 	layoutGrid                    // up to four pictures, two by two
 	layoutHero                    // one large picture, two smaller on the right
+	layoutFree                    // every picture gets an independently editable place
 )
 
-var layoutKinds = []layoutKind{layoutFocus, layoutSplit, layoutPip, layoutGrid, layoutHero}
+var layoutKinds = []layoutKind{layoutFocus, layoutSplit, layoutPip, layoutGrid, layoutHero, layoutFree}
 
 func (k layoutKind) String() string {
 	switch k {
@@ -44,6 +45,8 @@ func (k layoutKind) String() string {
 		return "grid"
 	case layoutHero:
 		return "hero"
+	case layoutFree:
+		return "free"
 	default:
 		return "focus"
 	}
@@ -60,6 +63,8 @@ func (k layoutKind) label() string {
 		return "Grid"
 	case layoutHero:
 		return "Hero"
+	case layoutFree:
+		return "Free"
 	default:
 		return "Focus"
 	}
@@ -76,6 +81,8 @@ func (k layoutKind) slots() int {
 		return 4
 	case layoutHero:
 		return 3
+	case layoutFree:
+		return 0 // Free has no preset slot limit.
 	default:
 		return 1
 	}
@@ -109,7 +116,7 @@ func layoutSlots(kind layoutKind, n int) []slotRect {
 	if n == 0 {
 		return nil
 	}
-	if max := kind.slots(); n > max {
+	if max := kind.slots(); max > 0 && n > max {
 		n = max
 	}
 	switch kind {
@@ -121,9 +128,37 @@ func layoutSlots(kind layoutKind, n int) []slotRect {
 		return gridSlots(n)
 	case layoutHero:
 		return heroSlots(n)
+	case layoutFree:
+		return freeSlots(n)
 	default:
 		return []slotRect{{0, 0, 100, 100, 0}}
 	}
+}
+
+// freeSlots gives every shown picture a place, regardless of how many a
+// preset can hold. These are only initial positions: explicit scene edits
+// take precedence and remain stored when the user switches presets.
+func freeSlots(n int) []slotRect {
+	if n <= 0 {
+		return nil
+	}
+	cols := 1
+	for cols*cols < n {
+		cols++
+	}
+	rows := (n + cols - 1) / cols
+	gap := min(float32(1), 20/float32(cols))
+	cell := (100 - gap*float32(cols-1)) / float32(cols)
+	top := (100 - float32(rows)*cell - float32(rows-1)*gap) / 2
+	out := make([]slotRect, n)
+	for i := range out {
+		col, row := i%cols, i/cols
+		out[i] = slotRect{
+			left: float32(col) * (cell + gap), top: top + float32(row)*(cell+gap),
+			width: cell, height: cell,
+		}
+	}
+	return out
 }
 
 // splitSlots divides the stage into n equal columns with a hairline between

@@ -924,7 +924,11 @@ func TestABoxThatFitsStaysInsideTheStage(t *testing.T) {
 
 func TestEveryLayoutKeepsItsPicturesApart(t *testing.T) {
 	for _, kind := range layoutKinds {
-		for n := 1; n <= kind.slots(); n++ {
+		limit := kind.slots()
+		if kind == layoutFree {
+			limit = 9
+		}
+		for n := 1; n <= limit; n++ {
 			rects := layoutSlots(kind, n)
 			if len(rects) != n {
 				t.Fatalf("%v with %d sources placed %d rects", kind, n, len(rects))

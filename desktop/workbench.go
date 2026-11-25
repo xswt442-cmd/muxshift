@@ -342,10 +342,11 @@ func (a *appState) sourceDot(it *item) ui.Color {
 // views cannot drift apart.
 func (a *appState) sourceEntry(c *ui.Context, it *item, index int, compact bool, placement ...map[*item]bool) {
 	active := a.selected == itemKey(it)
+	c.Key("source-row-" + string(itemKey(it)))
 	row := ui.Row(c).WidthPercent(100).Gap(spaceXs).AlignItems(ui.Center)
 	if compact {
 		row = row.Height(a.rowHeight()).Padding(0, 10).Radius(radiusMd).
-			OnClick(func() { a.selected = itemKey(it) })
+			OnClick(func() { a.selectStageSource(it) })
 		fill := colorRow
 		if row.Pressed() {
 			fill = colorPressed
@@ -494,6 +495,15 @@ func (a *appState) sourceCompactActions(c *ui.Context, it *item, index int) {
 			a.tr("Make this the primary picture", "设为主画面"), colorTextDim, func() {
 				a.runCommand(command{Kind: commandPrimary, Source: itemKey(it)})
 			})
+		if a.selected == itemKey(it) {
+			label, tint := a.tr("Lock position", "锁定摆位"), colorTextDim
+			if a.stageLocked(it.source.ID) {
+				label, tint = a.tr("Unlock position", "解锁摆位"), colorAccent
+			}
+			a.quietIconButton(c, "source-lock-"+key, lucide.Lock(), label, tint, func() {
+				a.toggleStageLock(it.source.ID)
+			})
+		}
 	}
 	a.sourceRenameButton(c, it)
 	if it.video != "" {
@@ -995,6 +1005,8 @@ func (a *appState) layoutLabel(kind layoutKind) string {
 		return a.tr("Grid", "网格")
 	case layoutHero:
 		return a.tr("Hero", "主次")
+	case layoutFree:
+		return a.tr("Free", "自由布局")
 	}
 	return kind.label()
 }
@@ -1008,8 +1020,8 @@ func (a *appState) layoutNote() string {
 			shown++
 		}
 	}
-	if shown > a.layout.slots() {
-		return itoa(shown) + a.tr(" shown; this layout places ", " 路已显示；此布局最多 ") + itoa(a.layout.slots())
+	if slots := a.layout.slots(); slots > 0 && shown > slots {
+		return a.tr("Use Free layout to place all shown sources.", "切换到「自由布局」可摆放所有已显示的画面。")
 	}
 	return ""
 }

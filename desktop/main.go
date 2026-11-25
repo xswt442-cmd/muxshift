@@ -486,7 +486,7 @@ func (a *appState) stagePictures() []*item {
 		}
 		shown = ordered
 	}
-	if max := a.layout.slots(); len(shown) > max {
+	if max := a.layout.slots(); max > 0 && len(shown) > max {
 		shown = shown[:max]
 	}
 	return shown

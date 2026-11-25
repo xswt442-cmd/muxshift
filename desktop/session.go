@@ -609,6 +609,7 @@ type appState struct {
 	// be in flight: the button refuses a second one, and a scenario reads the
 	// finished suggestion here instead of parsing the status line.
 	probeRunning bool
+	alignRow     alignRowResult
 	lastProbe    alignSuggestion
 	// lastProbeErr is why the newest comparison did not finish. It is kept
 	// beside lastProbe, not instead of it: an older proposal may still describe

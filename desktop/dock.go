@@ -698,16 +698,21 @@ func (a *appState) dockSyncBody(c *ui.Context) {
 		return
 	}
 	reference := a.syncReference()
-	a.rowSurface(c).Height(28).Padding(0, spaceSm).Gap(spaceXs).
+	result := a.alignmentRowResult()
+	a.rowSurface(c).Padding(spaceXs, spaceSm).Gap(spaceXs).
 		AlignItems(ui.Center).Children(func() {
-		label := a.tr("Reference: none", "参考：无")
-		if reference != nil {
-			label = a.tr("Reference: ", "参考：") + sourceDisplayName(reference)
-		}
-		ui.Text(c, label).FontSize(textMicro).TextColor(colorTextDim).Grow(1).MinWidth(0).SingleLine()
+		ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+			ui.Text(c, a.tr("Current reference", "当前参考")).FontSize(textMicro).TextColor(colorTextDim)
+			name := a.tr("No reference selected", "未选参考来源")
+			if reference != nil {
+				name = sourceDisplayName(reference)
+			}
+			ui.Text(c, name).FontSize(textTitle).FontWeight(600).MinWidth(0).SingleLine().Tooltip(name)
+		})
 		if a.syncRef != "" {
 			a.iconButton(c, "sync-ref-clear", lucide.X(),
 				a.tr("Use the first picture as reference", "以第一幅画面为参考"), false, func() {
+					a.invalidateAlignmentRow()
 					a.syncRef = ""
 				})
 		}
@@ -726,16 +731,13 @@ func (a *appState) dockSyncBody(c *ui.Context) {
 			Background(colorRow).Border(1, edge).Radius(radiusMd).Children(func() {
 			// The reference is one line: it has no offset to step, and the
 			// second line would only repeat the same word.
-			lineHeight := float32(20)
-			if isRef {
-				lineHeight = 26
-			}
-			ui.Row(c).WidthPercent(100).Height(lineHeight).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, fmt.Sprintf("%d  %s", i+1, sourceDisplayName(row))).FontSize(textBody).FontWeight(400).
+			ui.Row(c).WidthPercent(100).Height(20).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, fmt.Sprintf("%d  %s", i+1, sourceDisplayName(row))).FontSize(textSmall).FontWeight(400).
 					TextColor(colorText).Grow(1).MinWidth(0).SingleLine().Tooltip(sourceDisplayName(row))
-				if !isRef {
+				if !isRef && row.source.ID != "" {
 					a.iconButton(c, "sync-ref-"+string(row.source.ID), lucide.Crosshair(),
 						a.tr("Set as reference", "设为参考"), false, func() {
+							a.invalidateAlignmentRow()
 							a.syncRef = row.source.ID
 						})
 				}
@@ -751,7 +753,7 @@ func (a *appState) dockSyncBody(c *ui.Context) {
 					badge = badge.TextColor(colorDim)
 				}
 			})
-			if isRef {
+			if isRef || row.source.ID == "" {
 				return
 			}
 			ui.Row(c).WidthPercent(100).Height(28).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
@@ -766,8 +768,7 @@ func (a *appState) dockSyncBody(c *ui.Context) {
 						})
 				}
 				a.iconButton(c, "sync-align-"+string(row.source.ID), lucide.ScanSearch(),
-					a.tr("Suggest an offset without changing it",
-						"测算偏移建议，不改当前值"), false, func() {
+					a.tr("Estimate alignment offset", "估算对齐偏移"), false, func() {
 						if reference != nil {
 							if refIndex := a.indexOf(reference); refIndex >= 0 {
 								a.probeAsync(refIndex, i)
@@ -776,13 +777,10 @@ func (a *appState) dockSyncBody(c *ui.Context) {
 					})
 				ui.Box(c).Grow(1)
 			})
+			if result.Target == row.source.ID && result.Text != "" {
+				ui.Text(c, result.Text).FontSize(textMicro).TextColor(colorTextDim).Wrap()
+			}
 		})
-	}
-	// A suggestion is a paragraph, not a label: it is written where there is
-	// room for it (Diagnostics) instead of being clipped by this panel.
-	if a.syncNote != "" {
-		ui.Text(c, a.tr("See the latest offset suggestion in Diagnostics", "偏移建议见诊断页")).
-			FontSize(textMicro).TextColor(colorTextDim).SingleLine()
 	}
 }
 

@@ -162,6 +162,24 @@ func (a *appState) alignLine() string {
 	}
 }
 
+// alignmentRowResult exposes only the current stage/reference/target result.
+// Callers must use it on the UI thread because it reads current app state.
+func (a *appState) alignmentRowResult() alignRowResult {
+	row := a.alignRow
+	if row.Status == "" || row.Stage != a.scene {
+		return alignRowResult{}
+	}
+	ref := a.find(row.Reference)
+	target := a.find(row.Target)
+	currentRef := a.syncReference()
+	if ref == nil || target == nil || currentRef == nil || currentRef.source.ID != row.Reference ||
+		!a.isStageMember(ref) || !a.isStageMember(target) ||
+		ref.generation != row.ReferenceGeneration || target.generation != row.TargetGeneration {
+		return alignRowResult{}
+	}
+	return row
+}
+
 // alignTone colours the block by what the report is worth: a live proposal, one
 // the session outgrew, or a refusal.
 func alignTone(state string) ui.Color {

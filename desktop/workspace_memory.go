@@ -209,6 +209,12 @@ func (a *appState) workspaceFromWindow(window *mygo.Window, on bool) workspaceMe
 	if !ok {
 		page = ""
 	}
+	rail := a.rail
+	if !a.navUp {
+		rail = paneClosed
+	} else if rail == paneClosed {
+		rail = paneOpen
+	}
 	return workspaceMemory{
 		On:        on,
 		Page:      page,
@@ -216,7 +222,7 @@ func (a *appState) workspaceFromWindow(window *mygo.Window, on bool) workspaceMe
 		Y:         b.Y,
 		Width:     b.Width,
 		Height:    b.Height,
-		Rail:      paneModeName(a.rail),
+		Rail:      paneModeName(rail),
 		Inspector: paneModeName(a.inspector),
 		Dock:      paneModeName(a.dock),
 	}
@@ -265,6 +271,7 @@ func (a *appState) restoreWorkspace(window *mygo.Window, displays []mygo.Display
 	}
 	if mode, ok := parsePaneMode(remembered.Rail); ok {
 		a.rail = mode
+		a.navUp = mode != paneClosed
 	}
 	if mode, ok := parsePaneMode(remembered.Inspector); ok {
 		a.inspector = mode

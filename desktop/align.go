@@ -44,6 +44,19 @@ type alignWindow struct {
 	Length time.Duration
 }
 
+// alignRowResult is the one concise alignment state shown beside a source.
+// Detailed probe diagnostics remain in the existing report fields.
+type alignRowResult struct {
+	RequestID           uint64
+	Stage               core.SceneID
+	Reference           core.SourceID
+	Target              core.SourceID
+	ReferenceGeneration int
+	TargetGeneration    int
+	Status              string
+	Text                string
+}
+
 func (w alignWindow) String() string {
 	return fmt.Sprintf("source %d from %s for %s", w.Index+1, w.Start, w.Length)
 }
@@ -422,8 +435,33 @@ func (a *appState) startProbe(reference, target int) uint64 {
 	}
 	refWindow, refErr := a.alignWindowAt(reference)
 	tgtWindow, tgtErr := a.alignWindowAt(target)
+	refItem, _ := a.at(reference)
+	tgtItem, _ := a.at(target)
 	a.probeAttempt++
 	attempt := a.probeAttempt
+	stage := a.scene
+	row := alignRowResult{RequestID: attempt, Stage: a.scene, Status: "busy",
+		Text: a.tr("Estimating alignment…", "正在估算对齐偏移…")}
+	if refItem != nil {
+		row.Reference = refItem.source.ID
+		row.ReferenceGeneration = refItem.generation
+	}
+	if tgtItem != nil {
+		row.Target = tgtItem.source.ID
+		row.TargetGeneration = tgtItem.generation
+	}
+	if refErr != nil || tgtErr != nil || refItem == nil || tgtItem == nil || row.Reference == "" || row.Target == "" {
+		row.Status = "unavailable"
+		row.Text = unavailableAlignText(a, refErr, tgtErr)
+		a.alignRow = row
+		a.lastProbeErr = row.Text
+		a.lastProbeFail = nil
+		a.syncNote = row.Text
+		a.probeDone = attempt
+		a.invalidate()
+		return attempt
+	}
+	a.alignRow = row
 	a.probeRunning = true
 	a.probeChild.Store(0)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -433,7 +471,7 @@ func (a *appState) startProbe(reference, target int) uint64 {
 		suggestion, err := a.suggestAlign(ctx, reference, target)
 		cancel()
 		mygoRunOnMain(func() {
-			a.applyProbeResult(attempt, suggestion, err, refWindow, refErr, tgtWindow, tgtErr)
+			a.applyProbeResultForStage(attempt, stage, refWindow, tgtWindow, suggestion, err, refErr, tgtErr)
 		})
 	}()
 	return attempt
@@ -492,6 +530,22 @@ func (a *appState) stopProbe(why string) bool {
 // has been superseded is dropped: the session's account belongs to the newest
 // attempt, not to whichever goroutine finished last.
 func (a *appState) applyProbeResult(attempt uint64, suggestion alignSuggestion, err error, ref alignWindow, refErr error, tgt alignWindow, tgtErr error) {
+	a.applyProbeResultCore(attempt, suggestion, err, ref, refErr, tgt, tgtErr, false)
+}
+
+func (a *appState) applyProbeResultForStage(attempt uint64, stage core.SceneID, ref, tgt alignWindow, suggestion alignSuggestion, err error, refErr, tgtErr error) {
+	if stage != a.scene || attempt != a.probeAttempt {
+		return
+	}
+	current := a.alignmentRowMatches(attempt, stage, ref, tgt)
+	if !current {
+		a.alignRow = alignRowResult{}
+	}
+	a.applyProbeResultCore(attempt, suggestion, err, ref, refErr, tgt, tgtErr, current)
+	a.invalidate()
+}
+
+func (a *appState) applyProbeResultCore(attempt uint64, suggestion alignSuggestion, err error, ref alignWindow, refErr error, tgt alignWindow, tgtErr error, updateRow bool) {
 	if attempt != a.probeAttempt {
 		logf("align", "an earlier comparison finished after a newer one started; it is not the session's account")
 		return
@@ -512,6 +566,10 @@ func (a *appState) applyProbeResult(attempt uint64, suggestion alignSuggestion, 
 			a.lastProbeFail = nil
 		}
 		a.syncNote = fmt.Sprintf("alignment probe failed: %s", reason)
+		if updateRow {
+			a.alignRow.Status = "problem"
+			a.alignRow.Text = conciseAlignFailure(a, reason)
+		}
 		logf("align", "probe failed: %s", reason)
 		return
 	}
@@ -519,7 +577,67 @@ func (a *appState) applyProbeResult(attempt uint64, suggestion alignSuggestion, 
 	a.lastProbeFail = nil
 	a.lastProbe = suggestion
 	a.syncNote = a.suggestionLine(suggestion)
+	if updateRow && suggestion.Result.Accepted && suggestion.Expired == "" && a.fresh(suggestion) == "" {
+		a.alignRow.Status = "suggested"
+		a.alignRow.Text = fmt.Sprintf(a.tr("Suggested %+.3f s", "建议偏移 %+.3f 秒"), suggestion.CoreOffset.Seconds())
+	} else if updateRow {
+		a.alignRow.Status = "problem"
+		if suggestion.Expired != "" || a.fresh(suggestion) != "" {
+			a.alignRow.Text = a.tr("Sources changed; estimate again", "来源状态已变化，请重新估算")
+		} else {
+			a.alignRow.Text = a.tr("No reliable match was found", "没有找到可靠匹配")
+		}
+	}
 	logf("align", "%s", a.syncNote)
+}
+
+// alignmentRowMatches drops results whose stage, source identity, or player
+// generation changed while decoding was in progress.
+func (a *appState) alignmentRowMatches(attempt uint64, stage core.SceneID, ref, tgt alignWindow) bool {
+	row := a.alignRow
+	if row.RequestID != attempt || row.Stage != stage || a.scene != stage ||
+		row.Reference != ref.Source || row.Target != tgt.Source ||
+		row.ReferenceGeneration != ref.Generation || row.TargetGeneration != tgt.Generation {
+		return false
+	}
+	currentRef := a.syncReference()
+	refItem, targetItem := a.find(row.Reference), a.find(row.Target)
+	return currentRef != nil && currentRef.source.ID == row.Reference &&
+		refItem != nil && targetItem != nil && a.isStageMember(refItem) && a.isStageMember(targetItem) &&
+		refItem.generation == row.ReferenceGeneration && targetItem.generation == row.TargetGeneration
+}
+
+// invalidateAlignmentRow makes any queued callback stale. UI selection and
+// stage transitions call this on the drawing thread.
+func (a *appState) invalidateAlignmentRow() {
+	if !a.stopProbe("alignment selection changed") {
+		a.probeAttempt++
+	}
+	a.alignRow = alignRowResult{}
+}
+
+func unavailableAlignText(a *appState, refErr, tgtErr error) string {
+	for _, err := range []error{refErr, tgtErr} {
+		if err == nil {
+			continue
+		}
+		if strings.Contains(strings.ToLower(err.Error()), "live") || strings.Contains(strings.ToLower(err.Error()), "duration") {
+			return a.tr("A live source has no readable duration yet", "直播来源暂时没有可读取的时长")
+		}
+	}
+	return a.tr("These sources cannot be compared right now", "当前无法比较这些来源")
+}
+
+func conciseAlignFailure(a *appState, reason string) string {
+	lower := strings.ToLower(reason)
+	switch {
+	case strings.Contains(lower, "duration"), strings.Contains(lower, "live"):
+		return a.tr("A live source has no readable duration yet", "直播来源暂时没有可读取的时长")
+	case strings.Contains(lower, "audio"):
+		return a.tr("A source has no readable audio", "来源没有可读取的音频")
+	default:
+		return a.tr("The alignment estimate could not be completed", "无法完成对齐估算")
+	}
 }
 
 // logStale re-reads the current session and reports whether an older suggestion

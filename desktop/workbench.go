@@ -212,6 +212,16 @@ func (a *appState) workspaceNavigation(c *ui.Context, width float32) {
 			}
 		}
 		ui.Box(c).Grow(1)
+		if a.workspace == workspaceStage && a.editingShell {
+			label := a.tr("Collapse scenes", "收起场景栏")
+			if !a.navUp {
+				label = a.tr("Expand scenes", "展开场景栏")
+			}
+			a.secondaryButton(c, "stage-rail-toggle", label, 128, true, func() {
+				a.navUp = !a.navUp
+				a.invalidate()
+			})
+		}
 	})
 }
 
@@ -712,6 +722,7 @@ func (a *appState) selectScene(id core.SceneID) {
 		a.invalidate()
 		return
 	}
+	a.invalidateAlignmentRow()
 	a.advanceStageGeneration()
 	a.activateSceneLayout(id)
 	a.reconcileStageSelection()
@@ -743,6 +754,7 @@ func (a *appState) removeScene(id core.SceneID) {
 			a.invalidate()
 			return
 		}
+		a.invalidateAlignmentRow()
 		a.advanceStageGeneration()
 		a.activateSceneLayout(next)
 		a.reconcileStageSelection()

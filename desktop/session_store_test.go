@@ -121,8 +121,14 @@ func TestLateImportFailureRemovesSourceAndSchedulesSave(t *testing.T) {
 	}
 	item := app.items[0]
 	item.generation = 7
+	item.handover = &handover{}
+	app.abandonImport(item, 7, errors.New("replacement failed"), false)
+	if len(app.items) != 1 || item.handover == nil {
+		t.Fatal("the first-open watcher removed a source during player handover")
+	}
+	item.handover = nil
 
-	app.abandonImport(item, 7, errors.New("late decode failure"))
+	app.abandonImport(item, 7, errors.New("late decode failure"), false)
 
 	if len(app.items) != 0 {
 		t.Fatalf("the late failure left %d source(s) in the window", len(app.items))

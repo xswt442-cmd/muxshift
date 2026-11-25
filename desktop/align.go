@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -96,6 +97,11 @@ type probeSnapshot struct {
 // 16 kHz mono is small enough to hold in memory and long enough for the envelope
 // correlation to separate the peak from its surroundings.
 const probeLength = 60 * time.Second
+
+var (
+	errAlignDuration = errors.New("no readable duration")
+	errAlignAudio    = errors.New("no audio track to compare")
+)
 
 // suggestAlign compares two sources and returns a proposal. It reports an error
 // only when the comparison could not run at all; a comparison that ran but found
@@ -261,7 +267,7 @@ func (a *appState) alignWindowAt(index int) (alignWindow, error) {
 	// probe does not need a second tool just to ask how long the media is.
 	length := it.player.Duration()
 	if length <= 0 {
-		return alignWindow{}, fmt.Errorf("%s has no readable duration (a live stream cannot be compared yet)", shortURI(it.uri))
+		return alignWindow{}, fmt.Errorf("%s: %w", shortURI(it.uri), errAlignDuration)
 	}
 	if length > probeLength {
 		length = probeLength
@@ -270,7 +276,7 @@ func (a *appState) alignWindowAt(index int) (alignWindow, error) {
 	if it.audio == "" {
 		// The comparison decodes `0:a:0`. Without an audio track nothing is
 		// compared, and the window must say so rather than name a picture.
-		return alignWindow{}, fmt.Errorf("%s has no audio track to compare", a.name(it))
+		return alignWindow{}, fmt.Errorf("%s: %w", a.name(it), errAlignAudio)
 	}
 	return alignWindow{
 		Source:     it.source.ID,
@@ -331,7 +337,7 @@ func decodeEnvelope(ctx context.Context, uri string, start, length time.Duration
 		return align.Envelope{}, fmt.Errorf("cannot read the decoder's output: %w", readErr)
 	}
 	if len(raw) < 2 {
-		return align.Envelope{}, fmt.Errorf("the source has no audio track")
+		return align.Envelope{}, errAlignAudio
 	}
 	samples := make([]int16, len(raw)/2)
 	for i := range samples {
@@ -568,7 +574,7 @@ func (a *appState) applyProbeResultCore(attempt uint64, suggestion alignSuggesti
 		a.syncNote = fmt.Sprintf("alignment probe failed: %s", reason)
 		if updateRow {
 			a.alignRow.Status = "problem"
-			a.alignRow.Text = conciseAlignFailure(a, reason)
+			a.alignRow.Text = conciseAlignFailure(a, err)
 		}
 		logf("align", "probe failed: %s", reason)
 		return
@@ -617,23 +623,20 @@ func (a *appState) invalidateAlignmentRow() {
 }
 
 func unavailableAlignText(a *appState, refErr, tgtErr error) string {
-	for _, err := range []error{refErr, tgtErr} {
-		if err == nil {
-			continue
-		}
-		if strings.Contains(strings.ToLower(err.Error()), "live") || strings.Contains(strings.ToLower(err.Error()), "duration") {
-			return a.tr("A live source has no readable duration yet", "直播来源暂时没有可读取的时长")
-		}
+	if errors.Is(refErr, errAlignAudio) || errors.Is(tgtErr, errAlignAudio) {
+		return a.tr("A source has no readable audio", "来源没有可读取的音频")
+	}
+	if errors.Is(refErr, errAlignDuration) || errors.Is(tgtErr, errAlignDuration) {
+		return a.tr("A source has no readable duration yet", "来源暂时没有可读取的时长")
 	}
 	return a.tr("These sources cannot be compared right now", "当前无法比较这些来源")
 }
 
-func conciseAlignFailure(a *appState, reason string) string {
-	lower := strings.ToLower(reason)
+func conciseAlignFailure(a *appState, err error) string {
 	switch {
-	case strings.Contains(lower, "duration"), strings.Contains(lower, "live"):
-		return a.tr("A live source has no readable duration yet", "直播来源暂时没有可读取的时长")
-	case strings.Contains(lower, "audio"):
+	case errors.Is(err, errAlignDuration):
+		return a.tr("A source has no readable duration yet", "来源暂时没有可读取的时长")
+	case errors.Is(err, errAlignAudio):
 		return a.tr("A source has no readable audio", "来源没有可读取的音频")
 	default:
 		return a.tr("The alignment estimate could not be completed", "无法完成对齐估算")

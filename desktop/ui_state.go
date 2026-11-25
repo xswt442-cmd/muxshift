@@ -50,7 +50,7 @@ func (a *appState) playing() bool {
 
 func (a *appState) playingFor(plan transportPlan) bool {
 	for _, it := range plan.items {
-		if it.player.Playing() {
+		if it.outputPlayer().Playing() {
 			return true
 		}
 	}

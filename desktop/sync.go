@@ -428,12 +428,13 @@ func (a *appState) applyTransportPlan(plan transportPlan, play bool) []string {
 	}
 	problems := make([]string, 0, 1)
 	for _, it := range plan.items {
+		player := it.outputPlayer()
 		if play {
-			it.player.Play()
+			player.Play()
 		} else {
-			it.player.Pause()
+			player.Pause()
 		}
-		if err := it.player.Err(); err != nil {
+		if err := player.Err(); err != nil {
 			problems = append(problems, fmt.Sprintf("%s: %v", a.name(it), err))
 		}
 	}

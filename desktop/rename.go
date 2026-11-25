@@ -100,6 +100,7 @@ func (a *appState) refreshItemSource(id core.SourceID) {
 	}
 	if it := a.itemOf(id); it != nil {
 		it.source = src
+		it.persistedName = src.Name
 	}
 }
 

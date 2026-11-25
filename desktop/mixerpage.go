@@ -87,7 +87,7 @@ func (a *appState) mixerAction(c *ui.Context, key, label string, width, height f
 
 // mixerRow is one source: what the scene says, and the overlay's two controls.
 func (a *appState) mixerRow(c *ui.Context, index int, it *item) {
-	soloed := a.solo == it.source.ID
+	soloed := a.solo != "" && a.solo == it.source.ID
 	ui.Column(c).WidthPercent(100).Gap(spaceXs).Padding(spaceSm).
 		Background(colorPanel).Border(1, colorLineSoft).Radius(radiusMd).Children(func() {
 		ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {

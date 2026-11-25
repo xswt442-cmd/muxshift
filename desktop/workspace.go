@@ -129,14 +129,26 @@ func (a *appState) importRow(c *ui.Context) {
 						submit = true
 					}
 					if submit && strings.TrimSpace(a.reselectText) != "" && a.importing == "" {
-						a.runCommand(command{Kind: commandRetry, Source: a.reselectSource, URI: a.reselectText})
-						a.reselectSource = ""
-						a.reselectText = ""
+						a.submitReselect(a.reselectSource)
 					}
 				})
+				if a.reselectSource != "" && a.reselectProblem != "" {
+					ui.Text(c, a.reselectProblem).FontSize(textMicro).TextColor(colorBad).Wrap()
+				}
 			}
 		}
 	})
+}
+
+func (a *appState) submitReselect(target core.SourceID) {
+	result := a.runCommand(command{Kind: commandRetry, Source: target, URI: a.reselectText})
+	if result.Err != nil {
+		a.reselectProblem = result.Err.Error()
+		return
+	}
+	a.reselectSource = ""
+	a.reselectText = ""
+	a.reselectProblem = ""
 }
 
 func (a *appState) importFailureNotice(c *ui.Context) {

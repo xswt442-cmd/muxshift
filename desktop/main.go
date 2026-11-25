@@ -65,19 +65,19 @@ func (a *appState) openReplacement(it *item, uri string, retainState bool) {
 	previous := it.player
 	player, err := openPlayerOnMain(uri)
 	if err != nil {
-		it.openErr = safeOpenError(err)
+		if retainState {
+			it.mediaReplaceErr = safeOpenError(err)
+		} else {
+			it.openErr = safeOpenError(err)
+		}
 		return
 	}
-	it.openErr = nil
+	if !retainState {
+		it.openErr = nil
+	}
 	var kept *handover
 	if previous != nil {
 		kept = &handover{previous: rawPlayer(previous), uri: uri, retainState: retainState}
-		if retainState {
-			kept.paused = !previous.Playing()
-			if !isNetworkAddress(it.uri) {
-				kept.position = previous.Position()
-			}
-		}
 		it.previous = previous
 	}
 	// The handover that was still waiting for an older replacement owns the
@@ -111,8 +111,6 @@ type handover struct {
 	released    bool
 	uri         string
 	retainState bool
-	paused      bool
-	position    time.Duration
 }
 
 // take returns the player this handover still owns, or nil when it was
@@ -220,15 +218,21 @@ func (a *appState) handOver(it *item, generation int, kept *handover, older *han
 			var confirmed string
 			mygoRunOnMain(func() {
 				if it.generation == generation && it.handover == kept {
+					previous := it.previous
 					it.previous = nil
 					it.handover = nil
 					if kept.retainState {
-						if kept.position > 0 {
-							it.player.Seek(kept.position)
+						if !isNetworkAddress(it.uri) && !isNetworkAddress(kept.uri) {
+							if position := previous.Position(); position > 0 {
+								it.player.Seek(position)
+							}
 						}
-						if kept.paused {
+						if previous.Playing() {
+							it.player.Play()
+						} else {
 							it.player.Pause()
 						}
+						it.openErr = nil
 						if it.uri != kept.uri {
 							it.uri = kept.uri
 							a.saveSession()
@@ -265,10 +269,12 @@ func (a *appState) handOver(it *item, generation int, kept *handover, older *han
 		it.generation++
 		if kept.retainState {
 			a.apply()
+			it.mediaReplaceErr = fmt.Errorf("replacement did not start; kept the previous player")
+			a.invalidate()
 		} else {
 			it.shown = true
+			it.openErr = fmt.Errorf("reopen did not start within %s; kept the previous player", handoverWait)
 		}
-		it.openErr = fmt.Errorf("reopen did not start within %s; kept the previous player", handoverWait)
 		keptPrevious = true
 	})
 	if !keptPrevious {

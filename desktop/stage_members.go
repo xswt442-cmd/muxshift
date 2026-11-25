@@ -78,6 +78,7 @@ func (a *appState) linkStageMember(it *item) {
 	a.selected = itemKey(it)
 	a.apply()
 	a.wakeShown(it)
+	a.reconcileScenePlayers(scene.ID, a.stageGeneration)
 	a.saveSession()
 	a.invalidate()
 }

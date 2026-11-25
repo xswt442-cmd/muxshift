@@ -217,7 +217,7 @@ func (a *appState) mixerLine(it *item) string {
 		state = "heard"
 	}
 	line := fmt.Sprintf("%s · %s · %.0f%%", sourceDisplayName(it), state, a.shownLevel(it)*100)
-	if a.solo == it.source.ID {
+	if a.solo != "" && a.solo == it.source.ID {
 		line += " · solo"
 	}
 	if reasons := a.silences(it); len(reasons) > 0 {
@@ -234,7 +234,7 @@ func (a *appState) localizedMixerLine(it *item) string {
 		state = a.tr("audible", "可听")
 	}
 	line := fmt.Sprintf("%s · %s · %.0f%%", sourceDisplayName(it), state, a.shownLevel(it)*100)
-	if a.solo == it.source.ID {
+	if a.solo != "" && a.solo == it.source.ID {
 		line += " · " + a.tr("solo", "独听")
 	}
 	if reasons := a.silences(it); len(reasons) > 0 {

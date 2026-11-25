@@ -195,6 +195,13 @@ func (a *appState) workspaceNavigation(c *ui.Context, width float32) {
 				Height(a.controlHeight()).Padding(0, spaceSm).Clicked() {
 				a.pageMenu = !a.pageMenu
 			}
+			if a.workspace == workspaceStage && a.editingShell {
+				name := a.sceneLabelText()
+				if ui.Button(c.Key("stage-scenes-menu"), name+" ▾").Height(a.controlHeight()).
+					MaxWidth(200).Tooltip(a.tr("Switch scenes", "切换场景")).Clicked() {
+					a.sceneMenu = !a.sceneMenu
+				}
+			}
 			return
 		}
 		for _, page := range []workspace{workspaceStage, workspaceDiagnostics, workspaceSettings} {
@@ -420,6 +427,7 @@ func (a *appState) sourceEntry(c *ui.Context, it *item, index int, compact bool,
 				a.selected = itemKey(it)
 				a.reselectSource = itemKey(it)
 				a.reselectText = ""
+				a.reselectProblem = ""
 			}
 			if ui.Button(c.Key("compact-remove-"+string(itemKey(it))), a.tr("Remove", "移除")).
 				Height(24).Clicked() {
@@ -442,16 +450,18 @@ func (a *appState) sourceEntry(c *ui.Context, it *item, index int, compact bool,
 				submit = true
 			}
 			if submit && strings.TrimSpace(a.reselectText) != "" && a.importing == "" {
-				a.runCommand(command{Kind: commandRetry, Source: itemKey(it), URI: a.reselectText})
-				a.reselectSource = ""
-				a.reselectText = ""
+				a.submitReselect(itemKey(it))
 			}
 		})
+		if a.reselectSource == itemKey(it) && a.reselectProblem != "" {
+			ui.Text(c, a.reselectProblem).FontSize(textMicro).TextColor(colorBad).Wrap()
+		}
 	}
 }
 
 func (a *appState) sourceRowStatus(it *item, placement []map[*item]bool) string {
-	if it.openErr != nil || it.player == nil || !it.player.Ready() || it.player.Buffering() {
+	player := it.outputPlayer()
+	if it.openErr != nil || player == nil || !player.Ready() || player.Buffering() {
 		return a.sourceSub(it)
 	}
 	status := a.tr("Picture hidden", "画面已隐藏")
@@ -465,7 +475,7 @@ func (a *appState) sourceRowStatus(it *item, placement []map[*item]bool) string 
 			status = a.tr("Picture shown", "画面已显示")
 		}
 	}
-	if it.player.Playing() {
+	if player.Playing() {
 		return status + a.tr(" · Playing", " · 播放中")
 	}
 	return status + a.tr(" · Paused", " · 已暂停")
@@ -487,9 +497,9 @@ func (a *appState) sourceMarks(c *ui.Context, it *item) {
 
 func (a *appState) sourceCompactActions(c *ui.Context, it *item, index int) {
 	key := string(itemKey(it))
-	if it.player != nil {
+	if player := it.outputPlayer(); player != nil {
 		kind, icon, label := commandSourcePlay, lucide.Play(), a.tr("Play", "播放")
-		if it.player.Playing() {
+		if player.Playing() {
 			kind, icon, label = commandSourcePause, lucide.Pause(), a.tr("Pause", "暂停")
 		}
 		if a.sourceInExplicitGroup(it) {
@@ -566,6 +576,7 @@ func (a *appState) sourceActions(c *ui.Context, it *item, index int) {
 				a.selected = itemKey(it)
 				a.reselectSource = itemKey(it)
 				a.reselectText = ""
+				a.reselectProblem = ""
 				a.invalidate()
 			}
 		}
@@ -710,6 +721,7 @@ func (a *appState) sceneList(c *ui.Context) {
 
 // selectScene makes an existing scene the one the stage draws.
 func (a *appState) selectScene(id core.SceneID) {
+	a.sceneMenu = false
 	if id == a.scene {
 		return
 	}
@@ -804,21 +816,22 @@ func (a *appState) sceneRow(c *ui.Context) {
 // sourceSub is the second line of a source row: the shortest true account of
 // what the player is doing.
 func (a *appState) sourceSub(it *item) string {
+	player := it.outputPlayer()
 	switch {
 	case it.openErr != nil:
 		return a.tr("failed to open", "打开失败")
 	case it.restoring:
 		return a.tr("opening", "正在打开")
-	case it.player == nil:
+	case player == nil:
 		return a.tr("not opened yet", "尚未打开")
-	case !it.player.Ready():
+	case !player.Ready():
 		return a.tr("opening", "正在打开")
-	case it.player.Buffering():
+	case player.Buffering():
 		return a.tr("buffering", "缓冲中")
 	case !it.shown:
 		return a.tr("off the stage", "不在舞台上")
 	}
-	return clock(it.player.Position()) + " / " + clock(it.player.Duration())
+	return clock(player.Position()) + " / " + clock(player.Duration())
 }
 
 func (a *appState) showSourcesPanel() {
@@ -1351,7 +1364,7 @@ func (a *appState) mixerActions(c *ui.Context, it *item, keyPrefix string) {
 		})
 	soloTint := colorTextDim
 	soloTip := a.tr("Solo", "独听")
-	if a.solo == it.source.ID {
+	if a.solo != "" && a.solo == it.source.ID {
 		soloTint = colorAccent
 		soloTip = a.tr("Stop solo", "取消独听")
 	}
@@ -1428,7 +1441,7 @@ func (a *appState) shortMixerReason(reason string) string {
 }
 
 func (a *appState) mixerChannelSoloLabel(it *item) string {
-	if it != nil && a.solo == it.source.ID {
+	if it != nil && a.solo != "" && a.solo == it.source.ID {
 		return a.tr("Solo active", "独听中")
 	}
 	return ""
@@ -1646,19 +1659,16 @@ func (a *appState) pageMenuPanel(c *ui.Context, width float32) {
 	})
 }
 
-// sceneMenuPanel says what the scene chip can do: nothing yet, and why.
+// sceneMenuPanel gives a narrow window access to the scene list.
 func (a *appState) sceneMenuPanel(c *ui.Context, width float32) {
 	ui.Box(c).Absolute().Left(0).Top(0).Right(0).Bottom(0).ZIndex(19).
 		OnClick(func() { a.sceneMenu = false })
-	ui.Column(c).Absolute().Top(a.barHeight()+4).Left(sceneWidth+spaceMd).Width(220).
+	ui.Column(c).Absolute().Top(a.barHeight()+4).Left(spaceMd).Width(290).MaxWidth(width-2*spaceMd).
 		Padding(4).Gap(2).Radius(radiusCard).Background(colorPanel2).Border(1, colorLineSoft).
 		ZIndex(20).Shadow(0, 8, 24, 0, shadowFloat).Children(func() {
-		ui.Row(c).Height(a.controlHeight()).Padding(0, spaceSm).Gap(spaceXs).AlignItems(ui.Center).
-			Background(colorSelected).Children(func() {
-			ui.Text(c, a.sceneLabelText()).FontSize(textBody).TextColor(colorSelectedText)
+		ui.Scroll(c).WidthPercent(100).MaxHeight(320).Children(func() {
+			a.sceneList(c)
 		})
-		ui.Button(c.Key("scene-new"), a.tr("New scene…", "新建场景…")).Height(a.controlHeight()).Padding(0, spaceSm).Disabled(true).
-			Tooltip(a.tr("this build has one scene", "此版本只有一个场景"))
 	})
 }
 

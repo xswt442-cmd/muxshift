@@ -43,6 +43,10 @@ func (a *appState) sourceMediaControls(c *ui.Context, it *item) {
 	if it.handover != nil && it.handover.retainState {
 		ui.Text(c, a.tr("Opening this source…", "正在打开这一路…")).FontSize(textMicro).TextColor(colorTextDim)
 	}
+	if it.mediaReplaceErr != nil {
+		ui.Text(c, a.tr("Could not replace this source. Try refreshing it again.", "无法替换此来源，可再次刷新。")).
+			FontSize(textMicro).TextColor(colorWarn).Wrap().Tooltip(it.mediaReplaceErr.Error())
+	}
 }
 
 func (a *appState) sourceQualityOptions(c *ui.Context, it *item, key string) {
@@ -76,10 +80,8 @@ func (a *appState) replaceSourceMedia(it *item, uri string) {
 	if it.player == nil || !a.isStageMember(it) || it.lifecyclePending || it.handover != nil || it.replay != nil {
 		return
 	}
+	it.mediaReplaceErr = nil
 	a.openReplacement(it, uri, true)
-	if it.openErr != nil {
-		a.lastErr = it.openErr
-	}
 	a.invalidate()
 }
 
@@ -109,14 +111,16 @@ func (a *appState) loadSourceQualities(it *item) {
 			if err != nil {
 				it.mediaError = a.tr("Could not read quality levels. Reopen this menu to retry.", "清晰度读取失败，重新打开菜单可重试。")
 			} else {
+				hasAlternative := false
 				for _, variant := range list.variants {
 					if variant.live {
 						it.mediaChoices = append(it.mediaChoices, variant)
+						hasAlternative = hasAlternative || variant.address != it.uri
 					}
 				}
-				if len(it.mediaChoices) < 2 {
+				if !hasAlternative {
 					it.mediaChoices = nil
-					it.mediaError = a.tr("No other playable quality levels.", "没有其它可播放的清晰度。")
+					it.mediaError = a.tr("No other playable quality levels.", "没有其他可播放的清晰度。")
 				}
 			}
 			a.invalidate()

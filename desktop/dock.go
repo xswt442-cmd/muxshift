@@ -410,16 +410,19 @@ func (a *appState) dockSourcesBody(c *ui.Context) {
 		a.sourceMediaControls(c, row)
 	}
 	if memberCount == 0 {
-		message := a.tr("No sources yet.", "还没有来源。")
-		if len(a.items) > 0 {
-			message = a.tr("No sources on this stage.", "当前舞台没有来源。")
-		}
-		ui.Text(c, message).FontSize(textCaption).TextColor(colorDim).Wrap()
+		ui.Text(c, a.stageSourcesEmptyText()).FontSize(textCaption).TextColor(colorDim).Wrap()
 	}
 }
 
+func (a *appState) stageSourcesEmptyText() string {
+	if len(a.items) > 0 {
+		return a.tr("No sources on this stage.", "当前舞台没有来源。")
+	}
+	return a.tr("No sources yet.", "还没有来源。")
+}
+
 // stageCatalog exposes session sources that are not linked to the active
-// stage. Adding one links that shared source; it never creates another player.
+// stage. Adding one links the shared source and opens it if the stage needs it.
 func (a *appState) stageCatalog(c *ui.Context) {
 	ui.Column(c).WidthPercent(100).Gap(spaceXs).Children(func() {
 		label := a.tr("Shared source catalog", "共享来源目录")
@@ -521,10 +524,12 @@ func (a *appState) dockRowsBody(c *ui.Context) {
 			ui.Text(c, a.tr("Level", "音量")).FontSize(textMicro).TextColor(colorDim).Width(220)
 			ui.Text(c, a.tr("Offset", "偏移")).FontSize(textMicro).TextColor(colorDim).Width(190)
 		})
+		memberCount := 0
 		for i, it := range a.items {
 			if !a.isStageMember(it) {
 				continue
 			}
+			memberCount++
 			row, index := it, i
 			ui.Box(c).WidthPercent(100).Height(48).Radius(radiusCard).Background(colorPanel).
 				Border(1, colorLineSoft).Padding(spaceXs, spaceSm).Children(func() {
@@ -534,24 +539,20 @@ func (a *appState) dockRowsBody(c *ui.Context) {
 					ui.Column(c).Grow(1).MinWidth(0).Children(func() {
 						ui.Text(c, sourceDisplayName(row)).FontSize(textBody).FontWeight(500).
 							TextColor(colorText).MinWidth(0).SingleLine()
-						state := "hidden"
+						state := a.tr("Picture hidden", "画面已隐藏")
 						if row.shown {
-							state = "shown"
+							state = a.tr("Picture shown", "画面已显示")
 							if !placed[row] {
-								state = "shown · outside layout"
+								state = a.tr("Outside this layout", "当前布局未显示")
 							}
 						}
-						if row.player == nil {
-							state += " · opening"
-						} else if row.player.Ready() {
-							state += " · ready"
+						player := row.outputPlayer()
+						if player == nil || !player.Ready() || row.openErr != nil || player.Buffering() {
+							state += " · " + a.sourceSub(row)
+						} else if player.Playing() {
+							state += a.tr(" · Playing", " · 播放中")
 						} else {
-							state += " · not ready"
-						}
-						if row.player != nil && row.player.Playing() {
-							state += " · playing"
-						} else {
-							state += " · paused"
+							state += a.tr(" · Paused", " · 已暂停")
 						}
 						status := a.mixerChannelRouteLabel(row)
 						if status != "" {
@@ -572,9 +573,9 @@ func (a *appState) dockRowsBody(c *ui.Context) {
 					if row.shown && ui.Button(c.Key("source-primary-"+key), a.tr("Primary", "主画面")).Height(26).Clicked() {
 						a.runCommand(command{Kind: commandPrimary, Source: itemKey(row)})
 					}
-					if row.player != nil {
+					if player := row.outputPlayer(); player != nil {
 						kind, label := commandSourcePause, a.tr("Pause", "暂停")
-						if !row.player.Playing() {
+						if !player.Playing() {
 							kind, label = commandSourcePlay, a.tr("Play", "播放")
 						}
 						playButton := ui.Button(c.Key("source-play-"+key), label).Height(26)
@@ -617,10 +618,12 @@ func (a *appState) dockRowsBody(c *ui.Context) {
 								})
 						}
 					})
-					a.quietIconButton(c, "row-rename-"+string(row.source.ID), lucide.Pencil(),
-						a.tr("Rename", "重命名"), colorDim, func() {
-							a.openRenameSource(row.source.ID)
-						})
+					if row.source.ID != "" {
+						a.quietIconButton(c, "row-rename-"+string(row.source.ID), lucide.Pencil(),
+							a.tr("Rename", "重命名"), colorDim, func() {
+								a.openRenameSource(row.source.ID)
+							})
+					}
 					a.quietIconButton(c, "row-show-"+string(row.source.ID), a.eyeIcon(row),
 						a.eyeTip(row), a.eyeTint(row), func() {
 							a.toggleVideo(index)
@@ -632,10 +635,8 @@ func (a *appState) dockRowsBody(c *ui.Context) {
 				})
 			})
 		}
-		if len(a.items) == 0 {
-			ui.Text(c, a.tr("Nothing here yet. Add a file or an address with +.",
-				"这里还是空的。用 ＋ 添加文件或地址。")).
-				FontSize(textCaption).TextColor(colorDim).Padding(spaceSm, spaceSm)
+		if memberCount == 0 {
+			ui.Text(c, a.stageSourcesEmptyText()).FontSize(textCaption).TextColor(colorDim).Padding(spaceSm, spaceSm)
 		}
 		for _, it := range a.items {
 			if a.isStageMember(it) && a.selected == itemKey(it) {

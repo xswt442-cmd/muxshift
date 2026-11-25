@@ -379,7 +379,7 @@ func (a *appState) viewingControls(c *ui.Context, width, height float32) ui.Elem
 			a.report(a.runCommand(command{Kind: kind}))
 			a.showControls()
 		}
-		if main := a.first(); main != nil && main.player != nil {
+		if main := a.firstShown(); main != nil {
 			muted := main.player.Muted()
 			muteText := a.tr("Mute", "静音")
 			if muted {

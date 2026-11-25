@@ -62,6 +62,7 @@ type item struct {
 	mediaCancel      context.CancelFunc
 	mediaChoices     []liveVariant
 	mediaError       string
+	mediaReplaceErr  error
 
 	// previous is the player this item opened before the current one, kept
 	// alive and drawn until the current one has a picture. See reopenPlayer.
@@ -296,6 +297,7 @@ type appState struct {
 	retryTargetID       string
 	reselectSource      core.SourceID
 	reselectText        string
+	reselectProblem     string
 	startupMediaQueue   []string
 	pendingImportOrigin sourceOrigin
 	importScene         core.SceneID
@@ -1005,6 +1007,16 @@ func (a *appState) startStoredSourceRestores() {
 				if current != nil && current.restoringGeneration == token {
 					current.restoring = false
 				}
+				defer func() {
+					if token == a.startupRestoreToken && !a.hasRestoringSources() {
+						restart := !a.closed && ctx.Err() == nil
+						cancel()
+						a.startupRestoreCancel = nil
+						if restart {
+							a.startStoredSourceRestores()
+						}
+					}
+				}()
 				if a.closed || ctx.Err() != nil {
 					return
 				}
@@ -1016,12 +1028,8 @@ func (a *appState) startStoredSourceRestores() {
 						current.openErr = safeOpenError(openErr)
 						a.lastErr = current.openErr
 					} else {
-						go a.watchFirstOpen(current, current.generation)
+						go a.watchFirstOpen(current, current.generation, true)
 					}
-				}
-				if token == a.startupRestoreToken && !a.hasRestoringSources() {
-					cancel()
-					a.startupRestoreCancel = nil
 				}
 				a.invalidate()
 			})
@@ -1128,7 +1136,7 @@ func (a *appState) landUnavailableRetry(token int, targetID, requestedURI string
 	err := a.installSavedSource(it, plan, inspectErr)
 	if err == nil {
 		a.saveSession()
-		go a.watchFirstOpen(it, it.generation)
+		go a.watchFirstOpen(it, it.generation, false)
 	}
 	a.closeImportTicker()
 	a.importing = ""
@@ -1427,7 +1435,7 @@ func (a *appState) landImportPlan(token int, plan importPlan, probeErr error) {
 			// no loop for the watch to run on, so it only starts where the
 			// window (or the test's own seam) can take a callback.
 			if it.player != nil && (a.window != nil || a.onMain != nil) {
-				go a.watchFirstOpen(it, it.generation)
+				go a.watchFirstOpen(it, it.generation, false)
 			}
 		} else {
 			// The session accepted the source and its tracks before the player
@@ -1450,6 +1458,13 @@ func (a *appState) landImportPlan(token int, plan importPlan, probeErr error) {
 		result.Message = fmt.Sprintf("imported %s as %s; it is selected, Show puts it on the stage", shortURI(uri), it.source.ID)
 		if !targetAvailable {
 			result.Message = fmt.Sprintf("imported %s as %s into the shared catalog; the starting stage was deleted", shortURI(uri), it.source.ID)
+		} else if target != a.scene {
+			stage, _ := a.session.Scene(target)
+			if stage.Name != "" {
+				result.Message = fmt.Sprintf("imported %s into stage %s; switch back to that stage to use it", shortURI(uri), stage.Name)
+			} else {
+				result.Message = fmt.Sprintf("imported %s into its starting stage; switch back to that stage to use it", shortURI(uri))
+			}
 		}
 	}
 	a.lastCommand = result
@@ -1480,9 +1495,9 @@ func shouldAbandonImport(ready bool, err error) bool {
 // Foundation reports after openPlayerOnMain has already returned nil. An import
 // that never shows a frame is handed back, so a source nothing can play is not
 // counted in the window or picked up by the scene.
-func (a *appState) watchFirstOpen(it *item, generation int) {
+func (a *appState) watchFirstOpen(it *item, generation int, keepSource bool) {
 	deadline := time.Now().Add(firstOpenGrace)
-	for time.Now().Before(deadline) {
+	for keepSource || time.Now().Before(deadline) {
 		time.Sleep(200 * time.Millisecond)
 		ready, err, live := a.playerState(it, generation)
 		if !live {
@@ -1494,7 +1509,7 @@ func (a *appState) watchFirstOpen(it *item, generation int) {
 			}
 			continue
 		}
-		a.abandonImport(it, generation, err)
+		a.abandonImport(it, generation, err, keepSource)
 		return
 	}
 }
@@ -1515,12 +1530,12 @@ func (a *appState) playerState(it *item, generation int) (ready bool, err error,
 
 // abandonImport takes a source back out after its player failed to show it, and
 // says so in the same words a failed import uses.
-func (a *appState) abandonImport(it *item, generation int, cause error) {
+func (a *appState) abandonImport(it *item, generation int, cause error, keepSource bool) {
 	a.mainDo(func() {
-		if a.closed || it.generation != generation {
+		if a.closed || it.generation != generation || it.handover != nil {
 			return
 		}
-		if it.restored {
+		if keepSource || it.restored {
 			shown := it.shown
 			a.close(it)
 			it.shown = shown
@@ -1540,6 +1555,7 @@ func (a *appState) abandonImport(it *item, generation int, cause error) {
 			return
 		}
 		removed := false
+		wasStartupPicture := it.origin == originCommandLine && it.shown
 		for index, candidate := range a.items {
 			if candidate != it {
 				continue
@@ -1552,6 +1568,9 @@ func (a *appState) abandonImport(it *item, generation int, cause error) {
 			break
 		}
 		if removed {
+			if wasStartupPicture {
+				a.selectStartupPicture()
+			}
 			a.saveSession()
 		}
 		err := safeOpenError(cause)
@@ -1570,6 +1589,26 @@ func (a *appState) abandonImport(it *item, generation int, cause error) {
 		a.report(result)
 		a.invalidate()
 	})
+}
+
+func (a *appState) selectStartupPicture() {
+	scene, err := a.session.Scene(a.scene)
+	if err != nil || len(scene.Video) != 0 {
+		return
+	}
+	for _, candidate := range a.items {
+		if candidate.origin == originCommandLine && a.isStageMember(candidate) && candidate.video != "" &&
+			candidate.player != nil && candidate.player.Err() == nil {
+			if _, err := a.session.SetSceneVideo(a.scene, candidate.video); err != nil {
+				a.lastErr = safeOpenError(err)
+				return
+			}
+			a.selected = itemKey(candidate)
+			a.apply()
+			a.wakeShown(candidate)
+			return
+		}
+	}
 }
 
 // mainDo runs fn on the drawing thread. onMain is the seam tests use, because a
@@ -1697,10 +1736,9 @@ func (a *appState) apply() {
 			continue
 		}
 		it.shown = shown[it.video]
-		player := it.player
-		if it.handover != nil && it.handover.retainState && it.previous != nil {
-			player.SetMuted(true)
-			player = it.previous
+		player := it.outputPlayer()
+		if player != it.player {
+			it.player.SetMuted(true)
 		}
 		level, ok := levels[it.audio]
 		if !ok {
@@ -1720,6 +1758,13 @@ func (a *appState) apply() {
 			player.SetVolume(a.volumeFor(level.Volume))
 		}
 	}
+}
+
+func (it *item) outputPlayer() desktopPlayer {
+	if it.handover != nil && it.handover.retainState && it.previous != nil {
+		return it.previous
+	}
+	return it.player
 }
 
 // sceneConsumesItem reports whether the selected scene actually uses this
@@ -1819,6 +1864,7 @@ func (a *appState) reconcileScenePlayers(sceneID core.SceneID, generation uint64
 				a.closePendingWhenReady()
 				a.apply()
 				wakeNetworkPlayer(source.uri, rawPlayer(source.player), a.generationIs(source, source.generation))
+				go a.watchFirstOpen(source, source.generation, true)
 				a.invalidate()
 			})
 		}(it)
@@ -2039,6 +2085,9 @@ func (a *appState) remove(index int) error {
 		if err := a.session.RemoveSource(it.source.ID); err != nil {
 			return err
 		}
+	}
+	if a.probeRunning {
+		a.invalidateAlignmentRow()
 	}
 	a.forgetPendingSource(it.persistentID)
 	for _, members := range a.sceneMembers {

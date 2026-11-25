@@ -191,15 +191,16 @@ func (a *appState) runCommand(cmd command) commandResult {
 			if a.sourceInExplicitGroup(it) {
 				return finish(errors.New("this source belongs to a sync group; use the group transport"), "")
 			}
-			if it.player == nil {
+			player := it.outputPlayer()
+			if player == nil {
 				return finish(errors.New("this source has no player"), "")
 			}
 			if cmd.Kind == commandSourcePause {
-				it.player.Pause()
+				player.Pause()
 			} else {
-				it.player.Play()
+				player.Play()
 			}
-			err = it.player.Err()
+			err = player.Err()
 		case commandPrimary:
 			if !it.shown {
 				return finish(errors.New("show this source before making it primary"), "")
@@ -318,6 +319,11 @@ func (a *appState) runCommand(cmd command) commandResult {
 			return finish(fmt.Errorf("%s has not failed, there is nothing to retry", a.name(it)), "")
 		}
 		uri := strings.TrimSpace(cmd.URI)
+		if uri != "" {
+			if err := a.mediaAddressProblem(cmd.URI); err != nil {
+				return finish(err, "")
+			}
+		}
 		if uri == "" && it.source.ID == "" {
 			uri = it.uri
 		}
@@ -335,7 +341,9 @@ func (a *appState) runCommand(cmd command) commandResult {
 		if it.openErr != nil {
 			return finish(it.openErr, "the retry opened no player")
 		}
-		go a.watchFirstOpen(it, it.generation)
+		if it.handover == nil {
+			go a.watchFirstOpen(it, it.generation, true)
+		}
 		return finish(nil, "opened a new player for "+a.name(it))
 
 	default:

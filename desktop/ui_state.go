@@ -78,13 +78,13 @@ func (a *appState) transportActionLabel(plan transportPlan, playing bool) string
 
 func (a *appState) transportActionTooltip(plan transportPlan) string {
 	if len(plan.items) == 0 {
-		return a.tr("There are no players linked to the current stage.", "当前舞台没有已连接的播放器。")
+		return a.tr("Nothing to play on this stage", "舞台上没有可播放的来源")
 	}
 	if plan.syncGroup {
-		return a.tr("Controls every player linked to this stage and every player in its intersecting sync group.",
-			"控制当前舞台的播放器；舞台包含同步组成员时，也会控制该组的全部播放器。")
+		return a.tr("Controls this stage and the whole sync group, including sources on other stages",
+			"控制当前舞台，也会一起控制同步组里的其他来源")
 	}
-	return a.tr("Controls every player linked to the current stage.", "控制当前舞台的全部播放器。")
+	return a.tr("Controls all sources on this stage", "控制当前舞台的全部来源")
 }
 
 // eventTime is the shared timeline's position, the value the event clock shows.
@@ -130,10 +130,6 @@ func (a *appState) audioRouteLabel(it *item) string {
 		return a.tr("In scene", "已接入场景")
 	}
 	return a.tr("Not routed", "未接入场景")
-}
-
-func (a *appState) sourceMuteTooltip(it *item) string {
-	return a.muteLabel(it) + " · " + a.audioRouteLabel(it) + " · " + a.localizedMixerLine(it)
 }
 
 // positionLine is the source's media time, and durationLine its length. Both

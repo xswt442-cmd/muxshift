@@ -58,11 +58,11 @@ func (a *appState) addChoiceLabel(c addChoice) string {
 func (a *appState) addChoiceExplanation(c addChoice) string {
 	switch c {
 	case addChoiceFile:
-		return a.tr("a video on this machine; the system picker chooses it", "本机上的视频，由系统文件选择器挑选")
+		return a.tr("Choose a video file from this device", "从本机选择视频文件")
 	case addChoiceMedia:
-		return a.tr("an http(s) playlist or file, read in the background", "一个 http(s) 播放列表或文件，在后台读取")
+		return a.tr("Enter an HTTP or HTTPS playlist or media file URL", "填写播放列表或媒体文件的 HTTP/HTTPS 地址")
 	case addChoiceSite:
-		return a.tr("opens the page in your browser; the extension hands the media back", "在浏览器里打开页面，由扩展把媒体交回来")
+		return a.tr("Open the page in your browser, then send its media with the extension", "在浏览器打开网页后，用扩展发送媒体地址")
 	}
 	return ""
 }
@@ -316,13 +316,13 @@ func (a *appState) addSourcePanel(c *ui.Context) {
 			})
 			switch a.addChoice {
 			case addChoiceMedia:
-				submit.Tooltip(a.tr("read this address and add it to the session", "读取这个地址并加入本次会话"))
+				submit.Tooltip(a.tr("Add media", "添加媒体"))
 			case addChoiceSite:
-				submit.Tooltip(a.tr("open the page; the extension hands the media back", "打开页面，由扩展把媒体交回来"))
+				submit.Tooltip(a.tr("Open in browser", "在浏览器打开"))
 			case addChoiceFile:
 				submit.Tooltip(a.tr("open the desktop file picker", "打开系统文件选择器"))
 			default:
-				submit.Tooltip(a.tr("choose one of the three first", "先选这三者之一"))
+				submit.Tooltip(a.tr("Choose a source type first", "请先选择来源类型"))
 			}
 		})
 	})

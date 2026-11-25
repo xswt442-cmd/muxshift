@@ -476,13 +476,13 @@ func (a *appState) sourceMarks(c *ui.Context, it *item) {
 func (a *appState) sourceCompactActions(c *ui.Context, it *item, index int) {
 	key := string(itemKey(it))
 	if it.player != nil {
-		kind, icon, label := commandSourcePlay, lucide.Play(), a.tr("Play this source", "播放这一路")
+		kind, icon, label := commandSourcePlay, lucide.Play(), a.tr("Play", "播放")
 		if it.player.Playing() {
-			kind, icon, label = commandSourcePause, lucide.Pause(), a.tr("Pause this source", "暂停这一路")
+			kind, icon, label = commandSourcePause, lucide.Pause(), a.tr("Pause", "暂停")
 		}
 		if a.sourceInExplicitGroup(it) {
 			ui.Icon(c, icon).Size(16, 16).TextColor(colorDim).
-				Tooltip(a.tr("Use the sync group transport", "请使用同步组传输控制"))
+				Tooltip(a.tr("Play or pause the whole sync group", "这一路随同步组播放或暂停"))
 		} else {
 			a.quietIconButton(c, "source-play-"+key, icon, label, colorTextDim, func() {
 				a.runCommand(command{Kind: kind, Source: itemKey(it)})
@@ -1156,7 +1156,7 @@ func (a *appState) pictureTab(c *ui.Context, it *item) {
 	if _, on := a.stageBoxOf(it); !on {
 		ui.Text(c, a.tr("This source is not on the stage.", "此来源不在舞台上。")).
 			FontSize(textCaption).TextColor(colorDim).Wrap()
-		if ui.Button(c.Key("pic-show"), a.tr("Put it on the stage", "放到舞台")).Height(30).Clicked() {
+		if ui.Button(c.Key("pic-show"), a.tr("Show picture", "放上舞台")).Height(30).Clicked() {
 			a.selectVideo(it)
 		}
 		return
@@ -1296,17 +1296,18 @@ func (a *appState) mixerActions(c *ui.Context, it *item, keyPrefix string) {
 		icon, tint = lucide.VolumeX(), colorDim
 	}
 	a.quietIconButton(c, keyPrefix+"-mute-"+string(it.source.ID), icon,
-		a.sourceMuteTooltip(it), tint, func() {
+		a.muteLabel(it), tint, func() {
 			a.runCommand(command{Kind: commandMute, Source: it.source.ID})
 		})
 	soloTint := colorTextDim
+	soloTip := a.tr("Solo", "独听")
 	if a.solo == it.source.ID {
 		soloTint = colorAccent
+		soloTip = a.tr("Stop solo", "取消独听")
 	}
-	soloTip := a.tr("Solo this routed source temporarily", "临时独听已路由的这一路")
 	routed := a.routed(it)
 	if !routed {
-		soloTip = a.tr("Route this source into the scene before soloing it.", "先将此来源接入场景，再开启独听。")
+		soloTip = a.tr("Add this source to the mix before soloing", "接入混音后才能独听")
 	}
 	solo := ui.ButtonBase(c.Key(keyPrefix + "-solo-" + string(it.source.ID))).
 		Width(28).Height(28).Radius(radiusMd).Padding(0).Tooltip(soloTip)
@@ -1319,7 +1320,7 @@ func (a *appState) mixerActions(c *ui.Context, it *item, keyPrefix string) {
 		a.runCommand(command{Kind: commandSolo, Source: it.source.ID})
 	}
 	a.quietIconButton(c, keyPrefix+"-route-"+string(it.source.ID), lucide.ListMusic(),
-		a.tr("Route only this source in the scene", "将场景音频路由设为仅此路"),
+		a.tr("Use only this source for stage audio", "舞台只保留这路声音"),
 		colorTextDim, func() { a.runCommand(command{Kind: commandHear, Source: it.source.ID}) })
 }
 
@@ -1358,7 +1359,7 @@ func (a *appState) mixerChannelRouteLabel(it *item) string {
 func (a *appState) shortMixerReason(reason string) string {
 	switch reason {
 	case "its player did not open":
-		return a.tr("player failed", "播放器失败")
+		return a.tr("Could not open media", "媒体打开失败")
 	case "muted":
 		return a.tr("source muted", "本路静音")
 	case "the scene's own mute":

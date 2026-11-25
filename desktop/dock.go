@@ -67,9 +67,9 @@ func (a *appState) eyeIcon(it *item) *ui.SVG {
 
 func (a *appState) eyeTip(it *item) string {
 	if it.shown {
-		return a.tr("take it off the stage", "从舞台上取下")
+		return a.tr("Hide picture", "取下舞台")
 	}
-	return a.tr("put it on the stage", "放到舞台上")
+	return a.tr("Show picture", "放上舞台")
 }
 
 func (a *appState) eyeTint(it *item) ui.Color {
@@ -324,7 +324,7 @@ func (a *appState) normalizeDockWidths(ids []string) {
 func (a *appState) dockSplitter(c *ui.Context, left, right string) {
 	ui.Box(c).Width(8).HeightPercent(100).Children(func() {
 		seam := ui.Box(c).WidthPercent(100).HeightPercent(100).Background(colorBg).
-			Tooltip(a.tr("drag to give one side more room", "拖动以调整两侧宽度"))
+			Tooltip(a.tr("Drag to resize", "拖动调整宽度"))
 		key := left + "|" + right
 		if dx, _, dragging := seam.Dragged(); dragging && a.dockW > 0 {
 			// Dragged reports the whole travel since the press, so only the part
@@ -415,7 +415,7 @@ func (a *appState) stageCatalog(c *ui.Context) {
 		if !a.stageCatalogOpen {
 			return
 		}
-		ui.Text(c, a.tr("Unlinking keeps the source and player here. Delete it only from this catalog.", "从舞台移除会保留目录和播放器；仅在此目录中彻底删除。")).
+		ui.Text(c, a.tr("Sources stay here after you remove them from a stage.", "从舞台移除的来源仍保留在这里。")).
 			FontSize(textMicro).TextColor(colorDim).Wrap()
 		for _, it := range a.items {
 			if a.isStageMember(it) {
@@ -550,7 +550,7 @@ func (a *appState) dockRowsBody(c *ui.Context) {
 						}
 						playButton := ui.Button(c.Key("source-play-"+key), label).Height(26)
 						if a.sourceInExplicitGroup(row) {
-							playButton = playButton.Disabled(true).Tooltip(a.tr("Use the sync group transport", "请使用同步组传输控制"))
+							playButton = playButton.Disabled(true).Tooltip(a.tr("Play or pause the whole sync group", "这一路随同步组播放或暂停"))
 						}
 						if playButton.Clicked() {
 							a.runCommand(command{Kind: kind, Source: itemKey(row)})
@@ -583,13 +583,13 @@ func (a *appState) dockRowsBody(c *ui.Context) {
 							})
 						if offset := a.entryOf(row).Offset; offset != 0 {
 							a.iconButton(c, "row-reset-"+string(row.source.ID), lucide.RotateCcw(),
-								a.tr("set this offset back to zero", "把这一路的偏移复位"), false, func() {
+								a.tr("Reset offset", "偏移归零"), false, func() {
 									a.report(a.runCommand(command{Kind: commandNudge, Source: row.source.ID, Delta: -offset}))
 								})
 						}
 					})
 					a.quietIconButton(c, "row-rename-"+string(row.source.ID), lucide.Pencil(),
-						a.tr("rename this source", "重命名这个来源"), colorDim, func() {
+						a.tr("Rename", "重命名"), colorDim, func() {
 							a.openRenameSource(row.source.ID)
 						})
 					a.quietIconButton(c, "row-show-"+string(row.source.ID), a.eyeIcon(row),
@@ -686,7 +686,7 @@ func (a *appState) dockSyncBody(c *ui.Context) {
 		ui.Text(c, label).FontSize(textMicro).TextColor(colorTextDim).Grow(1).MinWidth(0).SingleLine()
 		if a.syncRef != "" {
 			a.iconButton(c, "sync-ref-clear", lucide.X(),
-				a.tr("go back to the first picture on the stage", "改回以舞台上第一幅画面为参考"), false, func() {
+				a.tr("Use the first picture as reference", "以第一幅画面为参考"), false, func() {
 					a.syncRef = ""
 				})
 		}
@@ -714,7 +714,7 @@ func (a *appState) dockSyncBody(c *ui.Context) {
 					TextColor(colorText).Grow(1).MinWidth(0).SingleLine().Tooltip(sourceDisplayName(row))
 				if !isRef {
 					a.iconButton(c, "sync-ref-"+string(row.source.ID), lucide.Crosshair(),
-						a.tr("make this source the reference", "把这一路设为参考"), false, func() {
+						a.tr("Set as reference", "设为参考"), false, func() {
 							a.syncRef = row.source.ID
 						})
 				}
@@ -740,13 +740,13 @@ func (a *appState) dockSyncBody(c *ui.Context) {
 					})
 				if offset := a.entryOf(row).Offset; offset != 0 {
 					a.iconButton(c, "sync-reset-"+string(row.source.ID), lucide.RotateCcw(),
-						a.tr("set this offset back to zero", "把这一路的偏移复位"), false, func() {
+						a.tr("Reset offset", "偏移归零"), false, func() {
 							a.report(a.runCommand(command{Kind: commandNudge, Source: row.source.ID, Delta: -offset}))
 						})
 				}
 				a.iconButton(c, "sync-align-"+string(row.source.ID), lucide.ScanSearch(),
-					a.tr("measure a suggestion against the reference (read only)",
-						"与参考比对，给一条只读建议"), false, func() {
+					a.tr("Suggest an offset without changing it",
+						"测算偏移建议，不改当前值"), false, func() {
 						if reference != nil {
 							if refIndex := a.indexOf(reference); refIndex >= 0 {
 								a.probeAsync(refIndex, i)
@@ -760,7 +760,7 @@ func (a *appState) dockSyncBody(c *ui.Context) {
 	// A suggestion is a paragraph, not a label: it is written where there is
 	// room for it (Diagnostics) instead of being clipped by this panel.
 	if a.syncNote != "" {
-		ui.Text(c, a.tr("the last suggestion is in Diagnostics", "最近一次建议见诊断页")).
+		ui.Text(c, a.tr("See the latest offset suggestion in Diagnostics", "偏移建议见诊断页")).
 			FontSize(textMicro).TextColor(colorTextDim).SingleLine()
 	}
 }

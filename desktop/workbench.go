@@ -34,18 +34,19 @@ const (
 
 	// Kept for the scale walk and the workspace memory: the folds they describe
 	// no longer decide the layout, but a saved pane name must still parse.
-	topBarHeight               = 48
-	statusHeight               = 26
-	dockHeight                 = 168
-	inspectorWidth             = 300
-	railWidth                  = 240
-	railFoldWidth              = 64
-	inspectorAutoWidth         = 1600
-	railAutoWidth              = 1600
-	dockAutoHeight             = 660
-	brandAutoWidth             = 760
-	statusQuietWidth   float32 = 1280
-	compactButtonWidth float32 = 1200
+	topBarHeight                = 48
+	statusHeight                = 26
+	dockHeight                  = 168
+	inspectorWidth              = 300
+	railWidth                   = 240
+	railFoldWidth               = 64
+	inspectorAutoWidth          = 1600
+	railAutoWidth               = 1600
+	dockAutoHeight              = 660
+	brandAutoWidth              = 760
+	transportLabelWidth         = 760
+	statusQuietWidth    float32 = 1280
+	compactButtonWidth  float32 = 1200
 )
 
 // paneMode says whether a pane follows the window-size rule or a person's
@@ -915,7 +916,7 @@ func (a *appState) preview(c *ui.Context, width, height float32) {
 		})
 		ui.Box(c).Grow(1)
 	})
-	a.transportBar(c)
+	a.transportBar(c, available)
 	if a.webView != nil {
 		ui.Column(c).Height(300).Children(func() {
 			ui.WebView(c, a.webView).Grow(1)
@@ -1042,7 +1043,8 @@ func (a *appState) layoutNote() string {
 // where the picture is and how long it runs, and the way into the two watching
 // modes. The position is read back from the player rather than from the shared
 // clock: this row is about the picture in front of you.
-func (a *appState) transportBar(c *ui.Context) {
+func (a *appState) transportBar(c *ui.Context, width float32) {
+	compact := width < transportLabelWidth
 	event := a.eventTime()
 	first := a.firstShown()
 	plan, planErr := a.stageTransportPlan()
@@ -1052,13 +1054,20 @@ func (a *appState) transportBar(c *ui.Context) {
 	playing := a.playingFor(plan)
 	transportLabel := a.transportActionLabel(plan, playing)
 	transportTip := a.transportActionTooltip(plan)
+	if compact && len(plan.items) != 0 {
+		transportTip = transportLabel + " · " + transportTip
+	}
 	ui.Row(c).WidthPercent(100).Height(44).Padding(0, spaceSm).Gap(spaceSm).
 		Background(colorBg).Border(0, colorBg).
 		AlignItems(ui.Center).Children(func() {
 		ui.Row(c).Grow(1).Justify(ui.SpaceBetween).AlignItems(ui.Center).Children(func() {
 			ui.Row(c).Grow(1).MinWidth(0).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
 				playButton := ui.ButtonBase(c.Key("transport-play")).Width(180).Height(a.controlHeight()).
-					Padding(0, controlPadX).Radius(radiusMd).AlignItems(ui.Center).Shrink(0).AlignSelf(ui.Center)
+					Padding(0, controlPadX).Radius(radiusMd).AlignItems(ui.Center).Shrink(0).
+					AlignSelf(ui.Center).Label(transportLabel)
+				if compact {
+					playButton = playButton.Width(a.controlHeight()).Padding(0).Justify(ui.Center)
+				}
 				fill, ink := colorEnabled, colorSelectedText
 				if len(plan.items) == 0 {
 					fill, ink = colorPanel2, colorDim
@@ -1079,7 +1088,9 @@ func (a *appState) transportBar(c *ui.Context) {
 				playButton.Children(func() {
 					ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 						ui.Icon(c, playIcon).Size(14, 14).TextColor(ink)
-						ui.Text(c, transportLabel).FontSize(textSmall).FontWeight(500).TextColor(ink).SingleLine()
+						if !compact {
+							ui.Text(c, transportLabel).FontSize(textSmall).FontWeight(500).TextColor(ink).SingleLine()
+						}
 					})
 				})
 				if playButton.Clicked() {
@@ -1095,10 +1106,10 @@ func (a *appState) transportBar(c *ui.Context) {
 					mute = a.tr("Unmute", "取消静音")
 					muteIcon = lucide.Volume2()
 				}
-				a.ghostIconButton(c, "transport-mute", mute, muteIcon, 0, func() {
+				a.ghostIconButton(c, "transport-mute", mute, muteIcon, 0, compact, func() {
 					a.runCommand(command{Kind: commandMasterMute})
 				})
-				a.ghostIconButton(c, "transport-reload", a.tr("Reload", "重载"), lucide.RotateCcw(), 0, func() {
+				a.ghostIconButton(c, "transport-reload", a.tr("Reload", "重载"), lucide.RotateCcw(), 0, compact, func() {
 					if first != nil {
 						a.runCommand(command{Kind: commandReload, Source: itemKey(first)})
 					}
@@ -1114,8 +1125,9 @@ func (a *appState) transportBar(c *ui.Context) {
 				// started one, and printing 0.0s beside a player at 0:14 would
 				// read as a stuck clock rather than as "there is no timeline yet".
 				if event > 0 {
-					ui.Text(c, formatEvent(event)).FontSize(textBody).TextColor(colorText).
-						FontFeatures("tnum").Padding(spaceXs, 0)
+					label := formatEvent(event)
+					ui.Text(c, label).FontSize(textBody).TextColor(colorText).
+						FontFeatures("tnum").MinWidth(0).SingleLine().Tooltip(label)
 				}
 				if first != nil {
 					total := first.player.Duration()
@@ -1129,7 +1141,7 @@ func (a *appState) transportBar(c *ui.Context) {
 			// does not need two buttons that both mean "stop editing".
 			ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Shrink(0).Children(func() {
 				ui.Box(c).Width(1).Height(20).Background(colorLineSoft)
-				a.ghostIconButton(c, "transport-cinema", a.tr("Watch", "沉浸观看"), lucide.MonitorPlay(), 104, func() {
+				a.ghostIconButton(c, "transport-cinema", a.tr("Watch", "沉浸观看"), lucide.MonitorPlay(), 104, compact, func() {
 					a.enterViewing(viewCinema, a.windowRef())
 				})
 			})

@@ -18,7 +18,8 @@ This changelog records completed changes that matter to someone using MuxShift. 
 **改进**
 
 - 应用导航收为「舞台」「诊断」「设置」，来源、混音和同步在舞台控制台内操作。
-- 场景栏可以收起再展开。同步面板在来源行显示估算结果，回放缓存限额可以直接输入。
+- 场景栏可以收起再展开，回放缓存限额可以直接输入。同步面板在顶部显示估算结果和来源编号，目标偏移变化后会隐藏旧建议。
+- 窄窗中的播放栏使用紧凑图标，为单行播放时间留出空间。
 
 **修复**
 
@@ -41,7 +42,8 @@ This changelog records completed changes that matter to someone using MuxShift. 
 **Improved**
 
 - Application navigation uses Stage, Diagnostics, and Settings. Sources, Mixer, and Sync live in the stage console.
-- Collapse or reopen the scene rail. Sync estimates appear on the source row, and replay cache limits can be typed directly.
+- Collapse or reopen the scene rail and type replay cache limits directly. The Sync panel shows estimates and source numbers at the top, and hides an old suggestion when the target offset changes.
+- The playback bar uses compact icons in narrow windows to keep the playback time on one line.
 
 **Fixed**
 

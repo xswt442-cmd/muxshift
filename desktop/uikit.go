@@ -73,10 +73,12 @@ func (a *appState) ghostButton(c *ui.Context, key, label string, width float32, 
 // uses it where a word alone left the row looking like a list of links. The
 // icon and the label share the button's ink, so hover and pressed stay one
 // state.
-func (a *appState) ghostIconButton(c *ui.Context, key, label string, icon *ui.SVG, width float32, onClick func()) ui.Element {
+func (a *appState) ghostIconButton(c *ui.Context, key, label string, icon *ui.SVG, width float32, compact bool, onClick func()) ui.Element {
 	button := ui.ButtonBase(c.Key(key)).Height(32).Padding(0, spaceMd).Radius(radiusMd).
-		AlignItems(ui.Center).Shrink(0).AlignSelf(ui.Center)
-	if width > 0 {
+		AlignItems(ui.Center).Shrink(0).AlignSelf(ui.Center).Label(label)
+	if compact {
+		button = button.Width(a.controlHeight()).Padding(0).Justify(ui.Center).Tooltip(label)
+	} else if width > 0 {
 		button = button.Width(width)
 	}
 	fill := ui.Transparent
@@ -90,7 +92,9 @@ func (a *appState) ghostIconButton(c *ui.Context, key, label string, icon *ui.SV
 	button.Children(func() {
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 			ui.Icon(c, icon).Size(14, 14).TextColor(ink)
-			ui.Text(c, label).FontSize(textSmall).FontWeight(500).TextColor(ink).SingleLine()
+			if !compact {
+				ui.Text(c, label).FontSize(textSmall).FontWeight(500).TextColor(ink).SingleLine()
+			}
 		})
 	})
 	if button.Clicked() && onClick != nil {

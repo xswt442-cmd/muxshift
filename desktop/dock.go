@@ -271,6 +271,10 @@ func (a *appState) dockPanel(c *ui.Context, id string) {
 	if a.narrowDock() {
 		widthPercent = 100
 	}
+	var result alignRowResult
+	if id == dockSync {
+		result = a.alignmentRowResult()
+	}
 	ui.Box(c).WidthPercent(widthPercent).MinWidth(120).HeightPercent(100).Padding(spaceSm, spaceSm).
 		Children(func() {
 			ui.Column(c).WidthPercent(100).Grow(1).Padding(spaceMd, spaceMd, spaceSm, spaceMd).Gap(spaceXs).
@@ -280,12 +284,20 @@ func (a *appState) dockPanel(c *ui.Context, id string) {
 					AlignItems(ui.Center).Children(func() {
 					a.sectionTitle(c, a.dockTitle(id))
 					ui.Box(c).Grow(1)
-					if id == dockSync {
-						a.dockSyncResult(c)
+					if result.Text != "" {
+						target := a.find(result.Target)
+						name := syncSourceLabel(a.indexOf(target), target)
+						ui.Text(c.Key("sync-result-target"), name).FontSize(textMicro).TextColor(colorTextDim).
+							MinWidth(0).SingleLine().Tooltip(name)
 					}
 				})
 				ui.Box(c).WidthPercent(100).Height(1).Background(colorLineSoft)
-				ui.Scroll(c).WidthPercent(100).Grow(1).Children(func() {
+				// Keep feedback outside the scroll area and give it the full width.
+				if result.Text != "" {
+					ui.Text(c.Key("sync-result"), result.Text).WidthPercent(100).Shrink(0).
+						FontSize(textSmall).TextColor(colorText).Wrap()
+				}
+				ui.Scroll(c.Key("dock-panel-scroll-" + id)).WidthPercent(100).Grow(1).MinHeight(0).Children(func() {
 					ui.Column(c).WidthPercent(100).Gap(spaceXs).Children(func() {
 						switch id {
 						case dockSources:
@@ -688,18 +700,8 @@ func (a *appState) syncReference() *item {
 	return a.firstShown()
 }
 
-// Keep the comparison in the panel header so feedback does not move the
-// controls in the scrolling list.
-func (a *appState) dockSyncResult(c *ui.Context) {
-	result := a.alignmentRowResult()
-	if result.Text == "" {
-		return
-	}
-	name := sourceDisplayName(a.find(result.Target))
-	ui.Text(c, name).FontSize(textMicro).TextColor(colorTextDim).
-		MinWidth(0).MaxWidth(100).SingleLine().Tooltip(name)
-	ui.Text(c.Key("sync-result"), result.Text).FontSize(textSmall).TextColor(colorText).
-		MinWidth(0).SingleLine().Tooltip(name + " · " + result.Text)
+func syncSourceLabel(index int, it *item) string {
+	return fmt.Sprintf("%d  %s", index+1, sourceDisplayName(it))
 }
 
 func (a *appState) dockSyncBody(c *ui.Context) {
@@ -748,7 +750,7 @@ func (a *appState) dockSyncBody(c *ui.Context) {
 			// The reference is one line: it has no offset to step, and the
 			// second line would only repeat the same word.
 			ui.Row(c).WidthPercent(100).Height(20).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, fmt.Sprintf("%d  %s", i+1, sourceDisplayName(row))).FontSize(textSmall).FontWeight(400).
+				ui.Text(c, syncSourceLabel(i, row)).FontSize(textSmall).FontWeight(400).
 					TextColor(colorText).Grow(1).MinWidth(0).SingleLine().Tooltip(sourceDisplayName(row))
 				if !isRef && row.source.ID != "" {
 					a.iconButton(c, "sync-ref-"+string(row.source.ID), lucide.Crosshair(),

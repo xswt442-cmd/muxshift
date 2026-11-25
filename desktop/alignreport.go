@@ -177,6 +177,9 @@ func (a *appState) alignmentRowResult() alignRowResult {
 		ref.generation != row.ReferenceGeneration || target.generation != row.TargetGeneration {
 		return alignRowResult{}
 	}
+	if row.Status == "suggested" && a.fresh(a.lastProbe) != "" {
+		return alignRowResult{}
+	}
 	return row
 }
 

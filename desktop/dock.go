@@ -280,6 +280,9 @@ func (a *appState) dockPanel(c *ui.Context, id string) {
 					AlignItems(ui.Center).Children(func() {
 					a.sectionTitle(c, a.dockTitle(id))
 					ui.Box(c).Grow(1)
+					if id == dockSync {
+						a.dockSyncResult(c)
+					}
 				})
 				ui.Box(c).WidthPercent(100).Height(1).Background(colorLineSoft)
 				ui.Scroll(c).WidthPercent(100).Grow(1).Children(func() {
@@ -685,6 +688,20 @@ func (a *appState) syncReference() *item {
 	return a.firstShown()
 }
 
+// Keep the comparison in the panel header so feedback does not move the
+// controls in the scrolling list.
+func (a *appState) dockSyncResult(c *ui.Context) {
+	result := a.alignmentRowResult()
+	if result.Text == "" {
+		return
+	}
+	name := sourceDisplayName(a.find(result.Target))
+	ui.Text(c, name).FontSize(textMicro).TextColor(colorTextDim).
+		MinWidth(0).MaxWidth(100).SingleLine().Tooltip(name)
+	ui.Text(c.Key("sync-result"), result.Text).FontSize(textSmall).TextColor(colorText).
+		MinWidth(0).SingleLine().Tooltip(name + " · " + result.Text)
+}
+
 func (a *appState) dockSyncBody(c *ui.Context) {
 	memberCount := 0
 	for _, it := range a.items {
@@ -698,7 +715,6 @@ func (a *appState) dockSyncBody(c *ui.Context) {
 		return
 	}
 	reference := a.syncReference()
-	result := a.alignmentRowResult()
 	a.rowSurface(c).Padding(spaceXs, spaceSm).Gap(spaceXs).
 		AlignItems(ui.Center).Children(func() {
 		ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
@@ -777,9 +793,6 @@ func (a *appState) dockSyncBody(c *ui.Context) {
 					})
 				ui.Box(c).Grow(1)
 			})
-			if result.Target == row.source.ID && result.Text != "" {
-				ui.Text(c, result.Text).FontSize(textMicro).TextColor(colorTextDim).Wrap()
-			}
 		})
 	}
 }

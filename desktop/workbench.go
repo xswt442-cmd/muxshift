@@ -1056,7 +1056,7 @@ func (a *appState) transportBar(c *ui.Context) {
 		Background(colorBg).Border(0, colorBg).
 		AlignItems(ui.Center).Children(func() {
 		ui.Row(c).Grow(1).Justify(ui.SpaceBetween).AlignItems(ui.Center).Children(func() {
-			ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).Grow(1).MinWidth(0).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
 				playButton := ui.ButtonBase(c.Key("transport-play")).Width(180).Height(a.controlHeight()).
 					Padding(0, controlPadX).Radius(radiusMd).AlignItems(ui.Center).Shrink(0).AlignSelf(ui.Center)
 				fill, ink := colorEnabled, colorSelectedText
@@ -1105,8 +1105,9 @@ func (a *appState) transportBar(c *ui.Context) {
 				})
 				ui.Box(c).Width(1).Height(20).Background(colorLineSoft)
 				if first != nil {
-					ui.Text(c, sourceDisplayName(first)).FontSize(textCaption).TextColor(colorTextDim).
-						MaxWidth(220).SingleLine().Padding(spaceSm, 0)
+					name := sourceDisplayName(first)
+					ui.Text(c, name).FontSize(textCaption).TextColor(colorTextDim).
+						MinWidth(0).MaxWidth(220).SingleLine().Tooltip(name)
 				}
 				// The event clock only means something once the shared timeline
 				// has been started. A window opened straight onto a file has not
@@ -1118,15 +1119,15 @@ func (a *appState) transportBar(c *ui.Context) {
 				}
 				if first != nil {
 					total := first.player.Duration()
-					ui.Text(c, clock(first.player.Position())+" / "+clock(total)).
+					ui.Text(c.Key("transport-position"), clock(first.player.Position())+" / "+clock(total)).
 						FontSize(textBody).TextColor(colorTextDim).FontFeatures("tnum").
-						Padding(spaceSm, 0)
+						NoWrap().Shrink(0).Padding(spaceSm, 0)
 				}
 			})
 			// One way in to watching. Cinema is the windowed form; the
 			// overlay inside it already offers full screen, so the workbench
 			// does not need two buttons that both mean "stop editing".
-			ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Shrink(0).Children(func() {
 				ui.Box(c).Width(1).Height(20).Background(colorLineSoft)
 				a.ghostIconButton(c, "transport-cinema", a.tr("Watch", "沉浸观看"), lucide.MonitorPlay(), 104, func() {
 					a.enterViewing(viewCinema, a.windowRef())

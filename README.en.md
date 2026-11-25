@@ -22,13 +22,13 @@
 ## What it does
 
 - **Several sources in one session**: each source keeps its own audio and video tracks, and a scene picks which picture is shown and which sound is played. Volume is set per source.
-- A normal desktop launch reopens saved sources. Each stage keeps its source list, layout, primary picture, and audio routing. A temporary launch with `-media` preserves the saved session.
-- On the stage, show or hide each source, make it primary, or play and pause it independently. Sources in a sync group use the group transport.
+- A normal desktop launch restores the stage arrangement and opens the sources used by the current stage. A temporary launch with `-media` preserves the saved session.
+- Use the Sources panel to show, play, pause, or refresh an individual source. A live master playlist with multiple playable variants offers a quality choice for that source.
 - **Manual alignment**: nudge one source against another in steps of 0.1 s. A playlist that carries PDT also yields a cross-source suggestion; the automatic result is only a suggestion and never writes the timeline.
 - **Replay of a live stream**: live segments stay in a bounded directory, the remaining range is reported, and one span can be cut into a recording you can play back.
 - **Seeking inside a replay**: a stage that is already replaying can request one position by its second inside the common window. Each source is authorized separately, and an out-of-window request or a second one before the first finishes is refused.
-- **Five stage layouts**: Focus shows one source, Split puts two side by side, PiP keeps a small second picture, Grid is 2×2, and Hero is a wide main picture with the rest stacked beside it.
-- **Free placement**: in editing mode a picture can be dragged, resized, locked to its aspect ratio, placed by exact numbers, and raised or lowered in the stacking order. Positions are stored as fractions of the stage, so resizing the window keeps the arrangement.
+- **Stage layouts**: choose Focus, Split, PiP, Grid, Hero, or Free.
+- **Free placement**: select a picture to move, resize, lock, or position it precisely. Each stage saves its positions and stacking order.
 - **Four viewing modes**: editing, cinema, F11 full screen, and a small always-on-top window. Switching between them does not reload a player.
 - **Appearance**: theme, text size, font, spacing, and docking changes take effect and save immediately. Select Apply to change the interface language.
 - **About**: the About section in settings shows the current version and build commit, Windows version and architecture, logical processors, physical memory, and the settings file path; opening it asks GitHub for the latest release, and the check can be retried manually.

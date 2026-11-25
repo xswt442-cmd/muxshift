@@ -12,16 +12,20 @@ This changelog records completed changes that matter to someone using MuxShift. 
 
 - 桌面端分别保存各舞台的布局、主画面和音频分配。来源面板可逐路显示、暂停和恢复播放。
 - 各舞台可从共享目录添加已有来源。解除一个舞台的引用后，其他舞台仍可使用该来源。
+- 自由布局可摆放所有已显示的画面。选中来源后可直接拖移、缩放或锁定摆位。
+- 来源可单独刷新。支持多个可播档位的直播主播放列表可逐路选择清晰度。
 
 **改进**
 
 - 应用导航收为「舞台」「诊断」「设置」，来源、混音和同步在舞台控制台内操作。
+- 场景栏可以收起再展开。同步面板在来源行显示估算结果，回放缓存限额可以直接输入。
 
 **修复**
 
 - 点击编辑位置时会选中一个可见画面，短窗口也能操作下沿的缩放把手。
 - 来源按保存顺序恢复，临时打不开时可取消恢复并保留原有分配。拖动音量等连续保存不会再因两个计时器同时写入而卡住。
-- 暂时离线的来源保留原舞台的摆位和路由，即使删除过其他舞台并再次重启。
+- 离线来源保留待恢复的舞台摆位和音视频分配。
+- 启动优先打开当前舞台使用的来源。切走后停用新舞台不再使用的播放器。
 - 舞台播放控制以当前舞台为范围，只有舞台包含活动同步组成员时才会控制该组。观看模式的播放按钮和空格键使用同一规则。
 - 浏览器扩展在解析期间遇到换页或重载时会提示重新扫描，并禁用旧候选。
 
@@ -31,16 +35,20 @@ This changelog records completed changes that matter to someone using MuxShift. 
 
 - The desktop saves each stage's layout, primary picture, and audio routing. The Sources panel can show, pause, and resume individual sources.
 - Each stage can add existing sources from the shared catalog. Unlinking a source from one stage leaves it available to other stages.
+- Free layout places every shown picture. Select a source to move, resize, or lock its position directly.
+- Refresh sources individually. A live master playlist with multiple playable variants offers a per-source quality choice.
 
 **Improved**
 
 - Application navigation uses Stage, Diagnostics, and Settings. Sources, Mixer, and Sync live in the stage console.
+- Collapse or reopen the scene rail. Sync estimates appear on the source row, and replay cache limits can be typed directly.
 
 **Fixed**
 
 - Position editing selects a visible picture and keeps the bottom resize handles reachable in short windows.
 - Sources reopen in the saved order, and cancelling recovery keeps the original assignments. Overlapping autosaves no longer deadlock during continuous changes such as volume drags.
-- Temporarily unavailable sources retain their original stage placement and routing after deleting another stage and restarting again.
+- Unavailable sources retain pending stage placement and audio and video assignments.
+- Startup opens sources used by the current stage first. Stage changes stop players the new stage no longer uses.
 - Stage transport controls the current stage and includes the active sync group only when the stage has a member in that group. The viewing controls and Space shortcut use the same rule.
 - The extension asks for a fresh scan and disables old candidates when a page changes or reloads during resolution.
 

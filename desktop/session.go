@@ -422,6 +422,7 @@ type appState struct {
 	// page can be exact about the persistence boundary.
 	settings      settings
 	settingsDraft settings
+	dvrInputs     [3]dvrDraftInput
 	settingsPath  string
 	settingsSaved atomic.Bool
 	settingsErr   string

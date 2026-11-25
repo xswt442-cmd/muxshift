@@ -100,6 +100,52 @@ const (
 	maxBudgetBytes      = int64(1) << 40 // 1 TiB
 )
 
+const bytesPerMiB = int64(1) << 20
+
+type dvrField struct {
+	key, label, labelZH   string
+	scale, min, max, step int64
+}
+
+var dvrFields = [...]dvrField{
+	{"dvr-ret", "Keep this much history", "保留时长", 1, minRetentionSeconds, maxRetentionSeconds, 60},
+	{"dvr-max", "Segment cache limit", "分片缓存上限", bytesPerMiB, 0, maxBudgetBytes, 64 * bytesPerMiB},
+	{"dvr-rec", "Recording limit", "录制上限", bytesPerMiB, 0, maxBudgetBytes, 64 * bytesPerMiB},
+}
+
+type dvrDraftInput struct {
+	text string
+	base string // formatted draft value before the user edited the field
+}
+
+func (f dvrField) format(value int64) string {
+	return strconv.FormatFloat(float64(value)/float64(f.scale), 'f', -1, 64)
+}
+
+func (f dvrField) parse(text string) (int64, bool) {
+	text = strings.TrimSpace(text)
+	if f.scale == 1 {
+		n, err := strconv.ParseInt(text, 10, 64)
+		return n, err == nil && n >= f.min && n <= f.max
+	}
+	n, err := strconv.ParseFloat(text, 64)
+	scaled := n * float64(f.scale)
+	if err != nil || !(scaled >= float64(f.min) && scaled <= float64(f.max)) {
+		return 0, false
+	}
+	// Convert fractional MiB to the nearest byte. Only an explicit zero
+	// should remove the limit.
+	bytes := int64(scaled + 0.5)
+	if bytes == 0 && n > 0 {
+		bytes = 1
+	}
+	return bytes, true
+}
+
+func (b dvrBudget) fieldValues() [3]int64 {
+	return [3]int64{int64(b.RetentionSeconds), b.MaxBytes, b.RecordingBytes}
+}
+
 // validateDVRBudget rejects a budget the buffer cannot run with.
 func validateDVRBudget(b dvrBudget) error {
 	if b.RetentionSeconds < minRetentionSeconds || b.RetentionSeconds > maxRetentionSeconds {
@@ -175,7 +221,7 @@ func (a *appState) bytesLabel(n int64) string {
 	if n == 0 {
 		return a.tr("no limit", "不限制")
 	}
-	return bytesLine(n)
+	return strconv.FormatFloat(float64(n)/float64(bytesPerMiB), 'f', -1, 64) + " MiB"
 }
 
 // dvrLimitSummary states the budget in force as one short line in the window's
@@ -532,6 +578,7 @@ func (a *appState) applySettingsState(next settings) error {
 // its immediate path; the other draft changes reach the session on Apply.
 func (a *appState) beginDraft(from settings) {
 	a.settingsDraft = cloneSettings(from)
+	a.dvrInputs = [3]dvrDraftInput{}
 	a.draftCleared = false
 }
 
@@ -647,6 +694,9 @@ func (a *appState) settingsPage(c *ui.Context) {
 			}
 			if a.settingsSection != "About" && a.settingsSection != "Diagnostics" {
 				dirty := !sameSettings(a.settingsDraft, a.settings)
+				for _, input := range a.dvrInputs {
+					dirty = dirty || input.text != input.base
+				}
 				ui.Row(c).Gap(spaceSm).Padding(0, spaceSm).Children(func() {
 					a.primaryButton(c, "settings-apply", a.tr("Apply", "应用"), 100, dirty, func() {
 						a.applySettingsCommand()
@@ -654,7 +704,7 @@ func (a *appState) settingsPage(c *ui.Context) {
 					a.secondaryButton(c, "settings-cancel", a.tr("Cancel", "取消"), 100, dirty, func() {
 						a.cancelSettingsDraft()
 					}).Border(1, colorLineSoft)
-					a.secondaryButton(c, "settings-reset", a.tr("Reset draft to defaults", "草稿恢复默认"), 180, true, func() {
+					a.secondaryButton(c, "settings-reset", a.tr("Restore defaults", "恢复默认"), 180, true, func() {
 						a.resetSettingsDraft()
 					}).Border(1, colorLineSoft)
 					if dirty {
@@ -761,27 +811,13 @@ func (a *appState) settingsForm(c *ui.Context) {
 			{consoleRows, a.tr("One row per source", "每源一行")},
 		})
 	case "DVR":
-		ui.Text(c, a.tr("what a new replay buffer may use; the marker shows a buffer opened now", "新回放缓存的上限；下方数值为当前生效值")).Wrap()
-		a.dvrStepper(c, a.tr("Keep this much history", "保留时长"), "dvr-ret-less", a.tr("-1 min", "-1 分"), "dvr-ret-more", a.tr("+1 min", "+1 分"),
-			strconv.Itoa(a.settingsDraft.DVR.RetentionSeconds)+a.tr(" s", " 秒"), func(delta int) {
-				next := a.settingsDraft.DVR.RetentionSeconds + 60*delta
-				a.settingsDraft.DVR.RetentionSeconds = min(maxRetentionSeconds, max(minRetentionSeconds, next))
-			})
-		a.dvrStepper(c, a.tr("Segment cache limit", "分片缓存上限"), "dvr-max-less", "-64 MiB", "dvr-max-more", "+64 MiB",
-			a.bytesLabel(a.settingsDraft.DVR.MaxBytes), func(delta int) {
-				next := a.settingsDraft.DVR.MaxBytes + int64(delta)*64<<20
-				a.settingsDraft.DVR.MaxBytes = min(maxBudgetBytes, max(0, next))
-			})
-		a.dvrStepper(c, a.tr("Recording limit", "录制上限"), "dvr-rec-less", "-64 MiB", "dvr-rec-more", "+64 MiB",
-			a.bytesLabel(a.settingsDraft.DVR.RecordingBytes), func(delta int) {
-				next := a.settingsDraft.DVR.RecordingBytes + int64(delta)*64<<20
-				a.settingsDraft.DVR.RecordingBytes = min(maxBudgetBytes, max(0, next))
-			})
-		a.settingsHint(c, a.dvrLimitSummary(a.budget)+a.tr(" (from ", "（来自 ")+a.budgetSourceLabel()+a.tr(")", "）"))
-		if a.settingsDraft.DVR.MaxBytes == 0 || a.settingsDraft.DVR.RecordingBytes == 0 {
-			ui.Text(c, a.tr("a zero byte limit removes that limit, not shrinks it", "字节上限为 0 表示不限制，而不是更小")).
-				FontSize(textMicro).TextColor(colorWarn).Wrap()
+		ui.Text(c, a.tr("These limits apply to newly opened replay buffers.", "这些设置适用于新开的回放缓存。")).Wrap()
+		values := a.settingsDraft.DVR.fieldValues()
+		for i, field := range dvrFields {
+			a.dvrStepper(c, field, &a.dvrInputs[i], values[i])
 		}
+		a.settingsHint(c, a.dvrLimitSummary(a.budget)+a.tr(" (from ", "（来自 ")+a.budgetSourceLabel()+a.tr(")", "）"))
+		a.settingsHint(c, a.tr("Enter 0 for an unlimited cache or recording size.", "缓存或录制上限填 0 表示不限制。"))
 	case "Diagnostics":
 		// This settings section is read-only. The shared page navigation owns
 		// the route to the full diagnostics page.
@@ -842,15 +878,42 @@ func (a *appState) settingsRow(c *ui.Context, label string, control func()) {
 // buttons and the value. The name is not on the same row as the buttons because
 // the settings page still has to fit beside the folded rail at the smallest
 // window, and a 260px label plus three controls does not.
-func (a *appState) dvrStepper(c *ui.Context, name, lessKey, lessLabel, moreKey, moreLabel, value string, adjust func(delta int)) {
+func (a *appState) dvrStepper(c *ui.Context, field dvrField, input *dvrDraftInput, fallback int64) {
+	if input.text == input.base {
+		input.base = field.format(fallback)
+		input.text = input.base
+	}
+	name := a.tr(field.label, field.labelZH)
+	unit := a.dvrFieldUnit(field)
+	value, valid := field.parse(input.text)
+	change := func(delta int64) {
+		input.text = field.format(min(field.max, max(field.min, value+delta)))
+	}
+	step := field.format(field.step) + " " + unit
 	ui.Column(c).Gap(spaceXs).WidthPercent(100).Children(func() {
 		ui.Text(c, name).FontSize(textMicro).TextColor(colorDim)
 		ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
-			a.secondaryButton(c, lessKey, lessLabel, 84, true, func() { adjust(-1) })
-			a.numericReadout(c, value, 96)
-			a.secondaryButton(c, moreKey, moreLabel, 84, true, func() { adjust(1) })
+			a.secondaryButton(c, field.key+"-less", "−", 36, valid && value > field.min,
+				func() { change(-field.step) }).Tooltip("−" + step)
+			c.Key(field.key + "-value")
+			number := a.field(c, &input.text).Width(100).TextAlign(ui.End).
+				FontSize(textBody).FontWeight(500).FontFeatures("tnum").TextColor(colorText).
+				Description(name + " (" + unit + ")")
+			if !valid {
+				number.Border(1, colorBad)
+			}
+			ui.Text(c, unit).Width(34).FontSize(textMicro).TextColor(colorTextDim).SingleLine()
+			a.secondaryButton(c, field.key+"-more", "+", 36, valid && value < field.max,
+				func() { change(field.step) }).Tooltip("+" + step)
 		})
 	})
+}
+
+func (a *appState) dvrFieldUnit(field dvrField) string {
+	if field.scale == 1 {
+		return a.tr("s", "秒")
+	}
+	return "MiB"
 }
 
 // settingsSlider is a slider with the value spelled out beside it, because a
@@ -976,6 +1039,23 @@ func (a *appState) resolveBudget() error { return a.resolveBudgetFor(a.settings)
 // applySettingsCommand is the Apply button: validate, apply, write, report.
 func (a *appState) applySettingsCommand() {
 	next := cloneSettings(a.settingsDraft)
+	values := next.DVR.fieldValues()
+	for i, input := range a.dvrInputs {
+		if input.text == input.base {
+			continue
+		}
+		field := dvrFields[i]
+		value, ok := field.parse(input.text)
+		if !ok {
+			name := a.tr(field.label, field.labelZH)
+			limits := field.format(field.min) + "–" + field.format(field.max) + " " + a.dvrFieldUnit(field)
+			a.settingsErr = fmt.Sprintf(a.tr("%s must be within %s.", "%s应在 %s 之间。"), name, limits)
+			a.settingsNote = ""
+			return
+		}
+		values[i] = value
+	}
+	next.DVR = dvrBudget{RetentionSeconds: int(values[0]), MaxBytes: values[1], RecordingBytes: values[2]}
 	// A page that never cleared the Sources list applies its other sections
 	// without deleting what was remembered while the draft was open: the live
 	// entries come first (they are the newest), and any entry the draft still
@@ -1040,7 +1120,7 @@ func appearanceOf(st settings) appearanceFields {
 func (a *appState) cancelSettingsDraft() {
 	a.beginDraft(a.settings)
 	a.settingsErr = ""
-	a.settingsNote = a.tr("cancelled: the draft is back to what is applied", "已取消：草稿恢复为当前生效的设置")
+	a.settingsNote = a.tr("Changes discarded.", "已取消未应用的更改。")
 	a.invalidate()
 }
 
@@ -1048,7 +1128,7 @@ func (a *appState) resetSettingsDraft() {
 	a.beginDraft(defaultSettings())
 	copyAppearance(&a.settingsDraft, a.settings)
 	a.settingsErr = ""
-	a.settingsNote = a.tr("the draft is reset; live appearance is unchanged until you use Reset appearance now", "草稿已重置；立即恢复外观默认值前，当前外观保持不变")
+	a.settingsNote = a.tr("Defaults loaded. Select Apply to save them. Appearance has its own reset button.", "已填入默认值，点击「应用」保存。外观有单独的恢复按钮。")
 }
 
 func copyAppearance(target *settings, source settings) {
@@ -1061,6 +1141,7 @@ func copyAppearance(target *settings, source settings) {
 
 func (a *appState) applyAppearanceNow() {
 	draft := cloneSettings(a.settingsDraft)
+	dvrInputs := a.dvrInputs
 	cleared := a.draftCleared
 	next := cloneSettings(a.settings)
 	copyAppearance(&next, draft)
@@ -1069,6 +1150,7 @@ func (a *appState) applyAppearanceNow() {
 		return
 	}
 	a.settingsDraft = draft
+	a.dvrInputs = dvrInputs
 	a.draftCleared = cleared
 	a.settingsErr = ""
 	a.settingsNote = a.tr("appearance applied and saved immediately", "外观已立即应用并保存")
@@ -1082,6 +1164,7 @@ func (a *appState) applyAppearanceNow() {
 
 func (a *appState) resetAppearanceNow() {
 	draft := cloneSettings(a.settingsDraft)
+	dvrInputs := a.dvrInputs
 	cleared := a.draftCleared
 	next := cloneSettings(a.settings)
 	copyAppearance(&next, defaultSettings())
@@ -1091,6 +1174,7 @@ func (a *appState) resetAppearanceNow() {
 	}
 	copyAppearance(&draft, next)
 	a.settingsDraft = draft
+	a.dvrInputs = dvrInputs
 	a.draftCleared = cleared
 	a.settingsErr = ""
 	a.settingsNote = a.tr("appearance defaults applied and saved immediately", "外观默认值已立即应用并保存")

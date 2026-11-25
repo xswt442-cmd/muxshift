@@ -441,6 +441,8 @@ async function resolveLivePage(expectedURL) {
   }
   const navigationEvents = ["pagehide", "popstate", "hashchange"];
   for (const event of navigationEvents) addEventListener(event, cancelForNavigation, { once: true });
+  const navigation = window.navigation;
+  navigation?.addEventListener("currententrychange", cancelForNavigation);
   try {
     const subject = site.subject();
     if (!subject) {
@@ -460,6 +462,7 @@ async function resolveLivePage(expectedURL) {
     return { url: "", note: `The page could not trade its session for an address: ${String(error?.message || error)}` };
   } finally {
     for (const event of navigationEvents) removeEventListener(event, cancelForNavigation);
+    navigation?.removeEventListener("currententrychange", cancelForNavigation);
   }
 
   // ask performs the site's own request and hands back the parsed answer.

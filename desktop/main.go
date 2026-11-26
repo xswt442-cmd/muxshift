@@ -62,6 +62,7 @@ func (a *appState) reopenPlayer(it *item) {
 // openReplacement keeps the original media address until the selected
 // replacement is ready. Explicit media controls also retain the old play state.
 func (a *appState) openReplacement(it *item, uri string, retainState bool) {
+	it.closeMediaMenu()
 	previous := it.player
 	player, err := openPlayerOnMain(uri)
 	if err != nil {

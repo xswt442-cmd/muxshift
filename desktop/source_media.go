@@ -9,11 +9,14 @@ import (
 
 func (a *appState) sourceMediaControls(c *ui.Context, it *item) {
 	if a.selected != itemKey(it) || it.player == nil || !a.isStageMember(it) {
+		if it.mediaMenu {
+			it.closeMediaMenu()
+		}
 		return
 	}
 	key := string(itemKey(it))
 	ui.Row(c).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
-		available := !it.lifecyclePending && it.handover == nil && it.replay == nil
+		available := a.canReplaceSourceMedia(it)
 		refresh := ui.Button(c.Key("media-refresh-"+key), a.tr("Refresh source", "刷新此来源")).Height(24)
 		if !available {
 			refresh = refresh.Disabled(true)
@@ -23,6 +26,9 @@ func (a *appState) sourceMediaControls(c *ui.Context, it *item) {
 		}
 		if it.playlistMaster != "" {
 			quality := ui.Button(c.Key("media-quality-"+key), a.tr("Quality", "清晰度")).Height(24)
+			if !available {
+				quality = quality.Disabled(true)
+			}
 			if quality.Clicked() {
 				it.mediaMenu = !it.mediaMenu
 				if it.mediaMenu {
@@ -38,6 +44,9 @@ func (a *appState) sourceMediaControls(c *ui.Context, it *item) {
 						})
 					})
 			})
+			if !it.mediaMenu && it.mediaLoading {
+				it.closeMediaMenu()
+			}
 		}
 	})
 	if it.handover != nil && it.handover.retainState {
@@ -57,17 +66,18 @@ func (a *appState) sourceQualityOptions(c *ui.Context, it *item, key string) {
 	if it.mediaError != "" {
 		ui.Text(c, it.mediaError).FontSize(textMicro).TextColor(colorTextDim).Wrap()
 	}
+	current := currentQuality(it.uri, it.mediaChoices)
 	for i, variant := range it.mediaChoices {
 		label := fmt.Sprintf("%.2f Mbps", float64(variant.bandwidth)/1e6)
 		if variant.height > 0 {
 			label = fmt.Sprintf("%dp · %s", variant.height, label)
 		}
-		active := variant.address == it.uri
+		active := i == current
 		button := ui.Button(c.Key("media-variant-"+key+"-"+itoa(i)), label).Height(24)
 		if active {
 			button = button.Background(colorSelected).TextColor(colorSelectedText)
 		}
-		if active || it.lifecyclePending || it.handover != nil || it.replay != nil {
+		if active || !a.canReplaceSourceMedia(it) {
 			button = button.Disabled(true)
 		}
 		if button.Clicked() {
@@ -76,8 +86,29 @@ func (a *appState) sourceQualityOptions(c *ui.Context, it *item, key string) {
 	}
 }
 
+func currentQuality(address string, variants []liveVariant) int {
+	match, matches := -1, 0
+	for i, variant := range variants {
+		if variant.address == address {
+			return i
+		}
+		if stripSecrets(variant.address) == stripSecrets(address) {
+			match, matches = i, matches+1
+		}
+	}
+	if matches == 1 {
+		return match
+	}
+	return -1
+}
+
+func (a *appState) canReplaceSourceMedia(it *item) bool {
+	return it.player != nil && a.isStageMember(it) &&
+		!it.lifecyclePending && it.handover == nil && it.replay == nil && it.swap == nil
+}
+
 func (a *appState) replaceSourceMedia(it *item, uri string) {
-	if it.player == nil || !a.isStageMember(it) || it.lifecyclePending || it.handover != nil || it.replay != nil {
+	if !a.canReplaceSourceMedia(it) {
 		return
 	}
 	it.mediaReplaceErr = nil
@@ -85,12 +116,25 @@ func (a *appState) replaceSourceMedia(it *item, uri string) {
 	a.invalidate()
 }
 
+func (it *item) closeMediaMenu() {
+	it.mediaMenu = false
+	if it.mediaCancel != nil {
+		it.mediaCancel()
+		it.mediaCancel = nil
+		it.mediaLoadSeq++
+	}
+	it.mediaLoading = false
+}
+
 func (a *appState) loadSourceQualities(it *item) {
 	if it.mediaLoading {
 		return
 	}
 	master, stage, generation := it.playlistMaster, a.stageGeneration, it.generation
+	key := itemKey(it)
 	ctx, cancel := context.WithTimeout(context.Background(), playlistTimeout)
+	it.mediaLoadSeq++
+	seq := it.mediaLoadSeq
 	it.mediaCancel = cancel
 	it.mediaLoading = true
 	it.mediaError = ""
@@ -99,26 +143,24 @@ func (a *appState) loadSourceQualities(it *item) {
 		defer cancel()
 		list, err := inspectLivePlaylist(ctx, master)
 		a.mainDo(func() {
-			if a.closed || a.stageGeneration != stage || a.itemOf(it.source.ID) != it {
+			if it.mediaLoadSeq != seq || a.closed || a.stageGeneration != stage {
+				return
+			}
+			current, _, lookupErr := a.itemBySource(key)
+			if lookupErr != nil || current != it || !it.mediaMenu {
 				return
 			}
 			it.mediaLoading = false
 			it.mediaCancel = nil
-			if it.generation != generation {
-				a.invalidate()
-				return
-			}
-			if err != nil {
+			if err != nil || it.generation != generation {
 				it.mediaError = a.tr("Could not read quality levels. Reopen this menu to retry.", "清晰度读取失败，重新打开菜单可重试。")
 			} else {
-				hasAlternative := false
 				for _, variant := range list.variants {
 					if variant.live {
 						it.mediaChoices = append(it.mediaChoices, variant)
-						hasAlternative = hasAlternative || variant.address != it.uri
 					}
 				}
-				if !hasAlternative {
+				if len(it.mediaChoices) == 0 || (len(it.mediaChoices) == 1 && currentQuality(it.uri, it.mediaChoices) == 0) {
 					it.mediaChoices = nil
 					it.mediaError = a.tr("No other playable quality levels.", "没有其他可播放的清晰度。")
 				}

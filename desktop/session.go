@@ -61,6 +61,7 @@ type item struct {
 	mediaMenu        bool
 	mediaLoading     bool
 	mediaCancel      context.CancelFunc
+	mediaLoadSeq     uint64
 	mediaChoices     []liveVariant
 	mediaError       string
 	mediaReplaceErr  error
@@ -1050,12 +1051,7 @@ func (a *appState) startStoredSourceRestores() {
 func (a *appState) advanceStageGeneration() {
 	a.stageGeneration++
 	for _, it := range a.items {
-		if it.mediaCancel != nil {
-			it.mediaCancel()
-			it.mediaCancel = nil
-			it.mediaLoading = false
-		}
-		it.mediaMenu = false
+		it.closeMediaMenu()
 	}
 	if a.startupRestoreCancel == nil {
 		return
@@ -2121,10 +2117,7 @@ func (a *appState) remove(index int) error {
 	if err != nil {
 		return err
 	}
-	if it.mediaCancel != nil {
-		it.mediaCancel()
-		it.mediaCancel = nil
-	}
+	it.closeMediaMenu()
 	scenes := a.session.Scenes()
 	if it.source.ID != "" {
 		if err := a.session.RemoveSource(it.source.ID); err != nil {
@@ -2197,6 +2190,7 @@ func (a *appState) retireItemOnMain(it *item, after func()) {
 	if it == nil {
 		return
 	}
+	it.closeMediaMenu()
 	current := rawPlayer(it.player)
 	previous := rawPlayer(it.previous)
 	keep := rawPlayer(it.outputPlayer())

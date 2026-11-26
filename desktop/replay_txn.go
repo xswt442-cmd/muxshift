@@ -691,7 +691,7 @@ func (a *appState) settleSeekTxn(txn *seekTxn) error {
 			case !dispatched:
 				frames[i].err = fmt.Errorf("the session did not report the player's state within %s", seekDispatchWait)
 			case !out.acted:
-				frames[i].err = fmt.Errorf("%s was not read: the transaction had been stopped", a.name(step.item))
+				return fmt.Errorf("%s was not read: the transaction had been stopped", a.name(step.item))
 			default:
 				frames[i] = out.frame
 			}

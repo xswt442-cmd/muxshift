@@ -2199,12 +2199,13 @@ func TestApplyResolvesTheBudgetEvenWhenTheSaveFails(t *testing.T) {
 		t.Fatalf("make the save fail: %v", err)
 	}
 	a := &appState{
-		session:      session,
-		scene:        scene.ID,
-		settings:     defaultSettings(),
-		settingsPath: blocked,
-		budgetFlags:  map[string]bool{},
-		flagBudget:   dvrBudget{RetentionSeconds: 60, RecordingBytes: 256 << 20},
+		session:         session,
+		scene:           scene.ID,
+		settings:        defaultSettings(),
+		settingsPath:    blocked,
+		settingsTrusted: true,
+		budgetFlags:     map[string]bool{},
+		flagBudget:      dvrBudget{RetentionSeconds: 60, RecordingBytes: 256 << 20},
 	}
 	a.settingsDraft = a.settings
 	a.settingsDraft.DVR = dvrBudget{RetentionSeconds: 120, MaxBytes: 0, RecordingBytes: 64 << 20}

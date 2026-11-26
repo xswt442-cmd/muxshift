@@ -356,8 +356,6 @@ type appState struct {
 	// editMode is the stage's editing switch: handles and the properties
 	// form are live while it is on.
 	editMode bool
-	// mixerOpen folds the mixer panel in the right column.
-	mixerOpen bool
 
 	// closed is set by the window's close handler. A landing that arrives after
 	// it has nothing to write into: the session and the players were released.
@@ -444,13 +442,14 @@ type appState struct {
 	// the other draft values wait for Apply. settingsPath is where applied values
 	// are written, and settingsSaved says this start has written that file, so the
 	// page can be exact about the persistence boundary.
-	settings      settings
-	settingsDraft settings
-	dvrInputs     [3]dvrDraftInput
-	settingsPath  string
-	settingsSaved atomic.Bool
-	settingsErr   string
-	settingsNote  string
+	settings          settings
+	settingsDraft     settings
+	dvrInputs         [3]dvrDraftInput
+	settingsPath      string
+	settingsSaved     atomic.Bool
+	settingsSaveDirty bool
+	settingsErr       string
+	settingsNote      string
 	// draftCleared marks a Settings draft that asked to forget the remembered
 	// sources. Only such a draft may apply an empty list; every other Apply
 	// merges what the live settings hold instead of deleting what was
@@ -711,7 +710,7 @@ func newAppStateWithSettings(uris []string, loaded settings) (*appState, error) 
 // under the picture, every panel of it visible). Both the command-line start and
 // the saved-session start grow from here, so a restored window looks the same.
 func newAppShell(session *core.Session, scene core.SceneID, output core.OutputID, loaded settings) *appState {
-	app := &appState{session: session, scene: scene, output: output, closeDone: make(chan struct{}), sync: newSyncState(), audible: make(map[core.TrackID]bool), settings: cloneSettings(loaded), settingsDraft: cloneSettings(loaded), settingsSection: "General"}
+	app := &appState{session: session, scene: scene, output: output, closeDone: make(chan struct{}), sync: newSyncState(), audible: make(map[core.TrackID]bool), settings: cloneSettings(loaded), settingsDraft: cloneSettings(loaded), settingsSection: "General", settingsTrusted: true}
 	app.navWidth = 236
 	app.navUp = true
 	app.editingShell = true
@@ -1415,9 +1414,7 @@ func (a *appState) landImportPlan(token int, plan importPlan, probeErr error) {
 			}
 			// A source the user just imported is audible by default: route its
 			// audio into the scene at its own level, exactly the way a source
-			// given on the command line is routed at startup. Without this the
-			// scene held no level for the track and apply() muted a source the
-			// user had just added, which is the "没有声音" in questions-v4 P0-1.
+			// given on the command line is routed at startup.
 			if _, sceneErr := a.session.Scene(target); sceneErr == nil {
 				a.materializeStageMembers(target)[a.stageSourceID(it)] = true
 				if it.audio != "" {
@@ -1433,7 +1430,9 @@ func (a *appState) landImportPlan(token int, plan importPlan, probeErr error) {
 				// the picture is already moving, so the shared clock starts
 				// with it. Without this the top bar called a running stream
 				// "paused" and its event time stayed at zero.
-				a.sync.playhead.Play()
+				if _, grouped := a.existingGroup(); !grouped {
+					a.sync.playhead.Play()
+				}
 				it.player.Play()
 				a.invalidate()
 			}
@@ -1882,6 +1881,8 @@ func (a *appState) reconcileScenePlayers(sceneID core.SceneID, generation uint64
 // which is the order the layout places the pictures in; the audio levels are
 // untouched either way.
 func (a *appState) showVideo(index int) error {
+	reference := a.syncReference()
+	defer a.invalidateChangedAlignmentReference(reference)
 	it, err := a.at(index)
 	if err != nil {
 		return err

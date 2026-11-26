@@ -125,12 +125,16 @@ func (a *appState) calibrationClock(it *item) (content time.Duration, instance s
 // can be asked for. A recording counts from its own first frame; a live player is
 // asked for its own clock, because no other mapping has been proven.
 func (a *appState) playerPositionFor(it *item, content time.Duration) (time.Duration, error) {
-	if it == nil || it.replay == nil {
-		return content, nil
+	position := content
+	if it != nil && it.replay != nil {
+		var err error
+		position, err = offsetAfter(content, -it.replay.StartBufferTime)
+		if err != nil {
+			return 0, err
+		}
 	}
-	position, err := offsetAfter(content, -it.replay.StartBufferTime)
-	if err != nil {
-		return 0, err
+	if position < 0 {
+		return 0, fmt.Errorf("%w: the target is before the player's first frame", core.ErrTimeRange)
 	}
 	return position, nil
 }
@@ -283,8 +287,7 @@ func (a *appState) syncMembers() (core.SyncGroup, error) {
 		// new one from what is left rather than acting on a stale id.
 		a.sync.group = ""
 	}
-	scene, err := a.session.Scene(a.scene)
-	if err != nil {
+	if _, err := a.session.Scene(a.scene); err != nil {
 		return core.SyncGroup{}, err
 	}
 	var reference core.TrackID
@@ -299,17 +302,7 @@ func (a *appState) syncMembers() (core.SyncGroup, error) {
 		}
 	}
 	for _, it := range a.items {
-		if it.player == nil {
-			continue
-		}
-		heard := false
-		for _, level := range scene.Audio {
-			if level.Track == it.audio {
-				heard = true
-				break
-			}
-		}
-		if !heard && !containsTrack(scene.Video, it.video) {
+		if !a.isStageMember(it) {
 			continue
 		}
 		add(it.video)
@@ -332,7 +325,7 @@ func (a *appState) syncMembers() (core.SyncGroup, error) {
 // alignment probe reads through this: showing a suggestion must not change the
 // session, and building the group belongs to the first sync command instead.
 func (a *appState) existingGroup() (core.SyncGroup, bool) {
-	if a.sync.group == "" {
+	if a.sync == nil || a.sync.group == "" {
 		return core.SyncGroup{}, false
 	}
 	for _, group := range a.session.SyncGroups() {
@@ -416,10 +409,11 @@ func (a *appState) stageTransportPlan() (transportPlan, error) {
 	return plan, nil
 }
 
-// applyTransportPlan applies a previously selected stage plan. The shared
-// event clock moves only when the plan includes its sync group.
+// applyTransportPlan follows the stage while there is no sync group. Once a
+// group exists, only transport that includes it controls that event clock.
 func (a *appState) applyTransportPlan(plan transportPlan, play bool) []string {
-	if plan.syncGroup && a.sync != nil && a.sync.playhead != nil {
+	_, grouped := a.existingGroup()
+	if (plan.syncGroup || !grouped) && len(plan.items) > 0 && a.sync != nil && a.sync.playhead != nil {
 		if play {
 			a.sync.playhead.Play()
 		} else {
@@ -435,7 +429,7 @@ func (a *appState) applyTransportPlan(plan transportPlan, play bool) []string {
 			player.Pause()
 		}
 		if err := player.Err(); err != nil {
-			problems = append(problems, fmt.Sprintf("%s: %v", a.name(it), err))
+			problems = append(problems, fmt.Sprintf("%s: %v", a.name(it), safeOpenError(err)))
 		}
 	}
 	return problems
@@ -650,17 +644,15 @@ func (a *appState) nudge(index int, delta time.Duration) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if _, err := a.syncMembers(); err != nil {
-		return "", fmt.Errorf("sync group: %w", err)
-	}
-	if it.player == nil {
+	player := it.outputPlayer()
+	if player == nil {
 		return "", fmt.Errorf("source %d: no player", index+1)
 	}
-	if !it.player.Ready() {
+	if !player.Ready() {
 		return "", fmt.Errorf("source %d: not ready, so there is nothing to seek yet", index+1)
 	}
-	if err := it.player.Err(); err != nil {
-		return "", fmt.Errorf("source %d: %w", index+1, err)
+	if err := player.Err(); err != nil {
+		return "", fmt.Errorf("source %d: %w", index+1, safeOpenError(err))
 	}
 	track := it.audio
 	if track == "" {
@@ -678,14 +670,38 @@ func (a *appState) nudge(index int, delta time.Duration) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("source %d: %w", index+1, err)
 	}
+	_, grouped := a.existingGroup()
 	target, err := mediaFromEvent(a.sync.playhead.Event(), projected)
+	if grouped && !a.sourceInExplicitGroup(it) {
+		target, err = addDuration(player.Position(), delta)
+		if err == nil && it.replay != nil {
+			target, err = addDuration(target, it.replay.StartBufferTime)
+		}
+	}
 	if err != nil {
 		return "", fmt.Errorf("source %d: offset %+.1fs puts the target %w; this player has no history that far back",
 			index+1, projected.Seconds(), err)
 	}
 
-	// The offset is only stored once the player accepted the seek's target, so
-	// a refused command leaves the timeline where it was.
+	position, err := a.playerPositionFor(it, target)
+	if err != nil {
+		return "", fmt.Errorf("source %d: %w", index+1, err)
+	}
+	for _, other := range []core.TrackID{it.video, it.audio} {
+		if other == "" || other == track {
+			continue
+		}
+		current, _ := a.sync.timeline.Shift(other)
+		if _, err := offsetAfter(current.Offset, delta); err != nil {
+			return "", fmt.Errorf("source %d: %w", index+1, err)
+		}
+	}
+	if !grouped {
+		if _, err := a.syncMembers(); err != nil {
+			return "", fmt.Errorf("sync group: %w", err)
+		}
+	}
+	// Validate every track and the player's target before storing the shifts.
 	shift, err := a.sync.timeline.AdjustShift(track, delta)
 	if err != nil {
 		return "", err
@@ -698,13 +714,8 @@ func (a *appState) nudge(index int, delta time.Duration) (string, error) {
 			return "", err
 		}
 	}
-	a.saveSession()
-	// The target is a content position. A recording player counts from its own
-	// first frame, so it must be asked for the file's position; a live player is
-	// asked for its own clock, which is the only mapping anyone has for it.
-	position, err := a.playerPositionFor(it, target)
-	if err != nil {
-		return "", fmt.Errorf("source %d: %w", index+1, err)
+	if a.alignRow.Reference == it.source.ID || a.alignRow.Target == it.source.ID {
+		a.invalidateAlignmentRow()
 	}
 	// Both tracks of one player moved together, so they share one origin, and
 	// that origin belongs to the buffer this player is reading: the offset places
@@ -716,11 +727,12 @@ func (a *appState) nudge(index int, delta time.Duration) (string, error) {
 		a.sync.place(other, dvr.BasisManual, instance, epoch)
 	}
 
-	outcome := seekAndMeasure(it.player, position)
+	outcome := seekAndMeasure(player, position)
 	// The source now has a known offset, so the conservative mute can lift.
 	a.apply()
 	a.lastSeek = outcome
 	a.lastSeekSource = it.source.ID
+	a.saveSession()
 	return fmt.Sprintf("source %d offset=%+.3fs requested=%s actual=%s residual=%s window=%s at %s",
 		index+1, shift.Offset.Seconds(), outcome.Requested.Round(time.Millisecond),
 		outcome.Actual.Round(time.Millisecond), outcome.Residual.Round(time.Millisecond),

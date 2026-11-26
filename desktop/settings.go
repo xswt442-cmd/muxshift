@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -33,7 +34,7 @@ type settings struct {
 	// MuteUnaligned keeps the sound of a source whose place on the shared
 	// timeline is unknown off until a person allows it. It is off by default so
 	// a freshly added source can be heard; turning it on is a deliberate
-	// protection for spoiler-sensitive setups (questions-v4 P0-1).
+	// protection for spoiler-sensitive setups.
 	MuteUnaligned bool `json:"muteUnaligned"`
 
 	// MasterVolume multiplies every source's scene level at the player.
@@ -119,11 +120,18 @@ type dvrDraftInput struct {
 }
 
 func (f dvrField) format(value int64) string {
-	return strconv.FormatFloat(float64(value)/float64(f.scale), 'f', -1, 64)
+	number := float64(value) / float64(f.scale)
+	if number > 0 && number < .01 {
+		return strconv.FormatFloat(number, 'g', 8, 64)
+	}
+	return strconv.FormatFloat(number, 'f', -1, 64)
 }
 
 func (f dvrField) parse(text string) (int64, bool) {
 	text = strings.TrimSpace(text)
+	if strings.ContainsAny(text, "_xX") || strings.HasPrefix(text, "-") {
+		return 0, false
+	}
 	if f.scale == 1 {
 		n, err := strconv.ParseInt(text, 10, 64)
 		return n, err == nil && n >= f.min && n <= f.max
@@ -408,13 +416,13 @@ func validateSettings(s settings) error {
 	if s.FontFamily != "" && !validFontChoice(s.FontFamily) {
 		return fmt.Errorf("fontFamily %q is not a family the Appearance page offers", s.FontFamily)
 	}
-	if s.DefaultVolume < 0 || s.DefaultVolume > 1 {
+	if math.IsNaN(s.DefaultVolume) || s.DefaultVolume < 0 || s.DefaultVolume > 1 {
 		return fmt.Errorf("defaultVolume %.3f is not a level between 0 and 1", s.DefaultVolume)
 	}
-	if s.NudgeStep < 0.02 || s.NudgeStep > 1 {
+	if math.IsNaN(s.NudgeStep) || s.NudgeStep < 0.02 || s.NudgeStep > 1 {
 		return fmt.Errorf("nudgeStep %.3fs is not between 0.02s and 1s", s.NudgeStep)
 	}
-	if s.MasterVolume < 0 || s.MasterVolume > 1 {
+	if math.IsNaN(s.MasterVolume) || s.MasterVolume < 0 || s.MasterVolume > 1 {
 		return fmt.Errorf("masterVolume %.3f is not a level between 0 and 1", s.MasterVolume)
 	}
 	if err := validateWorkspaceMemory(s.Workspace); err != nil {
@@ -698,7 +706,7 @@ func (a *appState) settingsPage(c *ui.Context) {
 					dirty = dirty || input.text != input.base
 				}
 				ui.Row(c).Gap(spaceSm).Padding(0, spaceSm).Children(func() {
-					a.primaryButton(c, "settings-apply", a.tr("Apply", "应用"), 100, dirty, func() {
+					a.primaryButton(c, "settings-apply", a.tr("Apply", "应用"), 100, dirty || a.settingsSaveDirty, func() {
 						a.applySettingsCommand()
 					})
 					a.secondaryButton(c, "settings-cancel", a.tr("Cancel", "取消"), 100, dirty, func() {
@@ -721,6 +729,8 @@ func (a *appState) settingsPage(c *ui.Context) {
 // absolute path there is noise (the About page lists it for diagnosis).
 func (a *appState) settingsBoundary() string {
 	switch {
+	case !a.settingsTrusted:
+		return a.tr("the original settings file is protected", "原设置文件受保护")
 	case a.settingsPath == "":
 		return a.tr("this start will not save", "本次启动不会保存")
 	case a.settingsSaved.Load():
@@ -1087,13 +1097,28 @@ func (a *appState) applySettingsCommand() {
 		a.settingsErr = err.Error()
 		return
 	}
+	a.finishSettingsSave(next, a.tr("applied and saved", "已应用并保存"))
+	log.Printf("settings: applied %s", settingsSummary(next))
+}
+
+func (a *appState) finishSettingsSave(next settings, savedNote string) {
+	defer a.invalidate()
+	a.settingsErr, a.settingsNote = "", ""
+	a.settingsSaveDirty = false
+	if !a.settingsTrusted {
+		a.settingsSaved.Store(false)
+		a.settingsNote = a.tr("Applied for this run. The original settings file was left untouched.",
+			"已在本次运行中应用，原设置文件未改动。")
+		return
+	}
 	if err := a.saveSettingsSerialized(next, a.saveTicket()); err != nil {
-		a.settingsErr = fmt.Sprintf("applied, but saving failed: %v", err)
+		a.settingsSaved.Store(false)
+		a.settingsSaveDirty = true
+		a.settingsErr = fmt.Sprintf(a.tr("Applied, but saving failed: %v", "已应用，但保存失败：%v"), safeOpenError(err))
 		return
 	}
 	a.settingsSaved.Store(true)
-	a.settingsNote = a.tr("applied and saved", "已应用并保存")
-	log.Printf("settings: applied %s", settingsSummary(next))
+	a.settingsNote = savedNote
 }
 
 // appearanceFields groups the appearance controls so the page can detect a
@@ -1152,16 +1177,7 @@ func (a *appState) applyAppearanceNow() {
 	a.settingsDraft = draft
 	a.dvrInputs = dvrInputs
 	a.draftCleared = cleared
-	a.settingsErr = ""
-	a.settingsNote = ""
-	if err := a.saveSettingsSerialized(next, a.saveTicket()); err != nil {
-		a.settingsSaved.Store(false)
-		a.settingsErr = fmt.Sprintf("applied, but saving failed: %v", err)
-		return
-	}
-	a.settingsSaved.Store(true)
-	a.settingsNote = a.tr("appearance applied and saved immediately", "外观已立即应用并保存")
-	a.invalidate()
+	a.finishSettingsSave(next, a.tr("appearance applied and saved immediately", "外观已立即应用并保存"))
 }
 
 func (a *appState) resetAppearanceNow() {
@@ -1178,16 +1194,7 @@ func (a *appState) resetAppearanceNow() {
 	a.settingsDraft = draft
 	a.dvrInputs = dvrInputs
 	a.draftCleared = cleared
-	a.settingsErr = ""
-	a.settingsNote = ""
-	if err := a.saveSettingsSerialized(next, a.saveTicket()); err != nil {
-		a.settingsSaved.Store(false)
-		a.settingsErr = fmt.Sprintf("applied, but saving failed: %v", err)
-		return
-	}
-	a.settingsSaved.Store(true)
-	a.settingsNote = a.tr("appearance defaults applied and saved immediately", "外观默认值已立即应用并保存")
-	a.invalidate()
+	a.finishSettingsSave(next, a.tr("appearance defaults applied and saved immediately", "外观默认值已立即应用并保存"))
 }
 
 // eventCount is how many events the session has, for the Diagnostics section.

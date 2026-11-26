@@ -3376,6 +3376,11 @@ func TestAStopWaitsForAStepThatIsUsingItsPlayer(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the stop did not return after the step finished")
 	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the canceled settle did not finish")
+	}
 	if !player.closed {
 		t.Fatal("the stopped transaction's player was left open")
 	}

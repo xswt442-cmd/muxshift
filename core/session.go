@@ -3,6 +3,7 @@ package core
 import (
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 )
 
@@ -301,7 +302,7 @@ func (s *Session) AddSyncGroup(reference TrackID, tracks ...TrackID) (SyncGroup,
 	}
 	s.groups = append(s.groups, group)
 	s.record(EventSyncGroupAdded, string(group.ID))
-	return *group, nil
+	return copySyncGroup(group), nil
 }
 
 // UpdateSyncGroup replaces the reference and members while retaining the group ID.
@@ -319,7 +320,13 @@ func (s *Session) UpdateSyncGroup(id SyncGroupID, reference TrackID, tracks ...T
 	group.Reference = reference
 	group.Tracks = append([]TrackID(nil), tracks...)
 	s.record(EventSyncGroupUpdated, string(id))
-	return SyncGroup{ID: id, Reference: reference, Tracks: append([]TrackID(nil), tracks...)}, nil
+	return copySyncGroup(group), nil
+}
+
+func copySyncGroup(group *SyncGroup) SyncGroup {
+	result := *group
+	result.Tracks = slices.Clone(group.Tracks)
+	return result
 }
 
 func (s *Session) validateSyncGroup(current SyncGroupID, reference TrackID, tracks []TrackID) error {
@@ -364,7 +371,7 @@ func (s *Session) AddScene(name string) (Scene, error) {
 		return Scene{}, err
 	}
 	s.sceneN++
-	scene := &Scene{ID: SceneID(fmt.Sprintf("scene-%d", s.sceneN)), Name: strings.TrimSpace(name)}
+	scene := &Scene{ID: SceneID(fmt.Sprintf("scene-%d", s.sceneN)), Name: normalizeName(name)}
 	s.scenes = append(s.scenes, scene)
 	s.record(EventSceneAdded, string(scene.ID))
 	return *scene, nil
@@ -548,7 +555,13 @@ func (s *Session) Source(id SourceID) (Source, error) {
 	if !ok {
 		return Source{}, fmt.Errorf("source %s: %w", id, ErrNotFound)
 	}
-	return *src, nil
+	return copySource(src), nil
+}
+
+func copySource(source *Source) Source {
+	result := *source
+	result.Tracks = slices.Clone(source.Tracks)
+	return result
 }
 
 // Track returns one track.
@@ -573,8 +586,7 @@ func (s *Session) Scene(id SceneID) (Scene, error) {
 func (s *Session) Sources() []Source {
 	out := make([]Source, len(s.sources))
 	for i, src := range s.sources {
-		out[i] = *src
-		out[i].Tracks = append([]TrackID(nil), src.Tracks...)
+		out[i] = copySource(src)
 	}
 	return out
 }
@@ -592,8 +604,7 @@ func (s *Session) Tracks() []Track {
 func (s *Session) SyncGroups() []SyncGroup {
 	out := make([]SyncGroup, len(s.groups))
 	for i, group := range s.groups {
-		out[i] = *group
-		out[i].Tracks = append([]TrackID(nil), group.Tracks...)
+		out[i] = copySyncGroup(group)
 	}
 	return out
 }

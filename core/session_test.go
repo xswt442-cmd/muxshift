@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -96,6 +97,111 @@ func TestCommentaryScene(t *testing.T) {
 	}
 	if groups := s.SyncGroups(); len(groups) != 1 || len(groups[0].Tracks) != 3 {
 		t.Fatalf("sync groups after switch = %+v", groups)
+	}
+}
+
+func TestAddSceneNormalizesLongName(t *testing.T) {
+	s := NewSession("names")
+	want := strings.Repeat("场", 80)
+	scene, err := s.AddScene("  " + want + "舞台  ")
+	if err != nil || scene.Name != want {
+		t.Fatalf("scene name = %q, err = %v", scene.Name, err)
+	}
+}
+
+func TestUpdateSyncGroup(t *testing.T) {
+	s := NewSession("update group")
+	_, video, audio := addCamera(t, s)
+	other, err := s.AddTrack(video.Source, MediaSubtitle, "captions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	group, err := s.AddSyncGroup(video.ID, video.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddSyncGroup(other.ID, other.ID); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := s.UpdateSyncGroup(group.ID, audio.ID, video.ID, audio.ID)
+	if err != nil || updated.ID != group.ID || updated.Reference != audio.ID || len(updated.Tracks) != 2 {
+		t.Fatalf("update = %+v, err = %v", updated, err)
+	}
+	events := s.Events()
+	if last := events[len(events)-1]; last.Kind != EventSyncGroupUpdated || last.Object != string(group.ID) {
+		t.Fatalf("last event = %+v", last)
+	}
+	for _, trial := range []struct {
+		id     SyncGroupID
+		ref    TrackID
+		tracks []TrackID
+		want   error
+	}{
+		{"missing", audio.ID, []TrackID{audio.ID}, ErrNotFound},
+		{group.ID, other.ID, []TrackID{other.ID}, ErrSyncConflict},
+		{group.ID, audio.ID, nil, ErrInvalid},
+	} {
+		if _, err := s.UpdateSyncGroup(trial.id, trial.ref, trial.tracks...); !errors.Is(err, trial.want) {
+			t.Errorf("update error = %v, want %v", err, trial.want)
+		}
+	}
+	if !reflect.DeepEqual(s.SyncGroups()[0], updated) || !reflect.DeepEqual(s.Events(), events) {
+		t.Fatal("a refused update changed the group or its events")
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	events = s.Events()
+	if _, err := s.UpdateSyncGroup(group.ID, video.ID, video.ID); !errors.Is(err, ErrClosed) {
+		t.Fatalf("update after close = %v", err)
+	}
+	if !reflect.DeepEqual(s.SyncGroups()[0], updated) || !reflect.DeepEqual(s.Events(), events) {
+		t.Fatal("an update after close changed the group or its events")
+	}
+}
+
+func TestSetOutputScene(t *testing.T) {
+	s := NewSession("switch output")
+	first, err := s.AddScene("first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.AddScene("second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := s.AddOutput(OutputDesktopWindow, first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := s.SetOutputScene(output.ID, second.ID)
+	if err != nil || updated.ID != output.ID || updated.Scene != second.ID {
+		t.Fatalf("set scene = %+v, err = %v", updated, err)
+	}
+	events := s.Events()
+	if last := events[len(events)-1]; last.Kind != EventOutputSceneSet || last.Object != string(output.ID) {
+		t.Fatalf("last event = %+v", last)
+	}
+	for _, trial := range []struct {
+		output OutputID
+		scene  SceneID
+	}{{"missing", second.ID}, {output.ID, "missing"}} {
+		if _, err := s.SetOutputScene(trial.output, trial.scene); !errors.Is(err, ErrNotFound) {
+			t.Errorf("set invalid output scene = %v", err)
+		}
+	}
+	if s.Outputs()[0] != updated || !reflect.DeepEqual(s.Events(), events) {
+		t.Fatal("a refused change modified the output or its events")
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	events = s.Events()
+	if _, err := s.SetOutputScene(output.ID, first.ID); !errors.Is(err, ErrClosed) {
+		t.Fatalf("set output scene after close = %v", err)
+	}
+	if s.Outputs()[0] != updated || !reflect.DeepEqual(s.Events(), events) {
+		t.Fatal("a change after close modified the output or its events")
 	}
 }
 
@@ -571,11 +677,24 @@ func TestSnapshotsAreCopies(t *testing.T) {
 	}
 
 	sources := s.Sources()
-	sources[0].Tracks = append(sources[0].Tracks, "track-999")
+	sources[0].Tracks[0] = "track-999"
 	if got, err := s.Source(camera.ID); err != nil {
 		t.Fatalf("read source: %v", err)
-	} else if len(got.Tracks) != 2 {
+	} else if got.Tracks[0] != cameraVideo.ID {
 		t.Fatalf("session source changed through a snapshot: %+v", got)
+	}
+	source, _ := s.Source(camera.ID)
+	source.Tracks[0] = "track-999"
+	if got, _ := s.Source(camera.ID); got.Tracks[0] != cameraVideo.ID {
+		t.Errorf("Source returned a shared tracks slice: %+v", got)
+	}
+	group, err := s.AddSyncGroup(cameraVideo.ID, cameraVideo.ID, cameraAudio.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	group.Tracks[0] = "track-999"
+	if got := s.SyncGroups()[0]; got.Tracks[0] != cameraVideo.ID {
+		t.Errorf("AddSyncGroup returned a shared tracks slice: %+v", got)
 	}
 }
 

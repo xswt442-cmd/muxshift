@@ -640,6 +640,9 @@ type appState struct {
 	// the player is really closed.
 	pendingMu sync.Mutex
 	pending   []pendingClose
+	retiring  map[*mediaRetirement]struct{}
+	closeDone chan struct{}
+	closeWait sync.WaitGroup
 }
 
 // newAppState builds a session with one scene per given source set, opens a
@@ -708,7 +711,7 @@ func newAppStateWithSettings(uris []string, loaded settings) (*appState, error) 
 // under the picture, every panel of it visible). Both the command-line start and
 // the saved-session start grow from here, so a restored window looks the same.
 func newAppShell(session *core.Session, scene core.SceneID, output core.OutputID, loaded settings) *appState {
-	app := &appState{session: session, scene: scene, output: output, frames: make(chan struct{}, 1), sync: newSyncState(), audible: make(map[core.TrackID]bool), settings: cloneSettings(loaded), settingsDraft: cloneSettings(loaded), settingsSection: "General"}
+	app := &appState{session: session, scene: scene, output: output, frames: make(chan struct{}, 1), closeDone: make(chan struct{}), sync: newSyncState(), audible: make(map[core.TrackID]bool), settings: cloneSettings(loaded), settingsDraft: cloneSettings(loaded), settingsSection: "General"}
 	app.navWidth = 236
 	app.navUp = true
 	app.editingShell = true
@@ -1194,7 +1197,7 @@ func (a *appState) installSavedSource(it *item, plan importPlan, inspectErr erro
 			candidate.player = player
 			if oldSourceID != "" {
 				a.preserveSourceBeforeReplacement(it)
-				a.close(it)
+				a.closeOnMain(it)
 				if removeErr := a.session.RemoveSource(oldSourceID); removeErr != nil {
 					candidate.player.Close()
 					candidate.player = nil
@@ -1537,7 +1540,7 @@ func (a *appState) abandonImport(it *item, generation int, cause error, keepSour
 		}
 		if keepSource || it.restored {
 			shown := it.shown
-			a.close(it)
+			a.closeOnMain(it)
 			it.shown = shown
 			err := safeOpenError(cause)
 			it.openErr = err
@@ -1808,24 +1811,19 @@ func (a *appState) reconcileScenePlayers(sceneID core.SceneID, generation uint64
 		needed := a.sceneConsumesItem(sceneID, it)
 		if !needed {
 			if it.player != nil && !it.lifecyclePending {
-				it.resumePaused = it.player.Ready() && !it.player.Buffering() && !it.player.Playing()
+				output := it.outputPlayer()
+				it.resumePaused = output.Ready() && !output.Buffering() && !output.Playing()
 				it.resumePositionOK = it.replay == nil && !isNetworkAddress(it.uri)
 				if it.resumePositionOK {
-					it.resumePosition = it.player.Position()
+					it.resumePosition = output.Position()
 				}
 				it.lifecyclePending = true
-				it.player.SetMuted(true)
-				it.player.Pause()
-				go func(source *item) {
-					a.close(source)
-					a.mainDo(func() {
-						source.lifecyclePending = false
-						currentScene, currentGeneration := a.scene, a.stageGeneration
-						if a.sceneConsumesItem(currentScene, source) {
-							a.reconcileScenePlayers(currentScene, currentGeneration)
-						}
-					})
-				}(it)
+				a.retireItemOnMain(it, func() {
+					it.lifecyclePending = false
+					if a.sceneConsumesItem(a.scene, it) {
+						a.reconcileScenePlayers(a.scene, a.stageGeneration)
+					}
+				})
 			}
 			continue
 		}
@@ -1915,11 +1913,16 @@ func (a *appState) showVideo(index int) error {
 	return nil
 }
 
+var errPlayerClosing = errors.New("the previous player is still closing")
+
 // ensurePlayer opens the player of a source that has none yet. Sources added
 // while the window runs stay closed until something needs them: the player of
 // a source that never draws does not become ready, so opening it on import only
 // produces a card that says "opening" forever.
 func (a *appState) ensurePlayer(it *item) error {
+	if it.lifecyclePending {
+		return errPlayerClosing
+	}
 	if it.player != nil {
 		return it.openErr
 	}
@@ -2094,7 +2097,7 @@ func (a *appState) remove(index int) error {
 		delete(members, it.persistentID)
 	}
 	if !it.lifecyclePending {
-		a.close(it)
+		a.closeOnMain(it)
 	}
 	a.items = append(a.items[:index], a.items[index+1:]...)
 	a.apply()
@@ -2109,101 +2112,153 @@ func (a *appState) at(index int) (*item, error) {
 	return a.items[index], nil
 }
 
-// close stops drawing a player and then closes it.
-//
-// The order matters: a player closed while a frame still draws it crashes the
-// process inside Media Foundation, so the view drops it first and the close
-// waits for frames the window really built, not for a fixed sleep. The drop and
-// the close both run on the drawing thread, and the player pointer is cleared
-// there too, so the view cannot read a half-released player.
-//
-// A player that is the last live one in the window is not closed here. In this
-// MyGo build, once the last video player of a window is closed, a player opened
-// afterwards reports its duration but never gets a picture or moves its
-// position: the window keeps a Media Foundation resource it does not rebuild.
-// The smallest reproduction (testplace/poc/onevid -reopen) fails the same way,
-// and opening the new player before closing the old one works. So the last one
-// is paused and kept until another player is ready, and the pending close runs
-// then.
+// close dispatches the scenario entry point to the drawing thread.
 func (a *appState) close(it *item) {
-	if it == nil {
-		return
-	}
-	// A restored placeholder has no window-owned objects to touch. Keeping this
-	// path local also lets removal of an unavailable source work in a headless
-	// session, where MyGo has no drawing loop to receive RunOnMain.
-	if it.player == nil && it.previous == nil && it.handover == nil && it.swap == nil && it.replayLease == nil {
-		it.shown = false
-		it.generation++
-		return
-	}
-	var kept *handover
-	var previous *ui.VideoPlayer
-	var swap *replaySwap
-	var lease *dvr.Lease
-	mygoRunOnMain(func() {
-		kept = it.handover
-		previous = rawPlayer(it.previous)
-		swap = it.swap
-		lease = it.replayLease
-		it.handover = nil
-		it.previous = nil
-		it.swap = nil
-		it.replayLease = nil
-		it.replay = nil
-	})
-	if swap != nil {
-		// The replacement never became the item's player, so this close is the
-		// only owner of it and of the lease on the file it was handed. A
-		// rollback that is still waiting finds the work done and reports its
-		// own reason without touching the lease counters again.
-		a.finishSwap(swap)
-	}
-	switch {
-	case kept != nil:
-		// The handover that was waiting owns the player it kept drawn; a close
-		// here takes that player over instead of closing it twice later.
-		a.releasePlayer(kept.take())
-	case previous != nil:
-		a.releasePlayer(previous)
-	}
-	if it.player == nil {
-		if lease != nil {
-			a.releaseLease(lease, "of the recording on close")
-		}
-		return
-	}
-	var player *ui.VideoPlayer
-	mygoRunOnMain(func() {
-		it.shown = false
-		it.generation++
-		player = rawPlayer(it.player)
-		if player != nil {
-			player.Pause()
-		}
-		it.player = nil
-	})
-	a.waitFrames(3)
-	if a.livePlayers() > 0 {
-		mygoRunOnMain(func() { player.Close() })
-		if lease != nil {
-			a.releaseLease(lease, "of the recording on close")
-		}
-		return
-	}
-	a.pendingMu.Lock()
-	a.pending = append(a.pending, pendingClose{player: player, lease: lease})
-	a.pendingMu.Unlock()
-	a.closePendingWhenReady()
+	a.mainDo(func() { a.closeOnMain(it) })
 }
 
-// pendingClose is a player that was paused because it was the last live one,
-// together with the lease on the recording it was reading. The lease is given
-// back after the player is really closed, not when the item is removed: the file
-// has to stay readable for as long as the player holds it open.
 type pendingClose struct {
 	player *ui.VideoPlayer
 	lease  *dvr.Lease
+}
+
+type mediaRetirement struct {
+	handles []pendingClose
+	keep    *ui.VideoPlayer
+	after   func()
+	frame   int
+	drawn   chan struct{}
+}
+
+func (a *appState) closeOnMain(it *item) {
+	a.retireItemOnMain(it, nil)
+}
+
+// retireItemOnMain invalidates the generation and takes every handle in one
+// drawing-thread step. An obsolete handover can no longer reinstall a player.
+func (a *appState) retireItemOnMain(it *item, after func()) {
+	if it == nil {
+		return
+	}
+	current := rawPlayer(it.player)
+	previous := rawPlayer(it.previous)
+	keep := rawPlayer(it.outputPlayer())
+	if it.handover != nil {
+		previous = it.handover.take()
+	}
+	lease, swap := it.replayLease, it.swap
+	it.player, it.previous, it.handover, it.swap = nil, nil, nil, nil
+	it.replay, it.replayLease, it.replayAnchor, it.replayAnchorErr = nil, nil, nil, nil
+	it.shown = false
+	it.generation++
+
+	var handles []pendingClose
+	if swap != nil {
+		swap.finished.Do(func() {
+			handles = append(handles, pendingClose{player: swap.player, lease: swap.lease})
+		})
+	}
+	if previous != nil && previous != current {
+		handles = append(handles, pendingClose{player: previous})
+	}
+	if current != nil || lease != nil {
+		handles = append(handles, pendingClose{player: current, lease: lease})
+	}
+	a.retireMediaOnMain(handles, keep, after)
+}
+
+func (a *appState) retireMediaOnMain(handles []pendingClose, keep *ui.VideoPlayer, after func()) {
+	if len(handles) == 0 {
+		if after != nil {
+			after()
+		}
+		return
+	}
+	for _, handle := range handles {
+		if handle.player != nil {
+			handle.player.SetMuted(true)
+			handle.player.Pause()
+		}
+	}
+	select {
+	case <-a.closeDone:
+		a.closeMediaOnMain(handles)
+		return
+	default:
+	}
+	if a.closeDone == nil {
+		a.closeDone = make(chan struct{})
+	}
+	if a.retiring == nil {
+		a.retiring = make(map[*mediaRetirement]struct{})
+	}
+	job := &mediaRetirement{
+		handles: handles, keep: keep, after: after, frame: a.frameCount + 3, drawn: make(chan struct{}),
+	}
+	a.retiring[job] = struct{}{}
+	stop := a.closeDone
+	window := a.window
+	a.closeWait.Go(func() {
+		timer := time.NewTimer(2 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-stop:
+			return
+		case <-job.drawn:
+		case <-timer.C:
+		}
+		// The frame waiter holds no player or lease. Shutdown can drain the
+		// queue even if the completion callback has not reached the UI yet.
+		if window != nil {
+			window.Update(func() { a.finishRetirementOnMain(job) })
+		}
+	})
+	a.invalidate()
+}
+
+func (a *appState) readyOutputPlayer() bool {
+	for _, it := range a.items {
+		if player := it.outputPlayer(); player != nil && player.Ready() && !player.Buffering() {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *appState) finishRetirementOnMain(job *mediaRetirement) {
+	if _, owned := a.retiring[job]; !owned {
+		return
+	}
+	delete(a.retiring, job)
+	keep := job.keep != nil && !a.readyOutputPlayer()
+	for _, handle := range job.handles {
+		if keep && handle.player == job.keep {
+			// MyGo needs a paused player until another player produces a
+			// picture. Keep one, along with any lease on its recording.
+			a.pendingMu.Lock()
+			alreadyKept := len(a.pending) != 0
+			if !alreadyKept {
+				a.pending = append(a.pending, handle)
+			}
+			a.pendingMu.Unlock()
+			if !alreadyKept {
+				continue
+			}
+		}
+		a.closeMediaOnMain([]pendingClose{handle})
+	}
+	if job.after != nil {
+		job.after()
+	}
+}
+
+func (a *appState) closeMediaOnMain(handles []pendingClose) {
+	for _, handle := range handles {
+		if handle.player != nil {
+			handle.player.Close()
+		}
+		a.releaseLease(handle.lease, "of a closed player")
+	}
 }
 
 // releaseLease gives a recording lease back and counts it done.
@@ -2339,46 +2394,17 @@ func (a *appState) rememberSource(it *item) {
 	}()
 }
 
-// closePendingWhenReady releases the players kept because they were the last
-// live one, as soon as another player actually has a picture.
+// closePendingWhenReady closes the retained player only after another output
+// can supply an actual picture. It runs on the drawing thread.
 func (a *appState) closePendingWhenReady() {
-	a.pendingMu.Lock()
-	waiting := len(a.pending)
-	a.pendingMu.Unlock()
-	if waiting == 0 || a.livePlayers() == 0 {
+	if len(a.pending) == 0 || !a.readyOutputPlayer() {
 		return
 	}
-	go func() {
-		for i := 0; i < 40; i++ {
-			ready := false
-			mygoRunOnMain(func() {
-				for _, it := range a.items {
-					if it.player != nil && it.player.Ready() {
-						ready = true
-					}
-				}
-			})
-			if ready {
-				break
-			}
-			time.Sleep(250 * time.Millisecond)
-		}
-		a.pendingMu.Lock()
-		wait := a.pending
-		a.pending = nil
-		a.pendingMu.Unlock()
-		if len(wait) == 0 {
-			return
-		}
-		mygoRunOnMain(func() {
-			for _, close := range wait {
-				close.player.Close()
-			}
-		})
-		for _, close := range wait {
-			a.releaseLease(close.lease, "of a player that was closed late")
-		}
-	}()
+	a.pendingMu.Lock()
+	wait := a.pending
+	a.pending = nil
+	a.pendingMu.Unlock()
+	a.closeMediaOnMain(wait)
 }
 
 // waitFrames blocks until the window built n frames after this call, or until
@@ -2387,6 +2413,8 @@ func (a *appState) waitFrames(n int) {
 	for i := 0; i < n; i++ {
 		select {
 		case <-a.frames:
+		case <-a.closeDone:
+			return
 		case <-time.After(2 * time.Second):
 			return
 		}
@@ -2398,6 +2426,14 @@ func (a *appState) waitFrames(n int) {
 // it lets a scenario prove the window kept drawing while a probe ran.
 func (a *appState) signalFrame() {
 	a.frameCount++
+	a.closePendingWhenReady()
+	for job := range a.retiring {
+		if job.frame == a.frameCount {
+			close(job.drawn)
+		} else if job.frame > a.frameCount {
+			a.invalidate()
+		}
+	}
 	select {
 	case a.frames <- struct{}{}:
 	default:
@@ -2417,10 +2453,14 @@ func (a *appState) framesBuilt() int {
 // same way in pieces — session first, say — would delete a file a lease was
 // still guarding. Both a scenario and the window call it, so it runs once.
 func (a *appState) release() {
-	a.releaseOnce.Do(a.shutdown)
+	a.mainDo(func() { a.releaseOnce.Do(a.shutdown) })
 }
 
 func (a *appState) shutdown() {
+	if a.closeDone == nil {
+		a.closeDone = make(chan struct{})
+	}
+	close(a.closeDone)
 	a.stopProbe("the session closed")
 	// A comparison still decoding belongs to the session that is closing: cancel
 	// it first, so its ffmpeg ends here instead of running against a window that
@@ -2431,22 +2471,18 @@ func (a *appState) shutdown() {
 	a.stopRecording()
 	log.Printf("shutdown: recording stopped; closing %d player(s)", len(a.items))
 	for _, it := range a.items {
-		a.close(it)
+		a.closeOnMain(it)
+	}
+	a.closeWait.Wait()
+	for job := range a.retiring {
+		delete(a.retiring, job)
+		a.closeMediaOnMain(job.handles)
 	}
 	a.pendingMu.Lock()
 	wait := a.pending
 	a.pending = nil
 	a.pendingMu.Unlock()
-	if len(wait) > 0 {
-		mygoRunOnMain(func() {
-			for _, close := range wait {
-				close.player.Close()
-			}
-		})
-		for _, close := range wait {
-			a.releaseLease(close.lease, "left open at shutdown")
-		}
-	}
+	a.closeMediaOnMain(wait)
 	if pending := a.releaseLeases(); len(pending) > 0 {
 		log.Printf("shutdown: the system still holds %s", strings.Join(pending, ", "))
 	}

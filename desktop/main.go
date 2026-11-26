@@ -75,16 +75,21 @@ func (a *appState) openReplacement(it *item, uri string, retainState bool) {
 	if !retainState {
 		it.openErr = nil
 	}
+	// During a burst of reloads the original player is still drawn. Carry it
+	// forward and retire the uncommitted candidate, so a rollback stays usable.
+	if older := it.handover; older != nil {
+		if original := older.take(); original != nil {
+			if candidate := rawPlayer(previous); candidate != nil {
+				a.retireMediaOnMain([]pendingClose{{player: candidate}}, nil, nil)
+			}
+			previous = original
+		}
+	}
 	var kept *handover
+	it.previous = previous
 	if previous != nil {
 		kept = &handover{previous: rawPlayer(previous), uri: uri, retainState: retainState}
-		it.previous = previous
 	}
-	// The handover that was still waiting for an older replacement owns the
-	// player it kept drawn; it is not drawn any more, so the new task releases
-	// it. Transferring the pointer here is what keeps a burst of reloads from
-	// releasing the same player twice.
-	older := it.handover
 	it.handover = kept
 	it.player = player
 	it.generation++
@@ -96,9 +101,7 @@ func (a *appState) openReplacement(it *item, uri string, retainState bool) {
 	wakeNetworkPlayer(uri, player, a.generationIs(it, generation))
 	a.closePendingWhenReady()
 	if kept != nil {
-		go a.handOver(it, generation, kept, older)
-	} else if older != nil {
-		a.releasePlayer(older.take())
+		go a.handOver(it, generation, kept)
 	}
 }
 
@@ -192,23 +195,19 @@ var (
 // Every step checks the item's generation. A newer reload, or a close, bumps it,
 // and this task then only releases the player it still owns: the view draws a
 // newer player, so the pointer it was waiting on is not drawn any more.
-func (a *appState) handOver(it *item, generation int, kept *handover, older *handover) {
-	if older != nil {
-		a.releasePlayer(older.take())
-	}
+func (a *appState) handOver(it *item, generation int, kept *handover) {
 	deadline := time.Now().Add(handoverWait)
 	for {
 		var current, ready bool
 		var playerErr error
 		mygoRunOnMain(func() {
-			current = it.generation == generation
-			if it.player != nil {
+			current = it.generation == generation && it.handover == kept && !a.closed
+			if current && it.player != nil {
 				ready = it.player.Ready() && !it.player.Buffering()
 				playerErr = it.player.Err()
 			}
 		})
 		if !current {
-			a.releasePlayer(kept.take())
 			return
 		}
 		if playerErr != nil {
@@ -217,7 +216,11 @@ func (a *appState) handOver(it *item, generation int, kept *handover, older *han
 		if ready {
 			var confirmed string
 			mygoRunOnMain(func() {
-				if it.generation == generation && it.handover == kept {
+				if it.generation == generation && it.handover == kept && !a.closed {
+					old := kept.take()
+					if old == nil {
+						return
+					}
 					previous := it.previous
 					it.previous = nil
 					it.handover = nil
@@ -237,12 +240,12 @@ func (a *appState) handOver(it *item, generation int, kept *handover, older *han
 							it.uri = kept.uri
 							a.saveSession()
 						}
-						a.apply()
 					}
+					a.retireMediaOnMain([]pendingClose{{player: old}}, nil, nil)
+					a.apply()
 					confirmed = shortURI(it.uri)
 				}
 			})
-			a.releasePlayer(kept.take())
 			if confirmed != "" {
 				log.Printf("handover: replaced the player of %s after %s", confirmed, "a picture")
 			}
@@ -251,38 +254,47 @@ func (a *appState) handOver(it *item, generation int, kept *handover, older *han
 		if !time.Now().Before(deadline) {
 			break
 		}
-		time.Sleep(250 * time.Millisecond)
+		select {
+		case <-a.closeDone:
+			return
+		case <-time.After(250 * time.Millisecond):
+		}
 	}
 	// The replacement never started: keep what was drawn and drop the new one.
-	var replacement *ui.VideoPlayer
-	keptPrevious := false
+	var restored string
 	mygoRunOnMain(func() {
-		if it.generation != generation {
-			return
-		}
-		replacement = rawPlayer(it.player)
-		it.player = kept.previous
-		kept.previous = nil
-		kept.released = true
-		it.previous = nil
-		it.handover = nil
-		it.generation++
-		if kept.retainState {
-			a.apply()
-			it.mediaReplaceErr = fmt.Errorf("replacement did not start; kept the previous player")
-			a.invalidate()
-		} else {
-			it.shown = true
-			it.openErr = fmt.Errorf("reopen did not start within %s; kept the previous player", handoverWait)
-		}
-		keptPrevious = true
+		restored = a.rollbackHandoverOnMain(it, generation, kept)
 	})
-	if !keptPrevious {
-		a.releasePlayer(kept.take())
-		return
+	if restored != "" {
+		log.Printf("handover: %s did not start within %s; kept the previous player and closed the new one", restored, handoverWait)
 	}
-	log.Printf("handover: %s did not start within %s; kept the previous player and closed the new one", shortURI(it.uri), handoverWait)
-	a.releasePlayer(replacement)
+}
+
+func (a *appState) rollbackHandoverOnMain(it *item, generation int, kept *handover) string {
+	if it.generation != generation || it.handover != kept || a.closed {
+		return ""
+	}
+	previous := kept.take()
+	if previous == nil {
+		return ""
+	}
+	replacement := rawPlayer(it.player)
+	it.player = previous
+	it.previous = nil
+	it.handover = nil
+	it.generation++
+	if replacement != nil {
+		a.retireMediaOnMain([]pendingClose{{player: replacement}}, nil, nil)
+	}
+	if kept.retainState {
+		a.apply()
+		it.mediaReplaceErr = fmt.Errorf("replacement did not start; kept the previous player")
+		a.invalidate()
+	} else {
+		it.shown = true
+		it.openErr = fmt.Errorf("reopen did not start within %s; kept the previous player", handoverWait)
+	}
+	return shortURI(it.uri)
 }
 
 // openPlayer opens a local file or a network address.
@@ -428,6 +440,9 @@ func clock(d time.Duration) string {
 // once the video was a direct child.
 func (a *appState) view(c *ui.Context) {
 	defer a.signalFrame()
+	if a.closed {
+		return
+	}
 	// P9: the canvas experiment draws the two probe players and nothing else.
 	// Keeping it above the workbench is the point — a picture that never
 	// arrives here cannot be excused by the layout around it.
@@ -1201,25 +1216,43 @@ func main() {
 			// the window has to build one that does.
 			window.Invalidate()
 		}
-		window.OnClose(func(*mygo.CloseEvent) {
-			// P18.1: one close, recorded. A window that closed twice would
-			// leave a reader wondering whether the second pass released
-			// anything twice; this line and the release below answer that
-			// from the log.
+		replayDraining := false
+		window.OnClose(func(event *mygo.CloseEvent) {
+			if replayDraining {
+				event.PreventDefault()
+				return
+			}
+			if !s.closed {
+				s.closed = true
+				s.advanceStageGeneration()
+				if s.importCancel != nil {
+					s.importCancel()
+					s.importCancel = nil
+				}
+				s.closeImportTicker()
+				s.handoff.stop()
+				if txn := s.seekInFlight(); txn != nil {
+					// Replay preparation can still need the UI thread to
+					// return a player it was opening. Keep that thread
+					// available until the transaction gives its files back.
+					event.PreventDefault()
+					replayDraining = true
+					go func() {
+						s.shutdownReplayTxn()
+						<-txn.done
+						window.Update(func() {
+							replayDraining = false
+							window.Close()
+						})
+					}()
+					return
+				}
+			}
+			if s.closes != 0 {
+				return
+			}
 			s.closes++
 			log.Printf("focus: the window closed (%d time(s) so far)", s.closes)
-			// A read that is still running must not land in a window that is
-			// gone: the landing writes the session and the players, and both
-			// belong to this window's drawing thread.
-			s.closed = true
-			if s.startupRestoreCancel != nil {
-				s.startupRestoreCancel()
-				s.startupRestoreCancel = nil
-			}
-			s.closeImportTicker()
-			// The listener holds nothing on disk, but a closed window must not
-			// leave an accepting socket behind.
-			s.handoff.stop()
 			// The window is still the window here, so this is the last moment
 			// its bounds can be read; a scripted run leaves the file alone.
 			if *scenario == "" {
@@ -1239,8 +1272,7 @@ func main() {
 				// closing from the timer's goroutine races a frame that is drawing.
 				mygoRunOnMain(func() {
 					capture(window, *shot)
-					s.release()
-					mygo.App.Quit()
+					window.Close()
 				})
 			})
 		}

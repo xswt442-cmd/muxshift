@@ -168,6 +168,9 @@ func (a *appState) runCommand(cmd command) commandResult {
 		if err != nil {
 			return finish(err, "")
 		}
+		if it.lifecyclePending {
+			return finish(errPlayerClosing, "")
+		}
 		if it.player == nil {
 			return finish(fmt.Errorf("%s has no player to reopen", a.name(it)), "")
 		}
@@ -313,6 +316,9 @@ func (a *appState) runCommand(cmd command) commandResult {
 		it, _, err := a.itemBySource(cmd.Source)
 		if err != nil {
 			return finish(err, "")
+		}
+		if it.lifecyclePending {
+			return finish(errPlayerClosing, "")
 		}
 		result.Generation = it.generation
 		if it.openErr == nil && it.player != nil {

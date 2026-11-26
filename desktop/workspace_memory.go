@@ -204,7 +204,10 @@ func (a *appState) workspaceFromWindow(window *mygo.Window, on bool) workspaceMe
 	if window == nil {
 		return a.settings.Workspace
 	}
-	b := window.Bounds()
+	b := a.savedForViewing.bounds
+	if a.viewing == viewWorkbench || !a.savedForViewing.saved {
+		b = window.Bounds()
+	}
 	page, ok := workspaceID(a.workspace)
 	if !ok {
 		page = ""
@@ -215,6 +218,12 @@ func (a *appState) workspaceFromWindow(window *mygo.Window, on bool) workspaceMe
 	} else if rail == paneClosed {
 		rail = paneOpen
 	}
+	dock := a.dock
+	if !a.dockUp {
+		dock = paneClosed
+	} else if dock == paneClosed {
+		dock = paneOpen
+	}
 	return workspaceMemory{
 		On:        on,
 		Page:      page,
@@ -224,7 +233,7 @@ func (a *appState) workspaceFromWindow(window *mygo.Window, on bool) workspaceMe
 		Height:    b.Height,
 		Rail:      paneModeName(rail),
 		Inspector: paneModeName(a.inspector),
-		Dock:      paneModeName(a.dock),
+		Dock:      paneModeName(dock),
 	}
 }
 
@@ -278,6 +287,7 @@ func (a *appState) restoreWorkspace(window *mygo.Window, displays []mygo.Display
 	}
 	if mode, ok := parsePaneMode(remembered.Dock); ok {
 		a.dock = mode
+		a.dockUp = mode != paneClosed
 	}
 	frame := clampWorkspace(mygo.Rectangle{
 		X: remembered.X, Y: remembered.Y, Width: remembered.Width, Height: remembered.Height,

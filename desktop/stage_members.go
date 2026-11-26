@@ -143,6 +143,7 @@ func (a *appState) unlinkStageMember(it *item) {
 		return
 	}
 	a.apply()
+	a.reconcileScenePlayers(scene.ID, a.stageGeneration)
 	a.saveSession()
 	a.invalidate()
 }

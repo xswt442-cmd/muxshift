@@ -16,7 +16,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/lobehub/lobe-mygo/pkg/layout"
 	"github.com/lobehub/lobe-mygo/pkg/lucide"
@@ -1652,9 +1651,7 @@ func (a *appState) pageMenuPanel(c *ui.Context, width float32) {
 		if ui.Button(c.Key("menu-quit"), a.tr("Quit MuxShift", "退出 MuxShift")).Height(a.controlHeight()).
 			Padding(0, spaceSm).TextColor(colorBad).Clicked() {
 			a.pageMenu = false
-			a.release()
-			a.closes++
-			mygo.App.Quit()
+			a.window.Update(a.window.Close)
 		}
 	})
 }

@@ -49,29 +49,16 @@ func (a *appState) linkStageMember(it *item) {
 			a.lastErr = safeOpenError(err)
 			return
 		}
-	} else if it.video == "" {
-		index := len(scene.Video)
-		for _, pending := range a.pendingBindings[scene.ID] {
-			if pending.video {
-				index = max(index, pending.videoIndex+1)
-			}
-		}
-		if binding := a.pendingBindings[scene.ID][sourceID]; !binding.video {
-			a.setPendingVideo(scene.ID, sourceID, index)
-		}
+	} else if bindings := a.pendingBindings[scene.ID]; !bindings[sourceID].video {
+		a.setPendingVideo(scene.ID, sourceID, expandedPendingIndex(len(scene.Video), bindings, pendingVideoSlot))
 	}
 	if it.audio != "" {
 		if _, err := a.session.SetSceneAudio(scene.ID, it.audio, it.volume, false); err != nil {
 			a.lastErr = safeOpenError(err)
 			return
 		}
-	} else {
-		index := len(scene.Audio)
-		for _, pending := range a.pendingBindings[scene.ID] {
-			if pending.audio != nil {
-				index = max(index, pending.audioIndex+1)
-			}
-		}
+	} else if bindings := a.pendingBindings[scene.ID]; bindings[sourceID].audio == nil {
+		index := expandedPendingIndex(len(scene.Audio), bindings, pendingAudioSlot)
 		a.setPendingAudio(scene.ID, sourceID, storedAudio{Source: sourceID, Volume: it.volume}, index)
 	}
 	a.materializeStageMembers(scene.ID)[sourceID] = true
@@ -92,19 +79,15 @@ func (a *appState) unlinkStageMember(it *item) {
 		a.lastErr = safeOpenError(err)
 		return
 	}
-	removedVideoIndex, removedAudioIndex := -1, -1
 	if slices.Contains(scene.Video, it.video) {
-		liveIndex := slices.Index(scene.Video, it.video)
-		removedVideoIndex = expandedPendingIndex(liveIndex, a.pendingBindings[scene.ID], func(b pendingSceneBinding) (int, bool) { return b.videoIndex, b.video })
-		video := slices.DeleteFunc(scene.Video, func(track core.TrackID) bool { return track == it.video })
+		video := slices.DeleteFunc(slices.Clone(scene.Video), func(track core.TrackID) bool { return track == it.video })
 		if _, err := a.session.SetSceneVideo(scene.ID, video...); err != nil {
 			a.lastErr = safeOpenError(err)
 			return
 		}
 	}
-	for audioIndex, level := range scene.Audio {
+	for _, level := range scene.Audio {
 		if level.Track == it.audio {
-			removedAudioIndex = expandedPendingIndex(audioIndex, a.pendingBindings[scene.ID], func(b pendingSceneBinding) (int, bool) { return b.audioIndex, b.audio != nil })
 			if _, err := a.session.RemoveSceneAudio(scene.ID, it.audio); err != nil {
 				a.lastErr = safeOpenError(err)
 				return
@@ -112,31 +95,15 @@ func (a *appState) unlinkStageMember(it *item) {
 			break
 		}
 	}
-	delete(a.materializeStageMembers(scene.ID), it.persistentID)
-	if bindings := a.pendingBindings[scene.ID]; bindings != nil {
-		removed := bindings[it.persistentID]
-		delete(bindings, it.persistentID)
-		if removed.video {
-			removedVideoIndex = removed.videoIndex
-		}
-		if removed.audio != nil {
-			removedAudioIndex = removed.audioIndex
-		}
-		compactPendingMemberIndexes(bindings, removedVideoIndex, removedAudioIndex)
-	}
+	sourceID := a.stageSourceID(it)
+	delete(a.materializeStageMembers(scene.ID), sourceID)
+	a.removePendingStageRoutes(scene, it, true, true)
 	a.layoutTaken = removeTrackID(a.layoutTaken, it.source.ID)
 	a.pendingLayoutOrder = removeString(a.pendingLayoutOrder, it.persistentID)
 	if edits := a.edits[scene.ID]; edits != nil {
 		edits.forget(it.source.ID)
 	}
-	for i := range a.pendingStageEdits {
-		edit := &a.pendingStageEdits[i]
-		if a.persistentSceneIDs[edit.Scene] == scene.ID {
-			edit.Boxes = slices.DeleteFunc(edit.Boxes, func(box storedBox) bool { return box.Source == it.persistentID })
-			edit.Order = removeString(edit.Order, it.persistentID)
-			edit.Locked = removeString(edit.Locked, it.persistentID)
-		}
-	}
+	a.forgetPendingSourceEdits(scene.ID, sourceID)
 	a.reconcileStageSelection()
 	if it.stageOnly && !a.sourceHasStageMember(it.persistentID) {
 		a.removeCatalogSource(it)
@@ -188,8 +155,11 @@ func (a *appState) removeCatalogSource(it *item) {
 	a.invalidate()
 }
 
-// compactPendingMemberIndexes keeps offline members' intended order dense after
-// one is removed. Their positions share an index space with live scene tracks.
+func pendingVideoSlot(b pendingSceneBinding) (int, bool) { return b.videoIndex, b.video }
+func pendingAudioSlot(b pendingSceneBinding) (int, bool) { return b.audioIndex, b.audio != nil }
+
+// expandedPendingIndex maps a live track index into the saved order, where
+// unavailable sources still occupy a slot.
 func expandedPendingIndex(liveIndex int, bindings map[string]pendingSceneBinding, slot func(pendingSceneBinding) (int, bool)) int {
 	fullIndex := liveIndex
 	for {
@@ -207,6 +177,37 @@ func expandedPendingIndex(liveIndex int, bindings map[string]pendingSceneBinding
 	}
 }
 
+// removePendingStageRoutes receives the scene as it was before removing its
+// tracks, so a removed live or pending source frees the same saved slot.
+func (a *appState) removePendingStageRoutes(scene core.Scene, it *item, video, audio bool) {
+	bindings := a.pendingBindings[scene.ID]
+	binding := bindings[it.persistentID]
+	videoIndex, audioIndex := -1, -1
+	if video {
+		if binding.video {
+			videoIndex = binding.videoIndex
+		} else if index := slices.Index(scene.Video, it.video); index >= 0 {
+			videoIndex = expandedPendingIndex(index, bindings, pendingVideoSlot)
+		}
+		binding.video = false
+	}
+	if audio {
+		if binding.audio != nil {
+			audioIndex = binding.audioIndex
+		} else if index := slices.IndexFunc(scene.Audio, func(level core.AudioLevel) bool { return level.Track == it.audio }); index >= 0 {
+			audioIndex = expandedPendingIndex(index, bindings, pendingAudioSlot)
+		}
+		binding.audio = nil
+	}
+	if binding.video || binding.audio != nil {
+		bindings[it.persistentID] = binding
+	} else {
+		delete(bindings, it.persistentID)
+	}
+	compactPendingMemberIndexes(bindings, videoIndex, audioIndex)
+}
+
+// compactPendingMemberIndexes leaves no hole after a route is removed.
 func compactPendingMemberIndexes(bindings map[string]pendingSceneBinding, removedVideoIndex, removedAudioIndex int) {
 	compact := func(index int, pending func(pendingSceneBinding) bool, get func(pendingSceneBinding) int, set func(*pendingSceneBinding, int)) {
 		if index < 0 {

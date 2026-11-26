@@ -106,8 +106,11 @@ func (r commandResult) String() string {
 // itemBySource finds the row a command names. Rows are looked up by identifier
 // because a removal renumbers the list under the window's feet.
 func (a *appState) itemBySource(id core.SourceID) (*item, int, error) {
+	if id == "" {
+		return nil, -1, fmt.Errorf("%w: no source was selected", UnknownSourceError)
+	}
 	for index, it := range a.items {
-		if itemKey(it) == id || (it.source.ID != "" && it.source.ID == id) ||
+		if itemKey(it) == id ||
 			(it.persistentID != "" && core.SourceID("saved:"+it.persistentID) == id) {
 			return it, index, nil
 		}
@@ -120,7 +123,7 @@ func (a *appState) itemBySource(id core.SourceID) (*item, int, error) {
 // command (a pause or a nudge does not change the saved arrangement).
 func commandChangesSession(kind commandKind) bool {
 	switch kind {
-	case commandShow, commandHear, commandAllow, commandVolume, commandMute, commandRemove:
+	case commandShow, commandHear, commandVolume, commandMute, commandRemove:
 		return true
 	}
 	return false
@@ -205,7 +208,7 @@ func (a *appState) runCommand(cmd command) commandResult {
 			}
 			err = player.Err()
 		case commandPrimary:
-			if !it.shown {
+			if it.source.ID == "" || it.player == nil || !it.shown {
 				return finish(errors.New("show this source before making it primary"), "")
 			}
 			a.setPrimary(it.source.ID)
@@ -272,6 +275,7 @@ func (a *appState) runCommand(cmd command) commandResult {
 			a.importCancel = nil
 		}
 		a.startupMediaQueue = nil
+		a.startupMediaScene = ""
 		a.pendingImportOrigin = originAdded
 		a.importScene = ""
 		a.retryTargetID = ""
@@ -291,6 +295,9 @@ func (a *appState) runCommand(cmd command) commandResult {
 		a.startupRestoreCancel()
 		a.startupRestoreCancel = nil
 		for _, it := range a.items {
+			if it.restoring && it.source.ID == "" {
+				it.openErr = errors.New(a.tr("Recovery was cancelled. Retry or choose an address.", "已取消恢复。可以重试或重新选择地址。"))
+			}
 			it.restoring = false
 		}
 		result.Message = "cancelled saved-source recovery; saved bindings are unchanged"
@@ -347,7 +354,7 @@ func (a *appState) runCommand(cmd command) commandResult {
 		if it.openErr != nil {
 			return finish(it.openErr, "the retry opened no player")
 		}
-		if it.handover == nil {
+		if it.handover == nil && it.player != nil && (a.window != nil || a.onMain != nil) {
 			go a.watchFirstOpen(it, it.generation, true)
 		}
 		return finish(nil, "opened a new player for "+a.name(it))

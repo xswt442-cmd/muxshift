@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -234,6 +235,54 @@ func TestRemovingLiveStageMemberKeepsOfflineSlotsOrdered(t *testing.T) {
 	snapshot := app.captureSessionStore()
 	if got := snapshot.Scenes[0].Video; len(got) != 2 || got[0] != "source-b" || got[1] != "source-c" {
 		t.Fatalf("persisted video order = %v", got)
+	}
+}
+
+func TestPendingIndexCompactionOnRemoveHideAndOfflineAppend(t *testing.T) {
+	app, scene, _ := newStoreFixture(t)
+	prepareStageMembershipFixture(t, app, scene)
+	first := app.items[0]
+	first.persistentID = "live-a"
+	second := &item{uri: "https://example.test/second.mp4", persistentID: "live-b"}
+	if err := app.addDirect(second); err != nil {
+		t.Fatal(err)
+	}
+	app.items = append(app.items, second)
+	if _, err := app.session.SetSceneVideo(scene, first.video, second.video); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.session.SetSceneAudio(scene, second.audio, 1, false); err != nil {
+		t.Fatal(err)
+	}
+	app.sceneMembers = map[core.SceneID]map[string]bool{scene: {"live-a": true, "live-b": true}}
+	for _, pending := range []struct {
+		id    string
+		index int
+	}{{"offline-a", 0}, {"offline-b", 2}} {
+		app.items = append(app.items, &item{persistentID: pending.id})
+		app.sceneMembers[scene][pending.id] = true
+		app.setPendingVideo(scene, pending.id, pending.index)
+		app.setPendingAudio(scene, pending.id, storedAudio{Source: pending.id}, pending.index)
+	}
+	if err := app.showVideo(0); err != nil {
+		t.Fatal(err)
+	}
+	appended := &item{persistentID: "offline-c"}
+	app.items = append(app.items, appended)
+	app.linkStageMember(appended)
+	if err := app.remove(1); err != nil {
+		t.Fatal(err)
+	}
+	stage := app.captureSessionStore().Scenes[0]
+	if !slices.Equal(stage.Video, []string{"offline-a", "offline-b", "offline-c"}) {
+		t.Fatalf("video order = %v", stage.Video)
+	}
+	var audio []string
+	for _, route := range stage.Audio {
+		audio = append(audio, route.Source)
+	}
+	if !slices.Equal(audio, []string{"offline-a", "live-a", "offline-b", "offline-c"}) {
+		t.Fatalf("audio order = %v", audio)
 	}
 }
 

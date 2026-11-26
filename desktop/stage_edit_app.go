@@ -119,8 +119,16 @@ func (a *appState) stageLocked(id core.SourceID) bool {
 
 // toggleStageLock flips one picture's lock without changing the stack.
 func (a *appState) toggleStageLock(id core.SourceID) {
+	it := a.itemOf(id)
+	if id == "" || it == nil || it.player == nil || !it.shown {
+		return
+	}
 	edits := a.sceneEdits()
-	edits.locked[id] = !edits.locked[id]
+	if edits.locked[id] {
+		delete(edits.locked, id)
+	} else {
+		edits.locked[id] = true
+	}
 	a.invalidate()
 	a.saveSession()
 }
@@ -406,8 +414,11 @@ func (a *appState) stageFrameSize() (float32, float32) {
 
 // find returns the item of a source, or nil when it is gone.
 func (a *appState) find(id core.SourceID) *item {
+	if id == "" {
+		return nil
+	}
 	for _, it := range a.items {
-		if it.source.ID == id {
+		if itemKey(it) == id {
 			return it
 		}
 	}
@@ -686,6 +697,9 @@ func (a *appState) reloadBoxFields(it *item) {
 func (a *appState) forgetBox(id core.SourceID) {
 	if edits := a.currentEdits(); edits != nil {
 		edits.forget(id)
+	}
+	if it := a.find(id); it != nil && it.persistentID != "" {
+		a.forgetPendingSourceEdits(a.scene, it.persistentID)
 	}
 	a.invalidate()
 	a.saveSession()

@@ -767,8 +767,8 @@ func (a *appState) stage(c *ui.Context) {
 
 // selectVideo shows a source's picture and makes the inspector follow it.
 func (a *appState) selectVideo(it *item) {
-	a.selected = it.source.ID
-	a.report(a.runCommand(command{Kind: commandShow, Source: it.source.ID}))
+	a.selected = itemKey(it)
+	a.report(a.runCommand(command{Kind: commandShow, Source: a.selected}))
 }
 
 // toggleVideo is the eye's whole job: showVideo also removes the picture when
@@ -785,8 +785,8 @@ func (a *appState) toggleVideo(index int) {
 
 // selectAudio plays a source's sound and makes the inspector follow it.
 func (a *appState) selectAudio(it *item) {
-	a.selected = it.source.ID
-	a.report(a.runCommand(command{Kind: commandHear, Source: it.source.ID}))
+	a.selected = itemKey(it)
+	a.report(a.runCommand(command{Kind: commandHear, Source: a.selected}))
 }
 
 // labelWidth estimates the width a one-line label needs. It is deliberately a

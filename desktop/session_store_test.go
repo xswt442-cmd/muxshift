@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/egoist/mygo/ui"
 	"github.com/xswt442-cmd/muxshift/core"
 	"github.com/xswt442-cmd/muxshift/internal/filelock"
 )
@@ -461,12 +462,12 @@ func TestStageLayoutsMigrateAndSaveIndependently(t *testing.T) {
 	scenes := app.session.Scenes()
 	app.setLayout(layoutGrid)
 	app.selectScene(scenes[1].ID)
-	if app.layout != layoutPip || !slices.Equal(app.pendingLayoutOrder, legacy.LayoutOrder) {
-		t.Fatalf("second stage did not inherit old preset: %s %v", app.layout, app.pendingLayoutOrder)
+	if app.layout != layoutPip || len(app.pendingLayoutOrder) != 0 {
+		t.Fatalf("second stage should inherit the preset without the active stage's order: %s %v", app.layout, app.pendingLayoutOrder)
 	}
 	app.setLayout(layoutSplit)
 	app.selectScene(scenes[0].ID)
-	if app.layout != layoutGrid || app.session.Outputs()[0].Scene != scenes[0].ID {
+	if app.layout != layoutGrid || app.session.Outputs()[0].Scene != scenes[0].ID || !slices.Equal(app.pendingLayoutOrder, legacy.LayoutOrder) {
 		t.Fatalf("first stage did not recover its preset or output: %s %+v", app.layout, app.session.Outputs())
 	}
 	path := filepath.Join(t.TempDir(), "session.json")
@@ -951,6 +952,167 @@ func TestSessionStoreMissingIsFirstRun(t *testing.T) {
 	}
 	if len(got.Sources) != 0 || len(got.Scenes) != 0 {
 		t.Fatalf("missing file produced %+v, want an empty snapshot", got)
+	}
+}
+
+func TestLoadSessionStoreRejectsTopLevelNullAndDeduplicatesSourceIDs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.json")
+	if err := os.WriteFile(path, []byte(" \n null \n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, note := loadSessionStore(path); note == "" {
+		t.Error("top-level null was accepted as a writable snapshot")
+	}
+	data := `{"sources":[{"id":"first","uri":" https://example.test/one.mp4 "},
+		{"id":"first","uri":"https://example.test/two.mp4"},
+		{"uri":"https://example.test/three.mp4"},
+		{"id":"muxshift-source-1","uri":"https://example.test/four.mp4"}],
+		"scenes":[{"video":["first","muxshift-source-1"]}]}`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snap, note := loadSessionStore(path)
+	if note != "" || len(snap.Sources) != 4 {
+		t.Fatalf("load = %+v, note = %q", snap, note)
+	}
+	seen := map[string]bool{}
+	for _, source := range snap.Sources {
+		if source.ID == "" || seen[source.ID] {
+			t.Errorf("missing or repeated source ID %q", source.ID)
+		}
+		seen[source.ID] = true
+	}
+	if snap.Sources[0].ID != "first" || snap.Sources[3].ID != "muxshift-source-1" || snap.Sources[0].URI != "https://example.test/one.mp4" {
+		t.Errorf("the first IDs or trimmed address were not retained: %+v", snap.Sources)
+	}
+}
+
+func TestLandUnavailableRetryKeepsSourceOnLateDecodeFailure(t *testing.T) {
+	app, scene, _ := newStoreFixture(t)
+	app.sync = newSyncState()
+	it := app.items[0]
+	it.persistentID = "camera"
+	app.retryScene = scene
+	app.openPlayerForImport = func(string) (*ui.VideoPlayer, error) {
+		return &ui.VideoPlayer{}, nil
+	}
+	uri := filepath.Join(t.TempDir(), "replacement.mp4")
+	app.landUnavailableRetry(0, it.persistentID, uri, importPlan{uri: uri, mode: importDirect}, nil)
+	if app.lastCommand.Err != nil || !it.restored || it.player == nil {
+		t.Fatalf("reselect did not preserve the saved identity: %v", app.lastCommand.Err)
+	}
+	app.onMain = func(fn func()) { fn() }
+	app.abandonImport(it, it.generation, errors.New("late decode failure"), false)
+	t.Cleanup(func() {
+		close(app.closeDone)
+		app.closeWait.Wait()
+	})
+	if len(app.items) != 1 || app.items[0] != it || it.openErr == nil || it.shown {
+		t.Fatalf("decode failure changed the saved source or left it showing: %+v", it)
+	}
+	snap := app.captureSessionStore()
+	if !slices.Equal(snap.Scenes[0].Video, []string{"camera"}) ||
+		len(snap.Scenes[0].Audio) != 1 || snap.Scenes[0].Audio[0].Source != "camera" {
+		t.Fatalf("decode failure lost routes: %+v", snap.Scenes[0])
+	}
+}
+
+func TestPreserveUnrelatedSourceKeepsActiveSyncGroup(t *testing.T) {
+	app, _, _ := newStoreFixture(t)
+	app.sync = newSyncState()
+	first := app.items[0]
+	group, err := app.session.AddSyncGroup(first.audio, first.audio)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.sync.group = group.ID
+	unrelated := &item{uri: "https://example.test/other.mp4", persistentID: "other"}
+	if err := app.addDirect(unrelated); err != nil {
+		t.Fatal(err)
+	}
+	app.items = append(app.items, unrelated)
+	app.preserveSourceBeforeReplacement(unrelated)
+	if err := app.session.RemoveSource(unrelated.source.ID); err != nil {
+		t.Fatal(err)
+	}
+	app.keepValidActiveSyncGroup()
+	if app.sync.group != group.ID {
+		t.Fatalf("replacing an unrelated source cleared active group %s", group.ID)
+	}
+}
+
+func TestPreserveRepeatedReplacementDoesNotDuplicatePending(t *testing.T) {
+	app, scene, _ := newStoreFixture(t)
+	app.sync = newSyncState()
+	it := app.items[0]
+	it.persistentID = "camera"
+	if _, err := app.session.AddSyncGroup(it.audio, it.audio); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.sync.timeline.SetShift(it.audio, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	app.sceneEdits().locked[it.source.ID] = true
+	savedAudio := storedTrackRef{Source: "camera", Kind: "audio"}
+	offlineAudio := storedTrackRef{Source: "offline", Kind: "audio"}
+	app.pendingSyncGroups = []storedSyncGroup{{Reference: offlineAudio, Tracks: []storedTrackRef{savedAudio, offlineAudio}}}
+	app.preserveSourceBeforeReplacement(it)
+	app.preserveSourceBeforeReplacement(it)
+	if len(app.pendingSyncGroups) != 1 || len(app.pendingShifts) != 1 || len(app.pendingStageEdits) != 1 {
+		t.Fatalf("pending metadata grew: groups=%v shifts=%v edits=%v", app.pendingSyncGroups, app.pendingShifts, app.pendingStageEdits)
+	}
+	if app.pendingSyncGroups[0].Reference != offlineAudio || len(app.pendingSyncGroups[0].Tracks) != 2 {
+		t.Fatalf("replacing a live subset lost the complete pending group: %+v", app.pendingSyncGroups)
+	}
+	if binding := app.pendingBindings[scene]["camera"]; binding.videoIndex != 0 || binding.audioIndex != 0 {
+		t.Fatalf("repeated replacement moved the pending routes: %+v", binding)
+	}
+}
+
+func TestDeferredHiddenMemberAndCancelledRestoreRemainOpenable(t *testing.T) {
+	app, err := newAppStateFromStoreDeferred(defaultSettings(), storedSession{
+		ActiveScene: "active",
+		Scenes: []storedScene{
+			{ID: "active", Members: []string{"hidden"}},
+			{ID: "other", Members: []string{"hidden"}},
+		},
+		Sources: []storedSource{{ID: "hidden", URI: "https://example.test/clip.mp4"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	it := app.first()
+	app.selectVideo(it)
+	if app.lastCommand.Err != nil || !app.pendingBindings[app.scene]["hidden"].video {
+		t.Fatalf("show did not bind the hidden source: %v", app.lastCommand.Err)
+	}
+	it.restoring = true
+	app.startupRestoreCancel = func() {}
+	if result := app.runCommand(command{Kind: commandCancelRestore}); result.Err != nil || it.openErr == nil || it.restoring {
+		t.Fatalf("cancel did not leave a retryable source: %+v", result)
+	}
+	app.selectVideo(it)
+	if app.lastCommand.Err != nil || it.openErr != nil || !app.pendingBindings[app.scene]["hidden"].video {
+		t.Fatalf("show after cancellation did not keep the binding: %v", app.lastCommand.Err)
+	}
+	app.selectAudio(it)
+	snap := app.captureSessionStore()
+	if app.lastCommand.Err != nil || len(snap.Scenes[0].Audio) != 1 || len(snap.Scenes[1].Audio) != 0 {
+		t.Fatalf("audio recovery altered routes outside the active stage: %+v", snap.Scenes)
+	}
+}
+
+func TestPlaceholderCannotCorruptLayoutTakenOrStageLocks(t *testing.T) {
+	app, scene, _ := newStoreFixture(t)
+	placeholder := &item{persistentID: "hidden", shown: true}
+	app.items = append(app.items, placeholder)
+	if result := app.runCommand(command{Kind: commandPrimary, Source: itemKey(placeholder)}); result.Err == nil {
+		t.Fatal("placeholder was accepted as the primary picture")
+	}
+	app.toggleStageLock("")
+	app.apply()
+	if placeholder.shown || len(app.layoutTaken) != 0 || app.edits[scene] != nil {
+		t.Fatal("placeholder left a picture, primary position or lock behind")
 	}
 }
 

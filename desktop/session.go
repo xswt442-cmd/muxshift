@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -124,6 +125,10 @@ func itemKey(it *item) core.SourceID {
 		return core.SourceID("saved:" + it.persistentID)
 	}
 	return ""
+}
+
+func (it *item) canRestoreOnDemand() bool {
+	return it.source.ID == "" && strings.TrimSpace(it.uri) != ""
 }
 
 func (a *appState) updateRecoveredSourceKey(it *item, oldKey core.SourceID) {
@@ -299,6 +304,7 @@ type appState struct {
 	reselectText        string
 	reselectProblem     string
 	startupMediaQueue   []string
+	startupMediaScene   core.SceneID
 	pendingImportOrigin sourceOrigin
 	importScene         core.SceneID
 
@@ -538,10 +544,8 @@ type appState struct {
 	// order, so a scene edited elsewhere still draws something.
 	layoutTaken []core.SourceID
 
-	// edits is the stage's own arrangement per scene: the rectangles a person
-	// dragged out and the stacking order they chose, keyed by scene. It lives
-	// in this session only — a scene has no stable identity across restarts
-	// yet, so a layout is not written to disk and the stage says so.
+	// edits holds each stage's picture positions, stacking order and locks.
+	// Session snapshots use stable scene and source IDs for this arrangement.
 	edits map[core.SceneID]*stageEdits
 
 	// drag is the gesture in progress: which source, which handle, and the
@@ -969,7 +973,7 @@ func (a *appState) retryUnavailableSource(it *item, uri string) error {
 }
 
 func (a *appState) startStoredSourceRestores() {
-	if len(a.startupSources) == 0 || a.closed || a.startupRestoreCancel != nil {
+	if len(a.startupSources) == 0 || a.closed || a.startupRestoreCancel != nil || (a.window == nil && a.onMain == nil) {
 		return
 	}
 	a.startupRestoreToken++
@@ -1030,7 +1034,7 @@ func (a *appState) startStoredSourceRestores() {
 					if openErr := a.installSavedSource(current, plan, err); openErr != nil {
 						current.openErr = safeOpenError(openErr)
 						a.lastErr = current.openErr
-					} else {
+					} else if current.player != nil {
 						go a.watchFirstOpen(current, current.generation, true)
 					}
 				}
@@ -1077,12 +1081,14 @@ func (a *appState) hasRestoringSources() bool {
 
 func (a *appState) startCommandLineSources(uris []string) {
 	a.startupMediaQueue = append([]string(nil), uris...)
+	a.startupMediaScene = a.scene
 	a.advanceCommandLineSources()
 }
 
 func (a *appState) advanceCommandLineSources() {
 	if a.closed || len(a.startupMediaQueue) == 0 {
 		a.startupMediaQueue = nil
+		a.startupMediaScene = ""
 		return
 	}
 	uri := a.startupMediaQueue[0]
@@ -1091,6 +1097,7 @@ func (a *appState) advanceCommandLineSources() {
 	token := a.importToken
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	a.importing = uri
+	a.importScene = a.startupMediaScene
 	a.importSince = time.Now()
 	a.importCancel = cancel
 	a.importDone = make(chan struct{})
@@ -1139,7 +1146,9 @@ func (a *appState) landUnavailableRetry(token int, targetID, requestedURI string
 	err := a.installSavedSource(it, plan, inspectErr)
 	if err == nil {
 		a.saveSession()
-		go a.watchFirstOpen(it, it.generation, false)
+		if it.player != nil && (a.window != nil || a.onMain != nil) {
+			go a.watchFirstOpen(it, it.generation, true)
+		}
 	}
 	a.closeImportTicker()
 	a.importing = ""
@@ -1202,13 +1211,14 @@ func (a *appState) installSavedSource(it *item, plan importPlan, inspectErr erro
 					candidate.player.Close()
 					candidate.player = nil
 					inspectErr = removeErr
+				} else {
+					a.keepValidActiveSyncGroup()
 				}
 			}
 			if inspectErr == nil {
 				candidate.generation = it.generation + 1
 				candidate.persistentID = it.persistentID
 				candidate.persistedName = savedName
-				candidate.restored = true
 				candidate.shown = wasShown
 				if plan.master != "" || it.uri != candidate.uri {
 					it.playlistMaster = plan.master
@@ -1221,6 +1231,7 @@ func (a *appState) installSavedSource(it *item, plan importPlan, inspectErr erro
 				it.generation = candidate.generation
 				it.persistedName = savedName
 				it.shown = wasShown
+				it.restored = true
 				it.openErr = nil
 				a.pruneStageEdits()
 				a.updateRecoveredSourceKey(it, oldKey)
@@ -1400,7 +1411,7 @@ func (a *appState) landImportPlan(token int, plan importPlan, probeErr error) {
 			// both landed successfully. A failed earlier CLI candidate must not
 			// leave the stage pointing at a track that can never show a picture.
 			// UI and handoff imports keep their explicit Show behavior.
-			if origin == originCommandLine && target == a.scene && it.video != "" {
+			if origin == originCommandLine && targetAvailable && it.video != "" {
 				if scene, sceneErr := a.session.Scene(target); sceneErr == nil && len(scene.Video) == 0 {
 					if _, setErr := a.session.SetSceneVideo(target, it.video); setErr != nil {
 						a.lastErr = safeOpenError(setErr)
@@ -1539,9 +1550,7 @@ func (a *appState) abandonImport(it *item, generation int, cause error, keepSour
 			return
 		}
 		if keepSource || it.restored {
-			shown := it.shown
 			a.closeOnMain(it)
-			it.shown = shown
 			err := safeOpenError(cause)
 			it.openErr = err
 			a.lastErr = err
@@ -1736,6 +1745,7 @@ func (a *appState) apply() {
 	a.dropSoloIfGone()
 	for _, it := range a.items {
 		if it.player == nil {
+			it.shown = false
 			continue
 		}
 		it.shown = shown[it.video]
@@ -1827,7 +1837,7 @@ func (a *appState) reconcileScenePlayers(sceneID core.SceneID, generation uint64
 			}
 			continue
 		}
-		if it.player != nil || it.lifecyclePending || it.restoring || strings.TrimSpace(it.uri) == "" {
+		if it.player != nil || it.lifecyclePending || it.restoring || it.openErr != nil || strings.TrimSpace(it.uri) == "" {
 			continue
 		}
 		if it.source.ID == "" {
@@ -1881,12 +1891,23 @@ func (a *appState) showVideo(index int) error {
 	if err != nil {
 		return err
 	}
-	if it.video == "" {
-		return fmt.Errorf("source %d has no video track", index+1)
-	}
 	scene, err := a.session.Scene(a.scene)
 	if err != nil {
 		return err
+	}
+	if it.canRestoreOnDemand() {
+		id := a.stageSourceID(it)
+		bindings := a.pendingBindings[scene.ID]
+		if !bindings[id].video {
+			a.setPendingVideo(scene.ID, id, expandedPendingIndex(len(scene.Video), bindings, pendingVideoSlot))
+		}
+		it.openErr = nil
+		a.startStoredSourceRestores()
+		a.invalidate()
+		return nil
+	}
+	if it.video == "" {
+		return fmt.Errorf("source %d has no video track", index+1)
 	}
 	tracks := make([]core.TrackID, 0, len(scene.Video)+1)
 	showing := false
@@ -1905,6 +1926,9 @@ func (a *appState) showVideo(index int) error {
 	}
 	if _, err := a.session.SetSceneVideo(a.scene, tracks...); err != nil {
 		return err
+	}
+	if showing {
+		a.removePendingStageRoutes(scene, it, true, false)
 	}
 	a.apply()
 	if !showing {
@@ -1959,11 +1983,18 @@ func (a *appState) hearAudio(index int, volume float64) error {
 	if err != nil {
 		return err
 	}
-	if it.audio == "" {
+	deferred := it.canRestoreOnDemand()
+	if it.audio == "" && !deferred {
 		return fmt.Errorf("source %d has no audio track", index+1)
 	}
-	if err := a.ensurePlayer(it); err != nil {
-		return err
+	if deferred {
+		if math.IsNaN(volume) || volume < 0 || volume > 1 {
+			return fmt.Errorf("source %d: %w: the volume must be between 0 and 1", index+1, core.ErrInvalid)
+		}
+	} else {
+		if err := a.ensurePlayer(it); err != nil {
+			return err
+		}
 	}
 	scene, err := a.session.Scene(a.scene)
 	if err != nil {
@@ -1977,10 +2008,18 @@ func (a *appState) hearAudio(index int, volume float64) error {
 			return err
 		}
 	}
-	if _, err := a.session.SetSceneAudio(a.scene, it.audio, volume, false); err != nil {
-		return err
+	if deferred {
+		a.clearPendingSceneAudio(a.scene)
+		id := a.stageSourceID(it)
+		a.setPendingAudio(a.scene, id, storedAudio{Source: id, Volume: volume}, 0)
+		it.openErr = nil
+		a.startStoredSourceRestores()
+	} else {
+		if _, err := a.session.SetSceneAudio(a.scene, it.audio, volume, false); err != nil {
+			return err
+		}
+		a.clearPendingSceneAudio(a.scene)
 	}
-	a.clearPendingSceneAudio(a.scene)
 	// The scene holds the level now; the source's own copy has to agree, or the
 	// inspector shows one number while the output plays another, and the
 	// remembered preference would save the stale one.
@@ -2084,15 +2123,30 @@ func (a *appState) remove(index int) error {
 		it.mediaCancel()
 		it.mediaCancel = nil
 	}
+	scenes := a.session.Scenes()
 	if it.source.ID != "" {
 		if err := a.session.RemoveSource(it.source.ID); err != nil {
 			return err
 		}
 	}
+	for _, scene := range scenes {
+		a.removePendingStageRoutes(scene, it, true, true)
+	}
 	if a.probeRunning {
 		a.invalidateAlignmentRow()
 	}
 	a.forgetPendingSource(it.persistentID)
+	a.layoutTaken = removeTrackID(a.layoutTaken, it.source.ID)
+	delete(a.audible, it.audio)
+	if a.sync != nil {
+		delete(a.sync.origins, it.video)
+		delete(a.sync.origins, it.audio)
+		if a.sync.timeline != nil {
+			a.sync.timeline.Forget(it.video)
+			a.sync.timeline.Forget(it.audio)
+		}
+		a.keepValidActiveSyncGroup()
+	}
 	for _, members := range a.sceneMembers {
 		delete(members, it.persistentID)
 	}
@@ -2100,6 +2154,7 @@ func (a *appState) remove(index int) error {
 		a.closeOnMain(it)
 	}
 	a.items = append(a.items[:index], a.items[index+1:]...)
+	a.reconcileStageSelection()
 	a.apply()
 	return nil
 }

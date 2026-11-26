@@ -16,9 +16,11 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/xswt442-cmd/muxshift/core"
@@ -123,6 +125,10 @@ func lockSessionStore(path string) (*filelock.Lock, error) {
 // translated back to the source that owns them, because a track id means
 // nothing after a restart while a source id does.
 func (a *appState) captureSessionStore() storedSession {
+	return a.sessionStoreSnapshot(true)
+}
+
+func (a *appState) sessionStoreSnapshot(includePendingMetadata bool) storedSession {
 	activeLayout := a.captureSceneLayout()
 	activeID := a.persistentSceneID(a.scene)
 	snap := storedSession{ActiveScene: activeID, Layout: activeLayout.Layout, LayoutOrder: slices.Clone(activeLayout.LayoutOrder)}
@@ -214,7 +220,12 @@ func (a *appState) captureSessionStore() storedSession {
 				}{source: source, index: binding.videoIndex})
 			}
 		}
-		sort.Slice(pendingVideo, func(i, j int) bool { return pendingVideo[i].index < pendingVideo[j].index })
+		sort.Slice(pendingVideo, func(i, j int) bool {
+			if pendingVideo[i].index == pendingVideo[j].index {
+				return pendingVideo[i].source < pendingVideo[j].source
+			}
+			return pendingVideo[i].index < pendingVideo[j].index
+		})
 		for _, pending := range pendingVideo {
 			insertAt := min(max(pending.index, 0), len(stored.Video))
 			stored.Video = append(stored.Video, "")
@@ -233,7 +244,12 @@ func (a *appState) captureSessionStore() storedSession {
 				}{audio: *binding.audio, index: binding.audioIndex})
 			}
 		}
-		sort.SliceStable(pendingAudio, func(i, j int) bool { return pendingAudio[i].index < pendingAudio[j].index })
+		sort.Slice(pendingAudio, func(i, j int) bool {
+			if pendingAudio[i].index == pendingAudio[j].index {
+				return pendingAudio[i].audio.Source < pendingAudio[j].audio.Source
+			}
+			return pendingAudio[i].index < pendingAudio[j].index
+		})
 		for _, pending := range pendingAudio {
 			insertAt := min(max(pending.index, 0), len(stored.Audio))
 			stored.Audio = append(stored.Audio, storedAudio{})
@@ -249,7 +265,7 @@ func (a *appState) captureSessionStore() storedSession {
 		snap.Scenes = append(snap.Scenes, stored)
 	}
 	for sceneID, edits := range a.edits {
-		if edits == nil {
+		if edits == nil || len(edits.boxes)+len(edits.order)+len(edits.locked) == 0 {
 			continue
 		}
 		stored := storedStageEdits{Scene: sceneIDs[sceneID]}
@@ -282,7 +298,9 @@ func (a *appState) captureSessionStore() storedSession {
 		sort.Strings(stored.Locked)
 		snap.StageEdits = append(snap.StageEdits, stored)
 	}
-	snap.StageEdits = mergeStoredStageEdits(snap.StageEdits, a.pendingStageEdits)
+	if includePendingMetadata {
+		snap.StageEdits = mergeStoredStageEdits(snap.StageEdits, a.pendingStageEdits)
+	}
 	for _, group := range a.session.SyncGroups() {
 		stored := storedSyncGroup{Reference: trackRefs[group.Reference]}
 		if stored.Reference.Source == "" {
@@ -295,9 +313,11 @@ func (a *appState) captureSessionStore() storedSession {
 		}
 		snap.SyncGroups = append(snap.SyncGroups, stored)
 	}
-	for _, pending := range a.pendingSyncGroups {
-		pending.Tracks = slices.Clone(pending.Tracks)
-		snap.SyncGroups = append(snap.SyncGroups, pending)
+	if includePendingMetadata {
+		for _, pending := range a.pendingSyncGroups {
+			pending.Tracks = slices.Clone(pending.Tracks)
+			snap.SyncGroups = append(snap.SyncGroups, pending)
+		}
 	}
 	if a.sync != nil && a.sync.timeline != nil {
 		for _, shift := range a.sync.timeline.Shifts() {
@@ -306,7 +326,9 @@ func (a *appState) captureSessionStore() storedSession {
 			}
 		}
 	}
-	snap.Shifts = append(snap.Shifts, a.pendingShifts...)
+	if includePendingMetadata {
+		snap.Shifts = append(snap.Shifts, a.pendingShifts...)
+	}
 	return snap
 }
 
@@ -399,7 +421,7 @@ func cloneStoredStageEdits(edits []storedStageEdits) []storedStageEdits {
 func mergeStoredStageEdits(active, pending []storedStageEdits) []storedStageEdits {
 	byScene := make(map[string]*storedStageEdits, len(active)+len(pending))
 	for _, source := range append(cloneStoredStageEdits(active), cloneStoredStageEdits(pending)...) {
-		if source.Scene == "" {
+		if source.Scene == "" || len(source.Boxes)+len(source.Order)+len(source.Locked) == 0 {
 			continue
 		}
 		target := byScene[source.Scene]
@@ -478,17 +500,17 @@ func (a *appState) preserveSourceBeforeReplacement(it *item) {
 	for _, scene := range a.session.Scenes() {
 		binding := a.pendingBindings[scene.ID][it.persistentID]
 		for index, track := range scene.Video {
-			if track == oldVideo {
+			if track == oldVideo && !binding.video {
 				binding.video = true
-				binding.videoIndex = expandedPendingIndex(index, a.pendingBindings[scene.ID], func(b pendingSceneBinding) (int, bool) { return b.videoIndex, b.video })
+				binding.videoIndex = expandedPendingIndex(index, a.pendingBindings[scene.ID], pendingVideoSlot)
 				break
 			}
 		}
 		for index, level := range scene.Audio {
-			if level.Track == oldAudio {
+			if level.Track == oldAudio && binding.audio == nil {
 				copy := storedAudio{Source: it.persistentID, Volume: level.Volume, Muted: level.Muted}
 				binding.audio = &copy
-				binding.audioIndex = expandedPendingIndex(index, a.pendingBindings[scene.ID], func(b pendingSceneBinding) (int, bool) { return b.audioIndex, b.audio != nil })
+				binding.audioIndex = expandedPendingIndex(index, a.pendingBindings[scene.ID], pendingAudioSlot)
 				break
 			}
 		}
@@ -503,8 +525,9 @@ func (a *appState) preserveSourceBeforeReplacement(it *item) {
 		}
 	}
 
-	snap := a.captureSessionStore()
-	for _, edits := range snap.StageEdits {
+	snap := a.sessionStoreSnapshot(false)
+	var preservedEdits []storedStageEdits
+	for _, edits := range mergeStoredStageEdits(snap.StageEdits, a.pendingStageEdits) {
 		filtered := storedStageEdits{Scene: edits.Scene}
 		for _, box := range edits.Boxes {
 			if box.Source == it.persistentID {
@@ -520,20 +543,39 @@ func (a *appState) preserveSourceBeforeReplacement(it *item) {
 			}
 		}
 		if len(filtered.Boxes)+len(filtered.Order)+len(filtered.Locked) > 0 {
-			a.pendingStageEdits = append(a.pendingStageEdits, filtered)
+			preservedEdits = append(preservedEdits, filtered)
 		}
 	}
+	a.pendingStageEdits = mergeStoredStageEdits(a.pendingStageEdits, preservedEdits)
 	for _, group := range snap.SyncGroups {
 		member := group.Reference.Source == it.persistentID
 		for _, track := range group.Tracks {
 			member = member || track.Source == it.persistentID
 		}
-		if member {
+		if !member {
+			continue
+		}
+		index := slices.IndexFunc(a.pendingSyncGroups, func(saved storedSyncGroup) bool {
+			for _, track := range group.Tracks {
+				if !slices.Contains(saved.Tracks, track) {
+					return false
+				}
+			}
+			return true
+		})
+		if index < 0 {
 			a.pendingSyncGroups = append(a.pendingSyncGroups, group)
+		} else if len(a.pendingSyncGroups[index].Tracks) == len(group.Tracks) {
+			a.pendingSyncGroups[index] = group
 		}
 	}
 	for _, shift := range snap.Shifts {
-		if shift.Track.Source == it.persistentID {
+		if shift.Track.Source != it.persistentID {
+			continue
+		}
+		if index := slices.IndexFunc(a.pendingShifts, func(saved storedShift) bool { return saved.Track == shift.Track }); index >= 0 {
+			a.pendingShifts[index] = shift
+		} else {
 			a.pendingShifts = append(a.pendingShifts, shift)
 		}
 	}
@@ -551,8 +593,19 @@ func (a *appState) preserveSourceBeforeReplacement(it *item) {
 			a.sync.timeline.Forget(oldVideo)
 			a.sync.timeline.Forget(oldAudio)
 		}
-		a.sync.group = ""
 	}
+}
+
+func (a *appState) keepValidActiveSyncGroup() {
+	if a.sync == nil || a.sync.group == "" {
+		return
+	}
+	for _, group := range a.session.SyncGroups() {
+		if group.ID == a.sync.group {
+			return
+		}
+	}
+	a.sync.group = ""
 }
 
 func containsTrackSource(ids []core.SourceID, source core.SourceID) bool {
@@ -813,7 +866,9 @@ func saveSessionStore(path string, snap storedSession) error {
 		if renameErr == nil {
 			return nil
 		}
-		if !errors.Is(renameErr, fs.ErrPermission) {
+		const windowsSharingViolation = syscall.Errno(32)
+		if !errors.Is(renameErr, fs.ErrPermission) &&
+			!(runtime.GOOS == "windows" && errors.Is(renameErr, windowsSharingViolation)) {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -827,20 +882,23 @@ func saveSessionStore(path string, snap storedSession) error {
 // corrupt file starts the app empty instead of crashing it. Unknown and absent
 // fields are ignored rather than refused.
 func loadSessionStore(path string) (storedSession, string) {
-	var snap storedSession
 	if path == "" {
-		return snap, ""
+		return storedSession{}, ""
 	}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return snap, ""
+		return storedSession{}, ""
 	}
 	if err != nil {
-		return snap, fmt.Sprintf("could not read %s (%v); starting with an empty session", path, err)
+		return storedSession{}, fmt.Sprintf("could not read %s (%v); starting with an empty session", path, err)
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
+	var snap *storedSession
 	if err := dec.Decode(&snap); err != nil {
 		return storedSession{}, fmt.Sprintf("%s is not a session file (%v); starting with an empty session", path, err)
+	}
+	if snap == nil {
+		return storedSession{}, fmt.Sprintf("%s does not contain a session object; starting with an empty session", path)
 	}
 	var trailing any
 	if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) {
@@ -849,7 +907,7 @@ func loadSessionStore(path string) (storedSession, string) {
 		}
 		return storedSession{}, fmt.Sprintf("%s is not a session file (%v); starting with an empty session", path, err)
 	}
-	return sanitizeSessionStore(snap), ""
+	return sanitizeSessionStore(*snap), ""
 }
 
 // sanitizeSessionStore drops entries that cannot be reopened and clamps levels,
@@ -863,16 +921,34 @@ func sanitizeSessionStore(snap storedSession) storedSession {
 		SyncGroups:  append([]storedSyncGroup(nil), snap.SyncGroups...),
 		Shifts:      append([]storedShift(nil), snap.Shifts...),
 	}
+	reservedSourceIDs := make(map[string]bool, len(snap.Sources))
+	for _, src := range snap.Sources {
+		if strings.TrimSpace(src.ID) != "" {
+			reservedSourceIDs[src.ID] = true
+		}
+	}
+	usedSourceIDs := make(map[string]bool, len(snap.Sources))
+	nextSourceID := 1
 	for _, src := range snap.Sources {
 		if strings.TrimSpace(src.URI) == "" && !src.NeedsReselect {
 			continue
 		}
 		if src.NeedsReselect {
 			src.URI = ""
-		} else if safeURI, needsReselect := persistentURI(src.URI); needsReselect {
-			src.URI = safeURI
-			src.NeedsReselect = true
+		} else {
+			src.URI, src.NeedsReselect = persistentURI(src.URI)
 		}
+		if strings.TrimSpace(src.ID) == "" || usedSourceIDs[src.ID] {
+			for {
+				id := fmt.Sprintf("muxshift-source-%d", nextSourceID)
+				nextSourceID++
+				if !reservedSourceIDs[id] && !usedSourceIDs[id] {
+					src.ID = id
+					break
+				}
+			}
+		}
+		usedSourceIDs[src.ID] = true
 		src.Volume = clampVolume(src.Volume)
 		src.PlaylistMaster, _ = persistentURI(src.PlaylistMaster)
 		out.Sources = append(out.Sources, src)
@@ -1035,7 +1111,10 @@ func newAppStateFromStore(loaded settings, snap storedSession) (*appState, error
 		sceneIDs[persistentID] = scene.ID
 		layout := stored.storedSceneLayout
 		if layout.Layout == "" {
-			layout = storedSceneLayout{Layout: snap.Layout, LayoutOrder: snap.LayoutOrder}
+			layout.Layout = snap.Layout
+			if layout.LayoutOrder == nil && (persistentID == snap.ActiveScene || len(snap.Scenes) == 1) {
+				layout.LayoutOrder = snap.LayoutOrder
+			}
 		}
 		layout.LayoutOrder = append([]string(nil), layout.LayoutOrder...)
 		app.sceneLayouts[scene.ID] = layout
@@ -1362,18 +1441,7 @@ func (a *appState) forgetPendingSource(source string) {
 		layout.LayoutOrder = removeString(slices.Clone(layout.LayoutOrder), source)
 		a.sceneLayouts[id] = layout
 	}
-	for i := range a.pendingStageEdits {
-		edit := &a.pendingStageEdits[i]
-		boxes := edit.Boxes[:0]
-		for _, box := range edit.Boxes {
-			if box.Source != source {
-				boxes = append(boxes, box)
-			}
-		}
-		edit.Boxes = boxes
-		edit.Order = removeString(edit.Order, source)
-		edit.Locked = removeString(edit.Locked, source)
-	}
+	a.forgetPendingSourceEdits("", source)
 	groups := a.pendingSyncGroups[:0]
 	for _, group := range a.pendingSyncGroups {
 		group.Tracks = slices.DeleteFunc(group.Tracks, func(track storedTrackRef) bool {
@@ -1395,6 +1463,21 @@ func (a *appState) forgetPendingSource(source string) {
 		}
 	}
 	a.pendingShifts = shifts
+}
+
+func (a *appState) forgetPendingSourceEdits(scene core.SceneID, source string) {
+	for i := range a.pendingStageEdits {
+		edit := &a.pendingStageEdits[i]
+		if scene != "" && a.persistentSceneIDs[edit.Scene] != scene {
+			continue
+		}
+		edit.Boxes = slices.DeleteFunc(edit.Boxes, func(box storedBox) bool { return box.Source == source })
+		edit.Order = removeString(edit.Order, source)
+		edit.Locked = removeString(edit.Locked, source)
+	}
+	a.pendingStageEdits = slices.DeleteFunc(a.pendingStageEdits, func(edit storedStageEdits) bool {
+		return len(edit.Boxes)+len(edit.Order)+len(edit.Locked) == 0
+	})
 }
 
 func (a *appState) clearPendingStageOrder(scene core.SceneID) {

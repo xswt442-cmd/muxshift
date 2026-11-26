@@ -510,7 +510,7 @@ func (a *appState) sourceCompactActions(c *ui.Context, it *item, index int) {
 			})
 		}
 	}
-	if it.shown {
+	if it.source.ID != "" && it.player != nil && it.shown {
 		a.quietIconButton(c, "source-primary-"+key, lucide.Crosshair(),
 			a.tr("Make this the primary picture", "设为主画面"), colorTextDim, func() {
 				a.runCommand(command{Kind: commandPrimary, Source: itemKey(it)})
@@ -526,7 +526,7 @@ func (a *appState) sourceCompactActions(c *ui.Context, it *item, index int) {
 		}
 	}
 	a.sourceRenameButton(c, it)
-	if it.video != "" {
+	if it.video != "" || it.canRestoreOnDemand() {
 		a.quietIconButton(c, "source-visible-"+key, a.eyeIcon(it), a.eyeTip(it), a.eyeTint(it), func() {
 			a.selected = itemKey(it)
 			a.toggleVideo(index)

@@ -15,6 +15,7 @@ let pairEpoch = 0;
 let handoffBusy = false;
 let candidateControls = [];
 let scanEpoch = 0;
+let pendingScan = null;
 let nextAddressID = 0;
 
 const browserLang = (navigator.language || (navigator.languages && navigator.languages[0]) || "").toLowerCase();
@@ -180,6 +181,7 @@ function finishHandoff() {
 
 function clearCandidates() {
   scanEpoch++;
+  pendingScan = null;
   scannedTarget = null;
   selected = null;
   handoffBusy = false;
@@ -248,7 +250,9 @@ function addCandidate(url, name, resolved = false) {
 }
 
 function render(scanned) {
-  scannedTarget = scanned.tab ? { id: scanned.tab.id, url: scanned.tab.url, documentId: scanned.tab.documentId } : null;
+  scannedTarget = scanned.tab ? {
+    id: scanned.tab.id, windowId: scanned.tab.windowId, url: scanned.tab.url, documentId: scanned.tab.documentId,
+  } : null;
   page.textContent = safePageAddress(scanned.tab?.url || scanned.page?.url || "");
 
   const live = liveLabel(scanned.tab?.url || "");
@@ -370,7 +374,8 @@ resolveButton.addEventListener("click", () => {
 
 function start() {
   clearCandidates();
-  const scan = scanEpoch;
+  const scan = { changedTabs: new Set(), activations: [] };
+  pendingScan = scan;
   const epoch = pairEpoch;
   chrome.runtime.sendMessage({ type: "status" }, (reply) => {
     if (pairEpoch !== epoch) return;
@@ -385,7 +390,14 @@ function start() {
     }
   });
   chrome.runtime.sendMessage({ type: "scan" }, (reply) => {
-    if (scan !== scanEpoch) return;
+    if (pendingScan !== scan) return;
+    pendingScan = null;
+    const tab = reply?.tab;
+    if (tab && (scan.changedTabs.has(tab.id) ||
+        scan.activations.some(change => change.windowId === tab.windowId && change.tabId !== tab.id))) {
+      discardStaleScan();
+      return;
+    }
     if (reply?.failure === "stale-tab") {
       discardStaleScan();
       return;
@@ -399,14 +411,20 @@ function start() {
 }
 
 chrome.tabs.onUpdated.addListener((tabID, change) => {
-  if (tabID === scannedTarget?.id && (change.status === "loading" || (change.url && change.url !== scannedTarget.url))) {
+  if (change.status !== "loading" && !change.url) return;
+  pendingScan?.changedTabs.add(tabID);
+  if (tabID === scannedTarget?.id && (change.status === "loading" || change.url !== scannedTarget.url)) {
     discardStaleScan();
   }
 });
-chrome.tabs.onActivated.addListener(({ tabId }) => {
-  if (scannedTarget && tabId !== scannedTarget.id) discardStaleScan();
+chrome.tabs.onActivated.addListener((change) => {
+  pendingScan?.activations.push(change);
+  if (scannedTarget && change.windowId === scannedTarget.windowId && change.tabId !== scannedTarget.id) {
+    discardStaleScan();
+  }
 });
 chrome.tabs.onRemoved.addListener((tabID) => {
+  pendingScan?.changedTabs.add(tabID);
   if (tabID === scannedTarget?.id) discardStaleScan();
 });
 

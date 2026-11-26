@@ -72,7 +72,7 @@ async function scan() {
       return { failure: "stale-tab" };
     }
   }
-  return { tab: { id: tab.id, title: tab.title, url, documentId: entry?.documentId }, ...found };
+  return { tab: { id: tab.id, windowId: tab.windowId, title: tab.title, url, documentId: entry?.documentId }, ...found };
 }
 
 function scriptTarget(target) {

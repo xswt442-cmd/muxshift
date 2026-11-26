@@ -8,12 +8,16 @@ import (
 )
 
 func TestTopWorkspacePageKeepsSourcesUnderStage(t *testing.T) {
-	a := &appState{workspace: workspaceStage, dockUp: true, dockTab: 0}
+	a := &appState{workspace: workspaceStage, dockUp: true, dockTab: 0, winW: 890}
 	if got := a.currentWorkspacePage(); got != workspaceSources {
 		t.Fatalf("current page = %v, want Sources", got)
 	}
 	if got := a.topWorkspacePage(); got != workspaceStage {
 		t.Fatalf("top label page = %v, want Stage", got)
+	}
+	a.winW = 1200
+	if got := a.currentWorkspacePage(); got != workspaceStage {
+		t.Fatalf("wide window current page = %v, want Stage", got)
 	}
 }
 

@@ -89,7 +89,7 @@ func compactSize(saved mygo.Rectangle) mygo.Rectangle {
 // time. Entering the mode already in use does nothing, so a repeated keypress or
 // double click cannot save the viewing geometry as if it were the workbench.
 func (a *appState) enterViewing(mode viewingMode, w viewingWindow) {
-	if mode == viewWorkbench || a.viewing == mode {
+	if w == nil || mode == viewWorkbench || a.viewing == mode {
 		return
 	}
 	if a.viewing == viewWorkbench {
@@ -108,6 +108,7 @@ func (a *appState) enterViewing(mode viewingMode, w viewingWindow) {
 	if mode == viewFullscreen && a.viewing != viewFullscreen {
 		a.viewingReturn = a.viewing
 	}
+	previous := a.viewing
 	a.viewing = mode
 	// Entering a mode shows the overlay once, then it must fade on its own.
 	// Setting the flag without arming the timer leaves the bar on screen
@@ -116,6 +117,22 @@ func (a *appState) enterViewing(mode viewingMode, w viewingWindow) {
 	switch mode {
 	case viewFullscreen:
 		w.SetFullScreen(true)
+	case viewCinema:
+		if previous == viewWorkbench {
+			break
+		}
+		if w.IsFullScreen() {
+			w.SetFullScreen(false)
+		}
+		if a.onTop != a.savedForViewing.onTop {
+			a.onTop = a.savedForViewing.onTop
+			w.SetAlwaysOnTop(a.onTop)
+		}
+		if a.savedForViewing.maximized {
+			w.Maximize()
+		} else if a.savedForViewing.saved {
+			w.SetBounds(a.savedForViewing.bounds)
+		}
 	case viewCompact:
 		if w.IsFullScreen() {
 			w.SetFullScreen(false)
@@ -132,6 +149,9 @@ func (a *appState) enterViewing(mode viewingMode, w viewingWindow) {
 // did to the window. It is safe to call from the workbench: nothing is restored
 // that was never saved.
 func (a *appState) leaveViewing(w viewingWindow) {
+	if w == nil {
+		return
+	}
 	if !a.savedForViewing.saved {
 		a.viewing = viewWorkbench
 		return
@@ -177,6 +197,9 @@ func (a *appState) toggleFullscreen(w viewingWindow) {
 // leaveFullscreen returns to the mode that was showing before the full
 // screen. From the workbench that is the way out of watching altogether.
 func (a *appState) leaveFullscreen(w viewingWindow) {
+	if w == nil {
+		return
+	}
 	back := a.viewingReturn
 	a.viewingReturn = viewWorkbench
 	if back == viewWorkbench || back == viewFullscreen {
@@ -195,6 +218,9 @@ func (a *appState) leaveFullscreen(w viewingWindow) {
 // behind the browser the stream came from. Leaving compact restores whatever
 // the window had before, so the switch never outlives the mode that offered it.
 func (a *appState) toggleOnTop(w viewingWindow) {
+	if w == nil {
+		return
+	}
 	a.onTop = !a.onTop
 	w.SetAlwaysOnTop(a.onTop)
 	a.invalidate()
@@ -380,13 +406,13 @@ func (a *appState) viewingControls(c *ui.Context, width, height float32) ui.Elem
 			a.showControls()
 		}
 		if main := a.firstShown(); main != nil {
-			muted := main.player.Muted()
+			muted := a.sourceMuted(main)
 			muteText := a.tr("Mute", "静音")
 			if muted {
 				muteText = a.tr("Unmute", "取消静音")
 			}
 			if ui.Button(c.Key("view-mute"), muteText).Width(88).
-				Height(a.controlHeight() - 2).Clicked() {
+				Height(a.controlHeight() - 2).Disabled(main.audio == "").Clicked() {
 				a.report(a.runCommand(command{Kind: commandMute, Source: main.source.ID}))
 				a.showControls()
 			}
@@ -500,10 +526,10 @@ func (a *appState) viewingShortcuts(c *ui.Context) {
 // are the equivalent.
 func (a *appState) stepVolume(delta float32) {
 	it := a.firstShown()
-	if it == nil || it.player == nil {
+	if it == nil || it.player == nil || it.audio == "" || !a.routed(it) {
 		return
 	}
-	level := it.volume + float64(delta)
+	level := a.shownLevel(it) + float64(delta)
 	if level < 0 {
 		level = 0
 	}

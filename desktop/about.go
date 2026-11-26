@@ -47,7 +47,7 @@ func (a *appState) checkForUpdates() {
 		a.updateBusy = false
 		a.updateChecked = true
 		if err != nil {
-			a.updateErr = err.Error()
+			a.updateErr = safeOpenError(err).Error()
 			a.updateLatest = ""
 			a.updateURL = ""
 		} else {
@@ -146,6 +146,10 @@ func compareVersions(current, latest string) (int, error) {
 
 func (a *appState) aboutPage(c *ui.Context) {
 	osName, memory := win.SystemInfo()
+	memoryLine := a.tr("Unavailable", "不可用")
+	if memory > 0 {
+		memoryLine = bytesLine(int64(memory))
+	}
 	rows := []struct {
 		label string
 		value string
@@ -154,7 +158,7 @@ func (a *appState) aboutPage(c *ui.Context) {
 		{a.tr("Built with", "构建环境"), version.BuildLine()},
 		{a.tr("Operating system", "操作系统"), osName + " · " + runtime.GOARCH},
 		{a.tr("Logical processors", "逻辑处理器"), strconv.Itoa(runtime.NumCPU())},
-		{a.tr("Physical memory", "物理内存"), bytesLine(int64(memory))},
+		{a.tr("Physical memory", "物理内存"), memoryLine},
 		{a.tr("Settings file", "设置文件"), a.settingsPath},
 	}
 	for _, row := range rows {
@@ -177,7 +181,7 @@ func (a *appState) aboutPage(c *ui.Context) {
 		})
 		switch {
 		case view.err != "":
-			ui.Text(c, view.err).FontSize(textSmall).TextColor(colorBad).Wrap()
+			ui.Text(c, a.tr("Update check failed: ", "检查更新失败：")+view.err).FontSize(textSmall).TextColor(colorBad).Wrap()
 		case !view.checked:
 			ui.Text(c, a.tr("Not checked yet.", "还没有检查。")).FontSize(textSmall).TextColor(colorTextDim)
 		case versionsEqual(view.latest, version.BuildVersion):
@@ -188,20 +192,25 @@ func (a *appState) aboutPage(c *ui.Context) {
 	})
 	if view.url != "" && !versionsEqual(view.latest, version.BuildVersion) {
 		a.secondaryButton(c, "about-open-release", a.tr("Open release page", "打开发布页"), 180, true, func() {
-			opener := a.openURL
-			if opener == nil {
-				opener = a.contextOpenURL
-			}
-			if opener != nil {
-				opener(view.url, func(err error) {
-					if err != nil {
-						a.lastErr = err
-						a.invalidate()
-					}
-				})
-			}
+			a.openReleasePage(view.url, c.OpenURLThen)
 		})
 	}
+}
+
+func (a *appState) openReleasePage(address string, fallback func(string, func(error))) {
+	opener := a.openURL
+	if opener == nil {
+		opener = a.contextOpenURL
+	}
+	if opener == nil {
+		opener = fallback
+	}
+	opener(address, func(err error) {
+		if err != nil {
+			a.lastErr = safeOpenError(err)
+			a.invalidate()
+		}
+	})
 }
 
 func versionsEqual(a, b string) bool {

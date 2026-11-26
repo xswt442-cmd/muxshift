@@ -134,11 +134,10 @@ func (a *appState) dockBody(c *ui.Context) {
 				AlignItems(ui.Center).Children(func() {
 				ui.Text(c, a.tr("Console", "控制台")).FontSize(textMicro).TextColor(colorDim)
 				ui.Box(c).Grow(1)
-				if ui.Button(c.Key("dock-fold"), "▾").Width(24).Height(22).
-					Tooltip(a.tr("fold the console", "收起控制台")).Clicked() {
+				a.iconButtonSized(c, "dock-fold", lucide.ChevronDown(), a.tr("fold the console", "收起控制台"), 24, colorTextDim, false, func() {
 					a.dockUp = false
 					a.invalidate()
-				}
+				})
 			})
 			ui.Box(c).WidthPercent(100).Height(1).Background(colorLine)
 			ui.Scroll(c).WidthPercent(100).Grow(1).Children(func() { a.dockRowsBody(c) })
@@ -177,11 +176,10 @@ func (a *appState) dockBody(c *ui.Context) {
 					})
 					ui.Box(c).Grow(1)
 				}
-				if ui.Button(c.Key("dock-fold"), "▾").Width(24).Height(22).
-					Tooltip(a.tr("fold the console", "收起控制台")).Clicked() {
+				a.iconButtonSized(c, "dock-fold", lucide.ChevronDown(), a.tr("fold the console", "收起控制台"), 24, colorTextDim, false, func() {
 					a.dockUp = false
 					a.invalidate()
-				}
+				})
 			})
 			if len(ids) == 0 {
 				return
@@ -195,21 +193,14 @@ func (a *appState) dockBody(c *ui.Context) {
 			AlignItems(ui.Center).Children(func() {
 			ui.Text(c, a.tr("Console", "控制台")).FontSize(textMicro).TextColor(colorDim)
 			ui.Box(c).Grow(1)
-			// In a narrow window the tabs take this row's place below, so only
-			// the fold button stays here.
-			// Panel switches are chip-shaped and quiet: they sit on the same
-			// surface as the row, and only a shown panel carries the accent.
-			if !a.narrowDock() {
-				track := a.segmentTrack(c)
-				track.Children(func() {
-					for _, id := range dockOrder {
-						pid := id
-						a.segmentedOption(c, "dock-toggle-"+pid, a.dockTitle(pid), a.dockShown(pid), false, func() {
-							a.toggleDockPanel(pid)
-						})
-					}
-				})
-			}
+			track := a.segmentTrack(c)
+			track.Children(func() {
+				for _, id := range dockOrder {
+					a.segmentedOption(c, "dock-toggle-"+id, a.dockTitle(id), a.dockShown(id), false, func() {
+						a.toggleDockPanel(id)
+					})
+				}
+			})
 			a.iconButtonSized(c, "dock-fold", lucide.ChevronDown(),
 				a.tr("fold the console", "收起控制台"), 24, colorTextDim, false, func() {
 					a.dockUp = false
@@ -217,32 +208,6 @@ func (a *appState) dockBody(c *ui.Context) {
 				})
 		})
 		ui.Box(c).WidthPercent(100).Height(1).Background(colorLine)
-		if a.narrowDock() {
-			// In a narrow window three columns become unreadable, so the same
-			// panels turn into tabs: one at a time, same body functions.
-			ids := make([]string, 0, len(dockOrder))
-			labels := make([]string, 0, len(dockOrder))
-			for _, id := range dockOrder {
-				if !a.dockShown(id) {
-					continue
-				}
-				ids = append(ids, id)
-				labels = append(labels, a.dockTitle(id))
-			}
-			if len(ids) == 0 {
-				ui.Text(c, a.tr("Every panel is hidden.", "所有面板都被隐藏了。")).FontSize(textCaption).
-					TextColor(colorDim).Padding(spaceSm, spaceSm)
-				return
-			}
-			if a.dockTab < 0 || a.dockTab >= len(ids) {
-				a.dockTab = 0
-			}
-			ui.Tabs(c, &a.dockTab, labels...)
-			ui.Row(c).WidthPercent(100).Grow(1).AlignItems(ui.Stretch).Children(func() {
-				a.dockPanel(c, ids[a.dockTab])
-			})
-			return
-		}
 		row := ui.Row(c).WidthPercent(100).Grow(1).AlignItems(ui.Stretch)
 		rowWidth := row.Bounds().W
 		if rowWidth > 0 {
@@ -254,6 +219,11 @@ func (a *appState) dockBody(c *ui.Context) {
 				if a.dockShown(id) {
 					shown = append(shown, id)
 				}
+			}
+			if len(shown) == 0 {
+				ui.Text(c, a.tr("Every panel is hidden.", "所有面板都被隐藏了。")).
+					FontSize(textCaption).TextColor(colorDim).Padding(spaceSm, spaceSm)
+				return
 			}
 			a.normalizeDockWidths(shown)
 			first := true
@@ -327,18 +297,18 @@ func (a *appState) dockPanel(c *ui.Context, id string) {
 // normalizeDockWidths gives every shown panel a share and rescales the shares
 // so they fill the console after a panel was hidden or shown.
 func (a *appState) normalizeDockWidths(ids []string) {
+	if len(ids) == 0 {
+		return
+	}
 	if a.dockWidths == nil {
 		a.dockWidths = make(map[string]float32)
 	}
 	var total float32
 	for _, id := range ids {
-		total += a.dockWidths[id]
-	}
-	if total <= 0 {
-		for _, id := range ids {
+		if a.dockWidths[id] <= 0 {
 			a.dockWidths[id] = 1 / float32(len(ids))
 		}
-		return
+		total += a.dockWidths[id]
 	}
 	for _, id := range ids {
 		a.dockWidths[id] /= total
@@ -382,7 +352,7 @@ func (a *appState) dockSourcesBody(c *ui.Context) {
 		a.iconButton(c, "dock-src-add", lucide.Plus(), a.tr("add a source", "添加来源"), false,
 			a.openAddSource)
 		a.iconButton(c, "dock-src-remove", lucide.Minus(), a.tr("remove from this stage", "从当前舞台移除"), false, func() {
-			if it := a.find(a.selected); it != nil {
+			if it, _, ok := a.selectedSource(); ok {
 				a.unlinkStageMember(it)
 			}
 		})
@@ -411,7 +381,7 @@ func (a *appState) dockSourcesBody(c *ui.Context) {
 		memberCount++
 		row := it
 		ui.Row(c).WidthPercent(100).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
-			a.sourceEntry(c, row, i, true, placed)
+			ui.Column(c).Grow(1).MinWidth(0).Children(func() { a.sourceEntry(c, row, i, true, placed) })
 			a.iconButton(c, "dock-unlink-"+string(itemKey(row)), lucide.X(),
 				a.tr("remove from this stage", "从当前舞台移除"), false, func() {
 					a.unlinkStageMember(row)
@@ -599,43 +569,45 @@ func (a *appState) dockRowsBody(c *ui.Context) {
 					} else {
 						ui.Button(c.Key("source-play-"+key), a.tr("Opening", "打开中")).Height(26).Disabled(true)
 					}
-					a.iconButton(c, "row-up-"+string(row.source.ID), lucide.ChevronUp(),
-						a.tr("toward the front", "往前一层"), false, func() {
-							a.raiseStage(row.source.ID, false)
-						})
-					a.iconButton(c, "row-down-"+string(row.source.ID), lucide.ChevronDown(),
-						a.tr("toward the back", "往后一层"), false, func() {
-							a.lowerStage(row.source.ID, false)
-						})
+					if row.source.ID != "" {
+						a.iconButton(c, "row-up-"+key, lucide.ChevronUp(),
+							a.tr("toward the front", "往前一层"), false, func() {
+								a.raiseStage(row.source.ID, false)
+							})
+						a.iconButton(c, "row-down-"+key, lucide.ChevronDown(),
+							a.tr("toward the back", "往后一层"), false, func() {
+								a.lowerStage(row.source.ID, false)
+							})
+					}
 					if row.audio != "" {
 						ui.Row(c).Width(220).Gap(2).AlignItems(ui.Center).Children(func() {
 							a.mixerActions(c, row, "row-mix")
 							level := a.mixerLevel(row)
-							if a.volumeSlider(c, "row-vol-"+string(row.source.ID), &level, 72) {
-								a.runCommand(command{Kind: commandVolume, Source: row.source.ID, Volume: level})
+							if a.volumeSlider(c, "row-vol-"+key, &level, 72) {
+								a.runCommand(command{Kind: commandVolume, Source: itemKey(row), Volume: level})
 							}
 							a.numericReadout(c, fmt.Sprintf("%.0f%%", level*100), 38)
 						})
 					}
-					ui.Row(c).Width(190).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
-						a.offsetStepper(c, "row-step-"+string(row.source.ID), a.entryOf(row).Offset,
-							a.settingsNudge(1), func(delta time.Duration) {
-								a.runCommand(command{Kind: commandNudge, Source: row.source.ID, Delta: delta})
-							})
-						if offset := a.entryOf(row).Offset; offset != 0 {
-							a.iconButton(c, "row-reset-"+string(row.source.ID), lucide.RotateCcw(),
-								a.tr("Reset offset", "偏移归零"), false, func() {
-									a.report(a.runCommand(command{Kind: commandNudge, Source: row.source.ID, Delta: -offset}))
-								})
-						}
-					})
 					if row.source.ID != "" {
-						a.quietIconButton(c, "row-rename-"+string(row.source.ID), lucide.Pencil(),
+						ui.Row(c).Width(190).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
+							a.offsetStepper(c, "row-step-"+key, a.entryOf(row).Offset,
+								a.settingsNudge(1), func(delta time.Duration) {
+									a.runCommand(command{Kind: commandNudge, Source: itemKey(row), Delta: delta})
+								})
+							if offset := a.entryOf(row).Offset; offset != 0 {
+								a.iconButton(c, "row-reset-"+key, lucide.RotateCcw(),
+									a.tr("Reset offset", "偏移归零"), false, func() {
+										a.report(a.runCommand(command{Kind: commandNudge, Source: itemKey(row), Delta: -offset}))
+									})
+							}
+						})
+						a.quietIconButton(c, "row-rename-"+key, lucide.Pencil(),
 							a.tr("Rename", "重命名"), colorDim, func() {
 								a.openRenameSource(row.source.ID)
 							})
 					}
-					a.quietIconButton(c, "row-show-"+string(row.source.ID), a.eyeIcon(row),
+					a.quietIconButton(c, "row-show-"+key, a.eyeIcon(row),
 						a.eyeTip(row), a.eyeTint(row), func() {
 							a.toggleVideo(index)
 						})

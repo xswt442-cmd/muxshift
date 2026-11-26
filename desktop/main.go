@@ -470,7 +470,7 @@ func (a *appState) view(c *ui.Context) {
 	}
 	a.keysTyping = typing
 	a.keysSeen++
-	if !a.keysTyping {
+	if !a.keysTyping && !a.addOpen && !a.renameOpen && !a.errorOpen {
 		c.OnWindowShortcut(ui.Ctrl, ui.KeyS, func() { a.shortcutCommand(commandShow) })
 		c.OnWindowShortcut(ui.Ctrl, ui.KeyH, func() { a.shortcutCommand(commandHear) })
 		c.OnWindowShortcut(ui.Ctrl, ui.KeyR, func() { a.shortcutCommand(commandRetry) })
@@ -559,6 +559,8 @@ func (a *appState) setLayout(kind layoutKind) {
 // large slot — pip and hero — gives it to that source. The rest keep the order
 // the scene already has.
 func (a *appState) setPrimary(id core.SourceID) {
+	reference := a.syncReference()
+	defer a.invalidateChangedAlignmentReference(reference)
 	primary := a.itemOf(id)
 	if primary == nil {
 		return

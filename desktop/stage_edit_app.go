@@ -266,7 +266,7 @@ func (a *appState) stageEditing(c *ui.Context, geometry []stagePlacement, sizeW,
 		if locked {
 			ui.Box(c).Absolute().Left(px.X).Top(px.Y + 6).Width(px.W).Height(18).
 				ZIndex(300 + i).Children(func() {
-				ui.Text(c, "locked").FontSize(textMicro).TextColor(colorTextDim).Center()
+				ui.Text(c, a.tr("Locked", "已锁定")).FontSize(textMicro).TextColor(colorTextDim).Center()
 			})
 		}
 	}
@@ -615,18 +615,18 @@ func (a *appState) editControls(c *ui.Context, it *item) {
 		})
 	}
 	ui.Row(c).Gap(spaceXs).WidthPercent(100).Children(func() {
-		apply := ui.Button(c.Key("box-apply"), a.tr("Apply", "搴旂敤")).Height(a.controlHeight() - 6)
+		apply := ui.Button(c.Key("box-apply"), a.tr("Apply", "应用")).Height(a.controlHeight() - 6)
 		if !dirty {
 			apply.Disabled(true)
 		}
 		if apply.Clicked() {
 			a.applyBoxFields(it)
 		}
-		if ui.Button(c.Key("box-fit"), a.tr("Fit", "閫傚簲")).Height(a.controlHeight() - 6).Clicked() {
+		if ui.Button(c.Key("box-fit"), a.tr("Fit", "适应")).Height(a.controlHeight() - 6).Clicked() {
 			a.fitStage(it.source.ID)
 			a.reloadBoxFields(it)
 		}
-		if ui.Button(c.Key("box-reset"), a.tr("Reset", "閲嶇疆")).Height(a.controlHeight() - 6).Clicked() {
+		if ui.Button(c.Key("box-reset"), a.tr("Reset", "重置")).Height(a.controlHeight() - 6).Clicked() {
 			a.forgetBox(it.source.ID)
 			a.reloadBoxFields(it)
 		}
@@ -634,7 +634,7 @@ func (a *appState) editControls(c *ui.Context, it *item) {
 	ui.Row(c).Wrap().Gap(spaceXs).Padding(spaceXs, 0).Children(func() {
 		ratio := a.tr("Keep ratio", "锁定比例")
 		if a.freeRatio {
-			ratio = a.tr("Any ratio", "鑷敱姣斾緥")
+			ratio = a.tr("Any ratio", "自由比例")
 		}
 		if ui.Button(c.Key("box-ratio"), ratio).Height(24).Padding(0, spaceXs).
 			Tooltip(a.tr("drag a corner to resize", "拖角可以改大小")).Clicked() {
@@ -642,7 +642,7 @@ func (a *appState) editControls(c *ui.Context, it *item) {
 		}
 		lock := a.tr("Lock", "锁定")
 		if a.stageLocked(it.source.ID) {
-			lock = a.tr("Unlock", "瑙ｉ攣")
+			lock = a.tr("Unlock", "解锁")
 		}
 		if ui.Button(c.Key("box-lock"), lock).Height(24).Padding(0, spaceXs).Clicked() {
 			a.toggleStageLock(it.source.ID)

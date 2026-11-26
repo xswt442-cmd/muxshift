@@ -104,6 +104,9 @@ func (a *appState) unlinkStageMember(it *item) {
 		edits.forget(it.source.ID)
 	}
 	a.forgetPendingSourceEdits(scene.ID, sourceID)
+	if id := itemKey(it); a.alignRow.Reference == id || a.alignRow.Target == id {
+		a.invalidateAlignmentRow()
+	}
 	a.reconcileStageSelection()
 	if it.stageOnly && !a.sourceHasStageMember(it.persistentID) {
 		a.removeCatalogSource(it)

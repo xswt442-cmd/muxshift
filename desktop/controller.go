@@ -507,7 +507,7 @@ func (a *appState) snapshotEntry(it *item) sourceSnapshot {
 		Volume:     it.volume,
 		OpenErr:    errorString(it.openErr),
 	}
-	if track := it.audio; track != "" {
+	if track := a.trackOfAudio(it); track != "" && a.sync != nil {
 		entry.Aligned = a.sync.timeline.Aligned(track)
 		if shift, ok := a.sync.timeline.Shift(track); ok {
 			entry.Offset = shift.Offset

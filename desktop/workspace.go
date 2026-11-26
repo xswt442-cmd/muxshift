@@ -124,6 +124,7 @@ func (a *appState) importRow(c *ui.Context) {
 					if ui.Button(c.Key("reselect-cancel"), a.tr("Cancel", "取消")).Height(28).Clicked() {
 						a.reselectSource = ""
 						a.reselectText = ""
+						a.reselectProblem = ""
 					}
 					if ui.Button(c.Key("reselect-apply"), a.tr("Use address", "使用地址")).Height(28).Clicked() {
 						submit = true
@@ -181,13 +182,8 @@ func (a *appState) importFailureNotice(c *ui.Context) {
 
 // selectedSource is the source the inspector follows, or nil.
 func (a *appState) selectedSource() (*item, int, bool) {
-	for i, it := range a.items {
-		if itemKey(it) == a.selected || (it.source.ID != "" && it.source.ID == a.selected) ||
-			(it.persistentID != "" && core.SourceID("saved:"+it.persistentID) == a.selected) {
-			return it, i, true
-		}
-	}
-	return nil, 0, false
+	it, index, err := a.itemBySource(a.selected)
+	return it, index, err == nil
 }
 
 // diagnosticsPage shows what the session and the players actually report. It is

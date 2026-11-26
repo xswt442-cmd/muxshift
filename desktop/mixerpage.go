@@ -113,7 +113,7 @@ func (a *appState) mixerRow(c *ui.Context, index int, it *item) {
 			}
 			pill(c, a.audioRouteLabel(it), routeColor, false)
 			if soloed {
-				pill(c, "solo", colorWarn, false)
+				pill(c, a.tr("Solo", "独听"), colorWarn, false)
 			}
 			ui.Box(c).Grow(1)
 			muteLabel := a.tr("Mute source", "静音本路")

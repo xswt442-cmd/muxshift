@@ -27,8 +27,6 @@ const (
 	// the middle column is whatever is left.
 	sceneWidth      = 240
 	propertiesWidth = 300
-	mixerHeight     = 168
-	mixerStripHi    = 34
 	drawerWidth     = 300
 
 	// Kept for the scale walk and the workspace memory: the folds they describe
@@ -240,7 +238,8 @@ func (a *appState) topWorkspacePage() workspace {
 }
 
 func (a *appState) currentWorkspacePage() workspace {
-	if a.workspace == workspaceStage && a.dockUp && !a.dockHidden[dockSources] && a.dockTab == 0 {
+	if a.workspace == workspaceStage && a.dockUp && a.narrowDock() &&
+		normalizeConsoleLayout(a.settings.ConsoleLayout) == consolePanels && a.dockShown(dockSources) && a.dockTab == 0 {
 		return workspaceSources
 	}
 	return a.workspace
@@ -265,8 +264,11 @@ func (a *appState) navigateWorkspace(page workspace) {
 	if page == workspaceMixer {
 		a.workspace = workspaceStage
 		a.dockUp = true
-		a.dockHidden[dockMixer] = false
-		a.dockTab = 1
+		delete(a.dockHidden, dockMixer)
+		a.dockTab = 0
+		if a.dockShown(dockSources) {
+			a.dockTab++
+		}
 		a.invalidate()
 		return
 	}
@@ -444,6 +446,7 @@ func (a *appState) sourceEntry(c *ui.Context, it *item, index int, compact bool,
 			if ui.Button(c.Key("compact-reselect-cancel"), a.tr("Cancel", "取消")).Height(26).Clicked() {
 				a.reselectSource = ""
 				a.reselectText = ""
+				a.reselectProblem = ""
 			}
 			if ui.Button(c.Key("compact-reselect-apply"), a.tr("Use address", "使用地址")).Height(26).Clicked() {
 				submit = true
@@ -624,39 +627,6 @@ func (a *appState) sceneColumnBody(c *ui.Context, expanded bool) {
 		})
 }
 
-// layoutRow is the five arrangements, kept in the scene column rather than
-// floating over the picture: a strip of small buttons that says where the
-// pictures go.
-func (a *appState) layoutRow(c *ui.Context) {
-	ui.Column(c).WidthPercent(100).Padding(spaceSm, spaceMd).Gap(spaceXs).Children(func() {
-		ui.Text(c, a.tr("Layout", "布局")).FontSize(textMicro).TextColor(colorDim)
-		ui.Column(c).WidthPercent(100).Gap(spaceXs).Children(func() {
-			row := func(kinds []layoutKind) {
-				ui.Row(c).WidthPercent(100).Gap(spaceXs).Children(func() {
-					for _, kind := range kinds {
-						on := a.layout == kind
-						label := a.tr(kind.label(), map[string]string{
-							"Focus": "聚焦", "Split": "分屏", "PiP": "小窗",
-							"Grid": "网格", "Hero": "主次",
-						}[kind.label()])
-						b := ui.Button(c.Key("layout-"+kind.String()), label).Height(24).Grow(1)
-						if on {
-							b = b.Background(colorAccentSoft).TextColor(colorAccent)
-						}
-						if b.Clicked() {
-							a.setLayout(kind)
-						}
-					}
-				})
-			}
-			row(layoutKinds[0:3])
-			row(layoutKinds[3:])
-		})
-	})
-}
-
-// sceneRow draws the one scene. It is a row, not a button, because there is
-// nothing to switch to yet.
 // sceneList draws every scene as a row: the current one carries the accent
 // dot, a press switches to it, and the cross removes it when more than one is
 // left. A scene is where a different arrangement of the same sources lives, so
@@ -808,7 +778,13 @@ func (a *appState) sceneRow(c *ui.Context) {
 		ui.Box(c).Width(6).Height(6).Radius(3).Background(colorAccent)
 		ui.Text(c, a.sceneLabelText()).FontSize(textBody).TextColor(colorText).SingleLine()
 		ui.Box(c).Grow(1)
-		ui.Text(c, itoa(len(a.items))).FontSize(textMicro).TextColor(colorDim)
+		members := 0
+		for _, it := range a.items {
+			if a.isStageMember(it) {
+				members++
+			}
+		}
+		ui.Text(c, itoa(members)).FontSize(textMicro).TextColor(colorDim)
 	})
 }
 
@@ -1141,9 +1117,9 @@ func (a *appState) transportBar(c *ui.Context, width float32) {
 					ui.Text(c, label).FontSize(textBody).TextColor(colorText).
 						FontFeatures("tnum").MinWidth(0).SingleLine().Tooltip(label)
 				}
-				if first != nil {
-					total := first.player.Duration()
-					ui.Text(c.Key("transport-position"), clock(first.player.Position())+" / "+clock(total)).
+				if first != nil && first.outputPlayer() != nil {
+					player := first.outputPlayer()
+					ui.Text(c.Key("transport-position"), clock(player.Position())+" / "+clock(player.Duration())).
 						FontSize(textBody).TextColor(colorTextDim).FontFeatures("tnum").
 						NoWrap().Shrink(0).Padding(spaceSm, 0)
 				}
@@ -1232,10 +1208,11 @@ func (a *appState) soundTab(c *ui.Context, it *item, index int) {
 	a.detailRow(c, a.tr("State", "状态"), a.soundState(a.entryOf(it)))
 	ui.Row(c).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, a.tr("Level", "音量")).FontSize(textMicro).TextColor(colorDim).Width(52)
-		if a.rangeSlider(c, "snd-vol", &it.volume, 0, 1, 160) {
-			a.runCommand(command{Kind: commandVolume, Source: it.source.ID, Volume: it.volume})
+		level := a.mixerLevel(it)
+		if it.audio != "" && a.rangeSlider(c, "snd-vol", &level, 0, 1, 160) {
+			a.runCommand(command{Kind: commandVolume, Source: itemKey(it), Volume: level})
 		}
-		ui.Text(c, fmt.Sprintf("%.2f", it.volume)).Width(40).FontSize(textSmall).
+		ui.Text(c, fmt.Sprintf("%.2f", level)).Width(40).FontSize(textSmall).
 			TextColor(colorText).FontFeatures("tnum")
 	})
 	ui.Row(c).Wrap().Gap(spaceXs).Children(func() {
@@ -1272,8 +1249,8 @@ func (a *appState) soundTab(c *ui.Context, it *item, index int) {
 	})
 	if it.audio != "" && a.hasCommonClock(it) {
 		if ui.Button(c.Key("snd-try-align"), a.tr("Try to align", "尝试对齐")).Height(26).Clicked() {
-			if index > 0 {
-				a.probeAsync(0, index)
+			if ref := a.syncReference(); ref != nil && ref != it {
+				a.probeAsync(a.indexOf(ref), index)
 			}
 		}
 	}
@@ -1289,39 +1266,6 @@ func (a *appState) timeTab(c *ui.Context, it *item, index int) {
 	a.inspectorSeek(c)
 	a.inspectorAccount(c)
 	a.inspectorAlign(c)
-}
-
-// mixerPanel is the right column's audio half: the master and one channel per
-// source, the way a mixer looks in a capture program.
-func (a *appState) mixerPanel(c *ui.Context, height float32) {
-	ui.Column(c).WidthPercent(100).Height(mixerHeight).Padding(spaceSm).Gap(spaceXs).
-		Background(colorBgSoft).Children(func() {
-		ui.Row(c).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, a.tr("Mixer", "混音器")).FontSize(textMicro).TextColor(colorDim)
-			ui.Box(c).Grow(1)
-			mute := a.tr("Mute all", "全部静音")
-			if a.masterMute {
-				mute = a.tr("Unmute all", "取消全部静音")
-			}
-			if ui.Button(c.Key("mix-master"), mute).Height(22).Padding(0, 6).Clicked() {
-				a.runCommand(command{Kind: commandMasterMute})
-			}
-		})
-		ui.Scroll(c).Grow(1).WidthPercent(100).Children(func() {
-			ui.Column(c).WidthPercent(100).Gap(2).Children(func() {
-				if len(a.items) == 0 {
-					ui.Text(c, a.tr("No sources are open.", "还没有打开来源。")).
-						FontSize(textCaption).TextColor(colorDim).Wrap()
-					return
-				}
-				for _, it := range a.items {
-					a.mixerChannel(c, it)
-				}
-			})
-		})
-		ui.Text(c, a.tr("Output: system default", "输出：系统默认设备")).
-			FontSize(textMicro).TextColor(colorDim).SingleLine()
-	})
 }
 
 // mixerChannel is one strip in the mixer: name, mute, level.
@@ -1345,6 +1289,14 @@ func (a *appState) mixerChannel(c *ui.Context, it *item) {
 			return
 		}
 		a.mixerLevelControl(c, it, "mix-vol-", 118, 42)
+		if level, routed := a.sceneLevel(it); routed && level.Muted {
+			if ui.Button(c.Key("mix-clear-scene-mute-"+string(itemKey(it))), a.tr("Clear scene mute", "取消场景静音")).Height(26).Clicked() {
+				if err := a.clearSceneMute(it); err != nil {
+					a.lastErr = safeOpenError(err)
+					a.invalidate()
+				}
+			}
+		}
 	})
 }
 
@@ -1444,48 +1396,6 @@ func (a *appState) mixerChannelSoloLabel(it *item) string {
 		return a.tr("Solo active", "独听中")
 	}
 	return ""
-}
-
-// mixerStrip is the narrow window's mixer: a bottom bar that can open into a few
-// channel rows, so a 747px window still has a level control.
-func (a *appState) mixerStrip(c *ui.Context) {
-	ui.Column(c).WidthPercent(100).Background(colorBgSoft).Children(func() {
-		ui.Box(c).WidthPercent(100).Height(1).Background(colorLine)
-		ui.Row(c).WidthPercent(100).Height(mixerStripHi).Padding(0, spaceMd).Gap(spaceSm).
-			AlignItems(ui.Center).Children(func() {
-			ui.Text(c, a.tr("Mixer", "混音")).FontSize(textMicro).TextColor(colorDim)
-			mute := a.tr("Mute all", "全部静音")
-			if a.masterMute {
-				mute = a.tr("Unmute all", "取消全部静音")
-			}
-			if ui.Button(c.Key("strip-master"), mute).Height(22).Padding(0, 6).Clicked() {
-				a.runCommand(command{Kind: commandMasterMute})
-			}
-			ui.Box(c).Grow(1)
-			toggle := a.tr("Open", "展开")
-			if a.mixerOpen {
-				toggle = a.tr("Fold", "收起")
-			}
-			if ui.Button(c.Key("strip-toggle"), toggle).Height(22).Padding(0, 6).Clicked() {
-				a.mixerOpen = !a.mixerOpen
-			}
-		})
-		if !a.mixerOpen {
-			return
-		}
-		ui.Column(c).WidthPercent(100).Padding(0, spaceMd).Gap(2).Children(func() {
-			for _, it := range a.items {
-				ui.Row(c).WidthPercent(100).Height(26).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, sourceDisplayName(it)).FontSize(textMicro).TextColor(colorText).Width(90).SingleLine()
-					if ui.Slider(c, &it.volume, 0, 1).Grow(1).Height(16).Changed() {
-						a.runCommand(command{Kind: commandVolume, Source: it.source.ID, Volume: it.volume})
-					}
-					ui.Text(c, fmt.Sprintf("%.0f%%", it.volume*100)).Width(32).FontSize(textMicro).
-						TextColor(colorDim).FontFeatures("tnum")
-				})
-			}
-		})
-	})
 }
 
 // drawer is the properties column of a narrow window: it opens over the picture

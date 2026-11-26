@@ -105,9 +105,8 @@ func (a *appState) submitAddSource() (commandResult, bool) {
 			a.addNote, a.addNoteBad = err.Error(), true
 			return commandResult{}, false
 		}
-		// P4 opens the page and says plainly that the media is still in the
-		// browser: an opened page is not a source, and handing the stream back
-		// is the extension step, which this build does not have.
+		// The page opens in the browser. The extension can send its media
+		// address back after the user selects it.
 		result, ok := a.openSiteAddress(a.addSiteText)
 		if !ok {
 			a.addNote, a.addNoteBad = result.Err.Error(), true
@@ -122,7 +121,7 @@ func (a *appState) submitAddSource() (commandResult, bool) {
 		// P2: the picker blocks until it is dismissed, so it runs off the
 		// drawing thread and comes back through acceptPickedFile.
 		if a.pickingFile {
-			a.addNote = "a file dialog is already open; finish it first"
+			a.addNote = a.tr("a file dialog is already open; finish it first", "请先关闭已打开的文件选择窗口。")
 			a.addNoteBad = false
 			return commandResult{}, false
 		}
@@ -130,7 +129,7 @@ func (a *appState) submitAddSource() (commandResult, bool) {
 		a.startFilePick()
 		return commandResult{}, true
 	}
-	a.addNote = "choose one of the three first"
+	a.addNote = a.tr("Choose a source type first.", "请先选择来源类型。")
 	a.addNoteBad = false
 	return commandResult{}, false
 }
@@ -204,11 +203,8 @@ func (a *appState) acceptPickedFile(path string, err error) {
 func (a *appState) openSiteAddress(text string) (commandResult, bool) {
 	address := strings.TrimSpace(text)
 	command := command{Kind: commandAdd, URI: address}
-	refuse := func(format string, args ...any) (commandResult, bool) {
-		return commandResult{Command: command, At: time.Now(), Err: fmt.Errorf(format, args...)}, false
-	}
-	if _, err := url.Parse(address); err != nil {
-		return refuse("%q is not an address a browser can open: %v", address, err)
+	if err := a.siteAddressProblem(address); err != nil {
+		return commandResult{Command: command, At: time.Now(), Err: err}, false
 	}
 	display := stripSecrets(address)
 	opener := a.openURL
@@ -216,7 +212,8 @@ func (a *appState) openSiteAddress(text string) (commandResult, bool) {
 		opener = a.contextOpenURL
 	}
 	if opener == nil {
-		return refuse("this build has no system browser to open %s", display)
+		err := fmt.Errorf(a.tr("this build has no system browser to open %s", "没有可用的系统浏览器来打开 %s。"), display)
+		return commandResult{Command: command, At: time.Now(), Err: err}, false
 	}
 	opener(address, func(err error) {
 		if err != nil {
@@ -230,7 +227,8 @@ func (a *appState) openSiteAddress(text string) (commandResult, bool) {
 	result := commandResult{
 		Command: command,
 		At:      time.Now(),
-		Message: fmt.Sprintf("opened %s in your browser; the MuxShift extension there can hand one media address back to this window", display),
+		Message: fmt.Sprintf(a.tr("opened %s in your browser; the MuxShift extension there can hand one media address back to this window",
+			"已在浏览器打开 %s。可用 MuxShift 扩展把媒体地址发送到此窗口。"), display),
 	}
 	a.report(result)
 	return result, true
@@ -286,15 +284,21 @@ func (a *appState) addSourcePanel(c *ui.Context) {
 		}
 		switch a.addChoice {
 		case addChoiceMedia:
-			a.field(c, &a.importText).WidthPercent(100).
+			field := a.field(c, &a.importText).WidthPercent(100).
 				Placeholder(`https://… .m3u8  or  C:\path\file.mp4`).
 				Invalid(a.addNoteBad)
+			if field.Submitted() {
+				a.submitAddSource()
+			}
 			ui.Text(c, a.tr("the media address or file path to read", "要读取的媒体地址或文件路径")).
 				FontSize(textMicro).FontWeight(400).TextColor(colorDim)
 		case addChoiceSite:
-			a.field(c, &a.addSiteText).WidthPercent(100).
+			field := a.field(c, &a.addSiteText).WidthPercent(100).
 				Placeholder("https://example.com/watch?v=…").
 				Invalid(a.addNoteBad)
+			if field.Submitted() {
+				a.submitAddSource()
+			}
 			ui.Text(c, a.tr("the page to open in your browser", "要在浏览器里打开的页面")).
 				FontSize(textMicro).FontWeight(400).TextColor(colorDim)
 		}
@@ -341,7 +345,7 @@ func (a *appState) siteAddressProblem(raw string) error {
 	}
 	u, err := url.Parse(text)
 	if err != nil {
-		return errors.New(a.tr("the address is not one a browser can open: ", "浏览器打不开这个地址：") + shortURI(text))
+		return errors.New(a.tr("the address is not one a browser can open", "浏览器打不开这个地址"))
 	}
 	switch u.Scheme {
 	case "http", "https":

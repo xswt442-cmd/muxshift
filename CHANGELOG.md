@@ -29,7 +29,8 @@ This changelog records completed changes that matter to someone using MuxShift. 
 - 同一个会话文件只允许一个窗口保存，避免旧窗口覆盖较新的舞台布置。
 - 离线来源保留待恢复的舞台摆位和音视频分配。
 - 启动优先打开当前舞台使用的来源。切走后停用新舞台不再使用的播放器。
-- 读取公网 HLS 播放列表时，重定向和子列表不能转到本地地址。
+- 检测公网媒体地址或探测 HLS 轨道时，会校验实际连接地址。桌面端拒绝超过 1 MiB 的 HLS 播放列表。
+- 选择清晰度或刷新来源后，清晰度菜单会收起。取消读取后，旧结果不会覆盖新菜单。
 - 舞台播放控制以当前舞台为范围，只有舞台包含活动同步组成员时才会控制该组。观看模式的播放按钮和空格键使用同一规则。
 - 浏览器扩展检测到换页或重载时会清空旧候选，并提示重新扫描。
 
@@ -56,7 +57,8 @@ This changelog records completed changes that matter to someone using MuxShift. 
 - Only one window can save a given session file, so an older window cannot overwrite a newer stage arrangement.
 - Unavailable sources retain pending stage placement and audio and video assignments.
 - Startup opens sources used by the current stage first. Stage changes stop players the new stage no longer uses.
-- Public HLS playlist reads block redirects and child playlists that point to local addresses.
+- Media detection and HLS track probes validate the connection address for public sources. The desktop rejects HLS playlists larger than 1 MiB.
+- Choosing a quality level or refreshing the source closes the quality menu. Canceled requests cannot overwrite the reopened menu.
 - Stage transport controls the current stage and includes the active sync group only when the stage has a member in that group. The viewing controls and Space shortcut use the same rule.
 - The extension clears old candidates and asks for a fresh scan when it detects a page change or reload.
 

@@ -1,5 +1,4 @@
 const list = document.getElementById("sources");
-const detailsList = document.getElementById("source-details");
 const notesList = document.getElementById("scan-notes");
 const page = document.getElementById("page");
 const importButton = document.getElementById("import");
@@ -15,6 +14,8 @@ let scannedTarget = null;
 let pairEpoch = 0;
 let handoffBusy = false;
 let candidateControls = [];
+let scanEpoch = 0;
+let nextAddressID = 0;
 
 const browserLang = (navigator.language || (navigator.languages && navigator.languages[0]) || "").toLowerCase();
 const lang = browserLang ? (browserLang.startsWith("zh") ? "zh" : "en") : "zh";
@@ -27,8 +28,9 @@ const STRINGS = {
     importButton: "发送所选地址",
     candidateHeading: (count) => `可选地址（${count}）`,
     selectionHint: "使用 Tab 定位候选地址，方向键选择；发送后在桌面「舞台 → 来源」确认是否打开。",
-    detailsTitle: "地址与扫描详情",
-    advancedMeta: "原始地址、页面来源和扫描说明。地址仅按用户选择发送；Cookie、请求头和受保护的媒体不会导出。",
+    detailsTitle: "扫描详情",
+    advancedMeta: "地址仅按用户选择发送。扩展不会导出 Cookie、请求头或受保护的媒体。",
+    fullAddress: (name) => `${name}的完整链接`,
     checking: "正在检查本机窗口…",
     readingTab: "正在读取当前标签页…",
     unknownPage: "未知页面",
@@ -74,8 +76,9 @@ const STRINGS = {
     importButton: "Send selected address",
     candidateHeading: (count) => `Available addresses (${count})`,
     selectionHint: "Use Tab to focus an address and the arrow keys to select it; after sending, check Stage → Sources to see whether it opened.",
-    detailsTitle: "Address and scan details",
-    advancedMeta: "Raw addresses, page sources, and scan notes. An address is sent only after you choose it; cookies, headers, and protected media are not exported.",
+    detailsTitle: "Scan details",
+    advancedMeta: "An address is sent only after you choose it. The extension does not export cookies, headers, or protected media.",
+    fullAddress: (name) => `Full link for ${name}`,
     checking: "checking the local window…",
     readingTab: "reading the active tab…",
     unknownPage: "unknown page",
@@ -175,22 +178,78 @@ function finishHandoff() {
   updateHandoffControls();
 }
 
-function discardStaleScan() {
+function clearCandidates() {
+  scanEpoch++;
   scannedTarget = null;
   selected = null;
-  setStatus(t("staleTab"), "bad");
+  handoffBusy = false;
+  candidateControls = [];
+  list.replaceChildren();
+  notesList.replaceChildren();
+  candidateHeading.textContent = t("candidateHeading", 0);
+  resolveButton.hidden = true;
   updateHandoffControls();
+}
+
+function discardStaleScan() {
+  clearCandidates();
+  setStatus(t("staleTab"), "bad");
+}
+
+function addCandidate(url, name, resolved = false) {
+  const item = document.createElement("li");
+  const row = document.createElement("div");
+  row.className = "candidate-row";
+  const label = document.createElement("label");
+  label.className = "candidate";
+  const radio = document.createElement("input");
+  radio.type = "radio";
+  radio.name = "candidate";
+  candidateControls.push(radio);
+  const text = document.createElement("span");
+  text.textContent = name;
+  label.append(radio, text);
+
+  const address = document.createElement("div");
+  address.className = "candidate-url";
+  address.id = `candidate-url-${++nextAddressID}`;
+  address.hidden = true;
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "address-toggle";
+  toggle.setAttribute("aria-label", t("fullAddress", name));
+  toggle.setAttribute("aria-controls", address.id);
+  toggle.setAttribute("aria-expanded", "false");
+  toggle.addEventListener("click", () => {
+    const open = address.hidden;
+    address.textContent = open ? url : "";
+    address.hidden = !open;
+    toggle.setAttribute("aria-expanded", String(open));
+  });
+  row.append(label, toggle);
+  item.append(row, address);
+
+  const select = () => {
+    selected = url;
+    for (const other of list.children) other.classList.toggle("selected", other === item);
+    updateHandoffControls();
+  };
+  radio.addEventListener("change", () => {
+    select();
+    setStatus("");
+  });
+  if (resolved) {
+    list.prepend(item);
+    radio.checked = true;
+    select();
+  } else {
+    list.append(item);
+  }
 }
 
 function render(scanned) {
   scannedTarget = scanned.tab ? { id: scanned.tab.id, url: scanned.tab.url, documentId: scanned.tab.documentId } : null;
   page.textContent = safePageAddress(scanned.tab?.url || scanned.page?.url || "");
-  list.textContent = "";
-  detailsList.textContent = "";
-  notesList.textContent = "";
-  selected = null;
-  candidateControls = [];
-  updateHandoffControls();
 
   const live = liveLabel(scanned.tab?.url || "");
   resolveButton.hidden = !live;
@@ -202,39 +261,9 @@ function render(scanned) {
   const signatureCounts = new Map();
   for (const signature of signatures) signatureCounts.set(signature, (signatureCounts.get(signature) || 0) + 1);
   sources.forEach((source, index) => {
-    const item = document.createElement("li");
-    const label = document.createElement("label");
-    label.className = "candidate";
-    const radio = document.createElement("input");
-    radio.type = "radio";
-    radio.name = "candidate";
-    radio.value = String(index);
-    const text = document.createElement("span");
-    text.textContent = candidateLabel(source, index, signatureCounts.get(signatures[index]) > 1);
-    candidateControls.push(radio);
-    label.append(radio, text);
-    radio.addEventListener("change", () => {
-      selected = source.url;
-      for (const other of list.children) other.classList.toggle("selected", other === item);
-      updateHandoffControls();
-      setStatus("");
-    });
-    item.append(label);
-    list.append(item);
-
-    const detail = document.createElement("li");
-    const kind = document.createElement("div");
-    kind.className = "kind";
-    kind.textContent = source.kind;
-    const url = document.createElement("div");
-    url.className = "url";
-    url.textContent = source.url;
-    const from = document.createElement("div");
-    from.className = "from";
-    from.textContent = source.from;
-    detail.append(kind, url, from);
-    detailsList.append(detail);
+    addCandidate(source.url, candidateLabel(source, index, signatureCounts.get(signatures[index]) > 1));
   });
+  updateHandoffControls();
 
   for (const note of scanned.notes || []) {
     const element = document.createElement("div");
@@ -271,46 +300,16 @@ function liveLabel(url) {
 }
 
 function offer(reply) {
-  const source = { url: reply.url, kind: "hls", from: t("resolvedFrom") };
-  const item = document.createElement("li");
-  const label = document.createElement("label");
-  label.className = "candidate";
-  const radio = document.createElement("input");
-  radio.type = "radio";
-  radio.name = "candidate";
-  radio.value = "resolved";
-  radio.checked = true;
-  radio.disabled = handoffBusy;
-  candidateControls.push(radio);
-  const text = document.createElement("span");
-  text.textContent = t("liveKind");
-  label.append(radio, text);
-  item.append(label);
-  radio.addEventListener("change", () => { selected = source.url; });
-  for (const other of list.children) other.classList.remove("selected");
-  item.classList.add("selected");
-  list.prepend(item);
-  selected = source.url;
-  updateHandoffControls();
-
-  const detail = document.createElement("li");
-  const kind = document.createElement("div");
-  kind.className = "kind";
-  kind.textContent = t("liveKind");
-  const url = document.createElement("div");
-  url.className = "url";
-  url.textContent = source.url;
-  const from = document.createElement("div");
-  from.className = "from";
-  from.textContent = source.from;
-  detail.append(kind, url, from);
-  detailsList.prepend(detail);
+  const name = [t("candidate", list.children.length + 1), t("liveKind"), t("resolvedFrom")].join(" · ");
+  addCandidate(reply.url, name, true);
   candidateHeading.textContent = t("candidateHeading", list.children.length);
 }
 
 function sendAddress(url, done) {
+  const epoch = scanEpoch;
   setStatus(t("sending"));
   chrome.runtime.sendMessage({ type: "import", url, target: scannedTarget }, (reply) => {
+    if (epoch !== scanEpoch) return;
     if (chrome.runtime.lastError) {
       setStatus(t("sendFailed"), "bad");
       if (done) done();
@@ -343,10 +342,12 @@ function sendAddress(url, done) {
 
 resolveButton.addEventListener("click", () => {
   if (handoffBusy) return;
+  const epoch = scanEpoch;
   handoffBusy = true;
   updateHandoffControls();
   setStatus(t("resolving"));
   chrome.runtime.sendMessage({ type: "resolve", target: scannedTarget }, (reply) => {
+    if (epoch !== scanEpoch) return;
     if (chrome.runtime.lastError) {
       setStatus(t("scanFailed"), "bad");
       finishHandoff();
@@ -368,6 +369,8 @@ resolveButton.addEventListener("click", () => {
 });
 
 function start() {
+  clearCandidates();
+  const scan = scanEpoch;
   const epoch = pairEpoch;
   chrome.runtime.sendMessage({ type: "status" }, (reply) => {
     if (pairEpoch !== epoch) return;
@@ -382,6 +385,7 @@ function start() {
     }
   });
   chrome.runtime.sendMessage({ type: "scan" }, (reply) => {
+    if (scan !== scanEpoch) return;
     if (reply?.failure === "stale-tab") {
       discardStaleScan();
       return;
@@ -393,6 +397,18 @@ function start() {
     render(reply || {});
   });
 }
+
+chrome.tabs.onUpdated.addListener((tabID, change) => {
+  if (tabID === scannedTarget?.id && (change.status === "loading" || (change.url && change.url !== scannedTarget.url))) {
+    discardStaleScan();
+  }
+});
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  if (scannedTarget && tabId !== scannedTarget.id) discardStaleScan();
+});
+chrome.tabs.onRemoved.addListener((tabID) => {
+  if (tabID === scannedTarget?.id) discardStaleScan();
+});
 
 pairButton.addEventListener("click", () => {
   const typed = code.value.trim();

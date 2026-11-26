@@ -51,6 +51,13 @@
         gap: 8px;
         min-height: 20px;
         cursor: pointer;
+        flex: 1;
+        min-width: 0;
+      }
+      .candidate-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
       }
       .candidate input {
         flex: 0 0 auto;
@@ -63,21 +70,32 @@
       .candidate span {
         overflow-wrap: anywhere;
       }
-      .kind {
-        color: #8fb3ff;
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-      }
-      .url {
-        word-break: break-all;
+      .candidate-url {
+        overflow-wrap: anywhere;
         font-family: ui-monospace, monospace;
         font-size: 11px;
-        margin-top: 2px;
+        margin-top: 6px;
+        padding: 6px;
+        border: 1px solid #3a4150;
+        border-radius: 4px;
+        background: #16181c;
+        user-select: text;
       }
-      .from {
-        color: #7d838d;
-        font-size: 11px;
+      .candidate-row .address-toggle {
+        flex: 0 0 26px;
+        width: 26px;
+        min-height: 24px;
+        padding: 0;
+      }
+      .address-toggle::before {
+        content: "▸";
+      }
+      .address-toggle[aria-expanded="true"]::before {
+        content: "▾";
+      }
+      .address-toggle:focus-visible {
+        outline: 2px solid #8fb3ff;
+        outline-offset: 2px;
       }
       .note {
         color: #c9a227;
@@ -174,7 +192,6 @@
       <summary id="details-title">地址与扫描详情</summary>
       <div class="meta" id="advanced-meta"></div>
       <div id="scan-notes"></div>
-      <ul id="source-details"></ul>
     </details>
     <script src="popup.js"></script>
   </body>

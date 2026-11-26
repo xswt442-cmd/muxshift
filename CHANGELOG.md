@@ -14,6 +14,7 @@ This changelog records completed changes that matter to someone using MuxShift. 
 - 各舞台可从共享目录添加已有来源。解除一个舞台的引用后，其他舞台仍可使用该来源。
 - 自由布局可摆放所有已显示的画面。选中来源后可直接拖移、缩放或锁定摆位。
 - 来源可单独刷新。支持多个可播档位的直播主播放列表可逐路选择清晰度。
+- 浏览器扩展的候选地址可以逐条展开，复制完整链接后可在桌面端手动添加。
 
 **改进**
 
@@ -30,7 +31,7 @@ This changelog records completed changes that matter to someone using MuxShift. 
 - 启动优先打开当前舞台使用的来源。切走后停用新舞台不再使用的播放器。
 - 读取公网 HLS 播放列表时，重定向和子列表不能转到本地地址。
 - 舞台播放控制以当前舞台为范围，只有舞台包含活动同步组成员时才会控制该组。观看模式的播放按钮和空格键使用同一规则。
-- 浏览器扩展在解析期间遇到换页或重载时会提示重新扫描，并禁用旧候选。
+- 浏览器扩展检测到换页或重载时会清空旧候选，并提示重新扫描。
 
 ### English
 
@@ -40,6 +41,7 @@ This changelog records completed changes that matter to someone using MuxShift. 
 - Each stage can add existing sources from the shared catalog. Unlinking a source from one stage leaves it available to other stages.
 - Free layout places every shown picture. Select a source to move, resize, or lock its position directly.
 - Refresh sources individually. A live master playlist with multiple playable variants offers a per-source quality choice.
+- Expand any candidate in the browser extension to copy its full link for manual import in the desktop app.
 
 **Improved**
 
@@ -56,7 +58,7 @@ This changelog records completed changes that matter to someone using MuxShift. 
 - Startup opens sources used by the current stage first. Stage changes stop players the new stage no longer uses.
 - Public HLS playlist reads block redirects and child playlists that point to local addresses.
 - Stage transport controls the current stage and includes the active sync group only when the stage has a member in that group. The viewing controls and Space shortcut use the same rule.
-- The extension asks for a fresh scan and disables old candidates when a page changes or reloads during resolution.
+- The extension clears old candidates and asks for a fresh scan when it detects a page change or reload.
 
 ## [0.0.4] - 2026-11-22
 

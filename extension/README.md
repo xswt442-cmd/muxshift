@@ -7,8 +7,10 @@ never copies cookies, request headers, or keys.
 ## What it does
 
 - The popup scans the active tab after a click and shows ordinary candidates in
-  its main view. A keyboard-operable radio list selects the candidate; raw URLs,
-  source labels, and scan notes stay in the collapsed details section.
+  its main view. Use the radio list to select an address. Open the arrow at the
+  end of an ordinary or resolved address row to see and copy its full link.
+  You can focus the arrow with Tab and open it with Enter or Space. Scan notes
+  are in **Scan details**.
 - Pressing **Send selected address** sends
   `{url: ...}` to the window's own loopback listener, `POST http://127.0.0.1:8731/import`,
   with the window's token in `X-MuxShift-Handoff`. On supported live pages,
@@ -19,7 +21,7 @@ never copies cookies, request headers, or keys.
   acceptance; acceptance means the desktop accepted the import command, not
   that the media opened. Check Stage → Sources for its status and any later failure.
 - Resolve and send use the scanned active page. If the tab switches, navigates,
-  or reloads, the popup disables the old selection and asks you to reopen it
+  or reloads, the popup clears the old candidates and asks you to reopen it
   for a fresh scan.
 
 There is no native messaging host. The window prints a six-digit pairing code

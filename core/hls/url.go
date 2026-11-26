@@ -1,13 +1,14 @@
 package hls
 
 import (
+	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
 
 	"github.com/xswt442-cmd/muxshift/core"
+	"github.com/xswt442-cmd/muxshift/internal/netguard"
 )
 
 // checkURI accepts an absolute http or https address without user information.
@@ -20,7 +21,7 @@ func checkURI(raw string) (*url.URL, error) {
 	}
 	u, err := url.Parse(trimmed)
 	if err != nil {
-		return nil, fmt.Errorf("%w: parse URI: %v", core.ErrInvalid, err)
+		return nil, fmt.Errorf("%w: address has invalid URL syntax", core.ErrInvalid)
 	}
 	switch strings.ToLower(u.Scheme) {
 	case "http", "https":
@@ -42,23 +43,12 @@ func checkURI(raw string) (*url.URL, error) {
 // public may not be sent to a loopback, private, link-local or unspecified
 // address by the remote server.
 func redirectAllowed(req *http.Request, via []*http.Request) error {
-	if len(via) >= maxRedirects {
-		return fmt.Errorf("%w: more than %d redirects", core.ErrInvalid, maxRedirects)
-	}
-	target := req.URL
-	switch strings.ToLower(target.Scheme) {
-	case "http", "https":
-	default:
-		return fmt.Errorf("%w: redirect to scheme %q", core.ErrInvalid, target.Scheme)
-	}
-	if target.User != nil {
+	err := netguard.CheckRedirect(req, via)
+	if errors.Is(err, netguard.ErrCredentials) {
 		return core.ErrCredentialsInURI
 	}
-	if len(via) == 0 || isLocalHost(via[0].URL.Hostname()) {
-		return nil
-	}
-	if isLocalHost(target.Hostname()) {
-		return fmt.Errorf("%w: redirect from public host %s to local address %s", core.ErrInvalid, via[0].URL.Hostname(), target.Hostname())
+	if err != nil {
+		return fmt.Errorf("%w: %v", core.ErrInvalid, err)
 	}
 	return nil
 }
@@ -66,11 +56,5 @@ func redirectAllowed(req *http.Request, via []*http.Request) error {
 // isLocalHost reports a hostname that names the local machine or a private
 // network: what a public server must not redirect a request into.
 func isLocalHost(host string) bool {
-	trimmed := strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
-	if ip := net.ParseIP(trimmed); ip != nil {
-		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
-			ip.IsLinkLocalMulticast() || ip.IsUnspecified()
-	}
-	lowered := strings.ToLower(trimmed)
-	return lowered == "localhost" || strings.HasSuffix(lowered, ".localhost")
+	return netguard.LocalHost(host)
 }

@@ -2,12 +2,62 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+func TestPlaylistRejectsOversizedBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "#EXTM3U\n", strings.Repeat("A", playlistReadLimit))
+	}))
+	defer server.Close()
+	if _, _, err := fetchPlaylist(context.Background(), " "+server.URL+" ", true); err == nil ||
+		!strings.Contains(err.Error(), "playlist limit") {
+		t.Fatalf("oversized playlist returned %v", err)
+	}
+}
+
+func TestParseVariantsDoesNotBorrowFromIncompleteEntry(t *testing.T) {
+	text := "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=4000000,RESOLUTION=1920x1080\n" +
+		"#EXT-X-STREAM-INF:BANDWIDTH=1000000,RESOLUTION=640x360\nlow.m3u8\n"
+	variants, err := parseVariants("https://example.test/master.m3u8", text)
+	if err != nil || len(variants) != 1 || variants[0].height != 360 {
+		t.Fatalf("parsed variants = %v, error = %v", variants, err)
+	}
+	if hasSeparateAudioRendition("#EXT-X-MEDIA:TYPE=AUDIO,NAME=\"label URI=example\"") {
+		t.Fatal("a label was mistaken for a separate audio URI")
+	}
+}
+
+func TestPlaylistRejectsRootWithoutMedia(t *testing.T) {
+	for _, text := range []string{
+		"#EXTM3U\n#EXT-X-TARGETDURATION:6\n",
+		"#EXTM3U\n#EXT-X-I-FRAME-STREAM-INF:BANDWIDTH=1000,URI=\"iframe.m3u8\"\n",
+	} {
+		if err := validateRootPlaylist(text); err == nil {
+			t.Fatalf("non-media root accepted: %q", text)
+		}
+	}
+}
+
+func TestPlaylistErrorChainDoesNotRetainCredentials(t *testing.T) {
+	detail := "SOCKS5://user:private@proxy.test:1080?key=secret#fragment"
+	err := playlistFailure("could not read media", fmt.Errorf("%s: %w", detail, context.DeadlineExceeded))
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("deadline cause was lost: %v", err)
+	}
+	for cause := err; cause != nil; cause = errors.Unwrap(cause) {
+		for _, secret := range []string{"private", "secret", "fragment"} {
+			if strings.Contains(cause.Error(), secret) {
+				t.Fatalf("the media error chain carried %q", secret)
+			}
+		}
+	}
+}
 
 func TestInspectLivePlaylistListsUsableDeclaredVariants(t *testing.T) {
 	requests := map[string]int{}
@@ -33,10 +83,10 @@ func TestInspectLivePlaylistListsUsableDeclaredVariants(t *testing.T) {
 	if inspection.kind != liveMasterPlaylist || len(inspection.variants) != 2 {
 		t.Fatalf("kind=%v variants=%+v; want master with two usable variants", inspection.kind, inspection.variants)
 	}
-	if inspection.variants[0].width != 640 || inspection.variants[0].height != 360 || inspection.variants[0].bandwidth != 900000 {
+	if inspection.variants[0].width != 1280 || inspection.variants[0].height != 720 || inspection.variants[0].bandwidth != 2400000 {
 		t.Fatalf("first variant metadata = %+v", inspection.variants[0])
 	}
-	if inspection.variants[1].width != 1280 || inspection.variants[1].height != 720 || inspection.variants[1].bandwidth != 2400000 {
+	if inspection.variants[1].width != 640 || inspection.variants[1].height != 360 || inspection.variants[1].bandwidth != 900000 {
 		t.Fatalf("second variant metadata = %+v", inspection.variants[1])
 	}
 	if !strings.HasSuffix(inspection.role.address, "/720.m3u8?token=secret") {

@@ -111,12 +111,12 @@ func Read(ctx context.Context, rawURL string, opts Options) (Info, error) {
 
 	parsed, err := playlist.Unmarshal(body)
 	if err != nil {
-		return Info{}, fmt.Errorf("parse playlist %s: %w", finalURL.Redacted(), core.ErrInvalid)
+		return Info{}, fmt.Errorf("parse playlist %s: %w", StripAddress(finalURL.String()), core.ErrInvalid)
 	}
 
 	media, ok := parsed.(*playlist.Media)
 	if !ok {
-		return Info{URI: finalURL.Redacted(), Kind: KindMaster}, fmt.Errorf("%w: %s", ErrMasterPlaylist, finalURL.Redacted())
+		return Info{URI: finalURL.Redacted(), Kind: KindMaster}, fmt.Errorf("%w: %s", ErrMasterPlaylist, StripAddress(finalURL.String()))
 	}
 
 	return describe(finalURL, media)
@@ -127,26 +127,27 @@ func Read(ctx context.Context, rawURL string, opts Options) (Info, error) {
 func fetchPlaylist(ctx context.Context, endpoint *url.URL, opts Options) ([]byte, *url.URL, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: build request: %v", core.ErrInvalid, err)
+		return nil, nil, fmt.Errorf("%w: could not build a playlist request", core.ErrInvalid)
 	}
 	req.Header.Set("Accept", "application/vnd.apple.mpegurl, application/x-mpegURL, */*")
 
-	resp, err := opts.client().Do(req)
+	address := StripAddress(endpoint.String())
+	resp, err := opts.client(endpoint).Do(req)
 	if err != nil {
-		return nil, nil, fmt.Errorf("read playlist %s: %w", endpoint.Redacted(), err)
+		return nil, nil, readFailure("read playlist "+address, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, nil, fmt.Errorf("%w: %s answered %s", ErrResponse, endpoint.Redacted(), resp.Status)
+		return nil, nil, fmt.Errorf("%w: %s answered %d %s", ErrResponse, address, resp.StatusCode, http.StatusText(resp.StatusCode))
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPlaylistSize+1))
 	if err != nil {
-		return nil, nil, fmt.Errorf("read playlist %s: %w", endpoint.Redacted(), err)
+		return nil, nil, readFailure("read playlist "+address, err)
 	}
 	if len(body) > maxPlaylistSize {
-		return nil, nil, fmt.Errorf("%w: %s", ErrPlaylistTooLarge, endpoint.Redacted())
+		return nil, nil, fmt.Errorf("%w: %s", ErrPlaylistTooLarge, address)
 	}
 	return body, resp.Request.URL, nil
 }

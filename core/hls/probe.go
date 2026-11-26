@@ -86,7 +86,7 @@ func Probe(ctx context.Context, rawURL string, opts Options) (Stream, error) {
 
 	client := &gohlslib.Client{
 		URI:           endpoint.String(),
-		HTTPClient:    opts.client(),
+		HTTPClient:    opts.client(endpoint),
 		StartDistance: opts.StartDistance,
 		MaxDistance:   opts.MaxDistance,
 	}
@@ -94,7 +94,7 @@ func Probe(ctx context.Context, rawURL string, opts Options) (Stream, error) {
 		return state.onTracks(client, tracks)
 	}
 	if err := client.Start(); err != nil {
-		return Stream{}, fmt.Errorf("start hls client for %s: %w", endpoint.Redacted(), err)
+		return Stream{}, readFailure("start hls client for "+StripAddress(endpoint.String()), err)
 	}
 	defer client.Close()
 
@@ -107,11 +107,11 @@ func Probe(ctx context.Context, rawURL string, opts Options) (Stream, error) {
 	select {
 	case <-state.ready:
 	case err := <-settled:
-		return Stream{}, fmt.Errorf("read %s: %w", endpoint.Redacted(), err)
+		return Stream{}, readFailure("read "+StripAddress(endpoint.String()), err)
 	case <-ctx.Done():
 		return Stream{}, ctx.Err()
 	case <-timer.C:
-		return Stream{}, fmt.Errorf("%w: %s", ErrTimeout, endpoint.Redacted())
+		return Stream{}, fmt.Errorf("%w: %s", ErrTimeout, StripAddress(endpoint.String()))
 	}
 
 	stream := Stream{URI: endpoint.Redacted(), Playlist: info, Tracks: state.snapshot()}
@@ -125,7 +125,7 @@ func Probe(ctx context.Context, rawURL string, opts Options) (Stream, error) {
 		}
 	}
 	if len(stream.Tracks) == 0 {
-		return Stream{}, fmt.Errorf("%w: %s", ErrNoTracks, endpoint.Redacted())
+		return Stream{}, fmt.Errorf("%w: %s", ErrNoTracks, StripAddress(endpoint.String()))
 	}
 	return stream, nil
 }

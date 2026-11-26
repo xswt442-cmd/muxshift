@@ -1,9 +1,25 @@
 package hls
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
+
+func TestReadFailureDoesNotRetainSignedAddress(t *testing.T) {
+	original := fmt.Errorf("连接 SOCKS5://user:proxysecret@[::1]:1080 failed when reading https://example.test/seg.ts?token=secret: %w", context.Canceled)
+	err := readFailure("could not read media", original)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation cause was lost: %v", err)
+	}
+	for cause := err; cause != nil; cause = errors.Unwrap(cause) {
+		if strings.Contains(cause.Error(), "secret") {
+			t.Fatal("the error chain retained a credential")
+		}
+	}
+}
 
 // A signed address names one stream for one reader; what identifies the stream
 // is scheme, host and path, and what explains a failure is the reason.

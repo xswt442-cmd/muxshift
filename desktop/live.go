@@ -8,17 +8,19 @@ package main
 // this build has nothing to fetch the key with.
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/xswt442-cmd/muxshift/internal/netguard"
 )
 
 const (
@@ -51,7 +53,14 @@ func playlistFailure(message string, cause error) error {
 	if errors.As(cause, &addressErr) {
 		cause = addressErr.Err
 	}
-	return playlistReadError{message: redactSecrets(message + ": " + cause.Error()), cause: cause}
+	var safeCause error
+	for _, known := range []error{context.Canceled, context.DeadlineExceeded, errProtectedPlaylist, netguard.ErrDestination} {
+		if errors.Is(cause, known) {
+			safeCause = known
+			break
+		}
+	}
+	return playlistReadError{message: redactSecrets(message + ": " + cause.Error()), cause: safeCause}
 }
 
 // playlistRole is what a handed-over playlist turned out to be.
@@ -106,7 +115,7 @@ func inspectPlaylist(ctx context.Context, rawURL string) (playlistRole, error) {
 	if err := validateRootPlaylist(text); err != nil {
 		return playlistRole{}, err
 	}
-	if !strings.Contains(text, "#EXT-X-STREAM-INF:") {
+	if !playlistHasTag(text, "#EXT-X-STREAM-INF:") {
 		return playlistRole{address: playlistURL, live: !hasEnd(text)}, nil
 	}
 	variants, err := parseVariants(playlistURL, text)
@@ -131,7 +140,7 @@ func inspectLivePlaylist(ctx context.Context, rawURL string) (livePlaylistInspec
 	if err := validateRootPlaylist(text); err != nil {
 		return livePlaylistInspection{}, err
 	}
-	if !strings.Contains(text, "#EXT-X-STREAM-INF:") {
+	if !playlistHasTag(text, "#EXT-X-STREAM-INF:") {
 		return livePlaylistInspection{
 			kind: liveMediaPlaylist,
 			role: playlistRole{address: playlistURL, live: !hasEnd(text)},
@@ -152,6 +161,9 @@ func inspectLivePlaylist(ctx context.Context, rawURL string) (livePlaylistInspec
 		}
 		checked, fetchErr := inspectDeclaredVariant(ctx, variant, allowLocal)
 		if fetchErr != nil {
+			if errors.Is(fetchErr, context.DeadlineExceeded) {
+				return livePlaylistInspection{}, fetchErr
+			}
 			if err := ctx.Err(); err != nil {
 				break
 			}
@@ -165,13 +177,10 @@ func inspectLivePlaylist(ctx context.Context, rawURL string) (livePlaylistInspec
 			usable = append(usable, checked)
 		}
 	}
-	if errors.Is(ctx.Err(), context.Canceled) {
+	if ctx.Err() != nil {
 		return livePlaylistInspection{}, ctx.Err()
 	}
 	if len(usable) == 0 {
-		if err := ctx.Err(); err != nil {
-			return livePlaylistInspection{}, err
-		}
 		if protectedErr != nil {
 			return livePlaylistInspection{}, protectedErr
 		}
@@ -180,7 +189,7 @@ func inspectLivePlaylist(ctx context.Context, rawURL string) (livePlaylistInspec
 	chosen := chooseVariant(usable)
 	return livePlaylistInspection{
 		kind:     liveMasterPlaylist,
-		role:     playlistRole{address: chosen.address, live: chosen.live},
+		role:     playlistRole{address: chosen.address, master: playlistURL, live: chosen.live},
 		variants: usable,
 	}, nil
 }
@@ -191,6 +200,9 @@ func validateRootPlaylist(text string) error {
 	}
 	if hasSeparateAudioRendition(text) {
 		return fmt.Errorf("the master uses a separate audio rendition; this build opens streams with muxed audio only")
+	}
+	if !playlistHasTag(text, "#EXT-X-STREAM-INF:") && !isMediaPlaylist(text) {
+		return errors.New("the playlist contains no playable media")
 	}
 	return nil
 }
@@ -203,8 +215,7 @@ func inspectDeclaredVariant(ctx context.Context, variant liveVariant, allowLocal
 	if method := protectedMethod(child); method != "" {
 		return liveVariant{}, protected(method)
 	}
-	if strings.Contains(child, "#EXT-X-STREAM-INF:") || strings.Contains(child, "#EXT-X-I-FRAME-STREAM-INF:") ||
-		hasSeparateAudioRendition(child) || (!strings.Contains(child, "#EXTINF:") && !strings.Contains(child, "#EXT-X-PART:")) {
+	if playlistHasTag(child, "#EXT-X-STREAM-INF:") || hasSeparateAudioRendition(child) || !isMediaPlaylist(child) {
 		return liveVariant{}, fmt.Errorf("declared variant is not a muxed media playlist")
 	}
 	variant.address = childURL
@@ -213,29 +224,38 @@ func inspectDeclaredVariant(ctx context.Context, variant liveVariant, allowLocal
 }
 
 func orderedVariantChecks(variants []liveVariant, limit int) []liveVariant {
-	if len(variants) <= limit {
-		return variants
-	}
 	ordered := slices.Clone(variants)
-	for i := 0; i < limit; i++ {
-		best := i
-		for j := i + 1; j < len(ordered); j++ {
-			if ordered[j].height > ordered[best].height ||
-				(ordered[j].height == ordered[best].height && ordered[j].bandwidth > ordered[best].bandwidth) {
-				best = j
-			}
-		}
-		ordered[i], ordered[best] = ordered[best], ordered[i]
-	}
-	return ordered[:limit]
+	slices.SortStableFunc(ordered, func(a, b liveVariant) int {
+		return cmp.Or(cmp.Compare(b.height, a.height), cmp.Compare(b.bandwidth, a.bandwidth))
+	})
+	return ordered[:min(limit, len(ordered))]
 }
 
 func protected(method string) error {
-	return fmt.Errorf("%w with %s; this build does not fetch the key that would read it", errProtectedPlaylist, method)
+	return fmt.Errorf("%w with %s", errProtectedPlaylist, redactSecrets(method))
 }
 
 func hasEnd(text string) bool {
-	return strings.Contains(text, "#EXT-X-ENDLIST")
+	for line := range strings.SplitSeq(text, "\n") {
+		if strings.TrimSpace(line) == "#EXT-X-ENDLIST" {
+			return true
+		}
+	}
+	return false
+}
+
+func playlistHasTag(text, tag string) bool {
+	for line := range strings.SplitSeq(text, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), tag) {
+			return true
+		}
+	}
+	return false
+}
+
+func isMediaPlaylist(text string) bool {
+	return !playlistHasTag(text, "#EXT-X-I-FRAME-STREAM-INF:") &&
+		(playlistHasTag(text, "#EXTINF:") || playlistHasTag(text, "#EXT-X-PART:"))
 }
 
 // hasSeparateAudioRendition reports a master that points at an audio playlist
@@ -243,10 +263,8 @@ func hasEnd(text string) bool {
 // plus a separate audio rendition would silently lose the sound.
 func hasSeparateAudioRendition(text string) bool {
 	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "#EXT-X-MEDIA:") &&
-			strings.Contains(line, "TYPE=AUDIO") &&
-			strings.Contains(line, "URI=") {
+		attrs, ok := strings.CutPrefix(strings.TrimSpace(line), "#EXT-X-MEDIA:")
+		if ok && attribute(attrs, "TYPE") == "AUDIO" && attribute(attrs, "URI") != "" {
 			return true
 		}
 	}
@@ -256,6 +274,7 @@ func hasSeparateAudioRendition(text string) bool {
 // fetchPlaylist reads one playlist body and refuses anything that is not one,
 // so a page that answers with an error page cannot be mistaken for a stream.
 func fetchPlaylist(ctx context.Context, rawURL string, allowLocal bool) (string, string, error) {
+	rawURL = strings.TrimSpace(rawURL)
 	if err := validatePlaylistURL(rawURL); err != nil {
 		return "", "", fmt.Errorf("%s is not an address this build can read: %w", shortURI(rawURL), err)
 	}
@@ -264,24 +283,25 @@ func fetchPlaylist(ctx context.Context, rawURL string, allowLocal bool) (string,
 		return "", "", playlistFailure("playlist request could not be created", err)
 	}
 	request.Header.Set("Accept", "application/vnd.apple.mpegurl, application/x-mpegURL, */*")
-	client := &http.Client{
-		Timeout: playlistTimeout, CheckRedirect: playlistRedirectAllowed,
-		Transport: playlistTransport{allowLocal: allowLocal && isLocalPlaylistURL(rawURL)},
-	}
+	client := netguard.Client(playlistTimeout, allowLocal && isLocalPlaylistURL(rawURL))
 	response, err := client.Do(request)
 	if err != nil {
 		return "", "", playlistFailure(shortURI(rawURL)+" could not be read", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode > 299 {
-		return "", "", fmt.Errorf("%s answered %s", shortURI(rawURL), response.Status)
+		return "", "", fmt.Errorf("%s answered %d %s", shortURI(rawURL), response.StatusCode, http.StatusText(response.StatusCode))
 	}
-	body, err := io.ReadAll(io.LimitReader(response.Body, playlistReadLimit))
+	body, err := io.ReadAll(io.LimitReader(response.Body, playlistReadLimit+1))
 	if err != nil {
 		return "", "", playlistFailure(shortURI(rawURL)+" stopped while being read", err)
 	}
+	if len(body) > playlistReadLimit {
+		return "", "", fmt.Errorf("%s exceeded the %d-byte playlist limit", shortURI(rawURL), playlistReadLimit)
+	}
 	text := strings.TrimPrefix(string(body), "\ufeff")
-	if !strings.HasPrefix(strings.TrimSpace(text), "#EXTM3U") {
+	header, _, _ := strings.Cut(strings.TrimSpace(text), "\n")
+	if strings.TrimSpace(header) != "#EXTM3U" {
 		return "", "", fmt.Errorf("%s answered with something that is not a playlist", shortURI(rawURL))
 	}
 	finalURL := rawURL
@@ -299,44 +319,12 @@ func validatePlaylistURL(raw string) error {
 	if err != nil {
 		return fmt.Errorf("address has invalid URL syntax")
 	}
-	if !strings.EqualFold(u.Scheme, "http") && !strings.EqualFold(u.Scheme, "https") {
-		return fmt.Errorf("only http and https addresses can be opened")
-	}
-	if u.Hostname() == "" || u.User != nil {
-		return fmt.Errorf("address must have a host and no embedded credentials")
-	}
-	return nil
-}
-
-func playlistRedirectAllowed(request *http.Request, via []*http.Request) error {
-	if len(via) >= 10 {
-		return fmt.Errorf("too many playlist redirects")
-	}
-	if err := validatePlaylistURL(request.URL.String()); err != nil {
-		return err
-	}
-	if localPlaylistHost(request.URL.Hostname()) {
-		for _, previous := range via {
-			if !localPlaylistHost(previous.URL.Hostname()) {
-				return fmt.Errorf("playlist redirect from a public host to a local address is refused")
-			}
-		}
-	}
-	return nil
+	return netguard.ValidateURL(u)
 }
 
 func isLocalPlaylistURL(raw string) bool {
-	u, err := url.Parse(raw)
-	return err == nil && localPlaylistHost(u.Hostname())
-}
-
-func localPlaylistHost(host string) bool {
-	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
-	if ip := net.ParseIP(host); ip != nil {
-		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
-	}
-	host = strings.ToLower(host)
-	return host == "localhost" || strings.HasSuffix(host, ".localhost")
+	u, err := url.Parse(strings.TrimSpace(raw))
+	return err == nil && netguard.LocalHost(u.Hostname())
 }
 
 // pickVariant chooses the media playlist to open from a master playlist. A
@@ -354,7 +342,7 @@ func pickVariant(baseURL, text string) (string, error) {
 func parseVariants(baseURL, text string) ([]liveVariant, error) {
 	base, err := url.Parse(baseURL)
 	if err != nil {
-		return nil, fmt.Errorf("%s is not an address this build can read: %w", shortURI(baseURL), err)
+		return nil, fmt.Errorf("%s is not an address this build can read", shortURI(baseURL))
 	}
 	var variants []liveVariant
 	lines := strings.Split(text, "\n")
@@ -370,6 +358,9 @@ func parseVariants(baseURL, text string) ([]liveVariant, error) {
 		uri := ""
 		for next := index + 1; next < len(lines); next++ {
 			candidate := strings.TrimSpace(lines[next])
+			if strings.HasPrefix(candidate, "#EXT") {
+				break
+			}
 			if candidate == "" || strings.HasPrefix(candidate, "#") {
 				continue
 			}

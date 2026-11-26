@@ -1,6 +1,13 @@
 package hls
 
-import "strings"
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/xswt442-cmd/muxshift/core"
+)
 
 // A stream can be signed: the address carries a token in its query, a key in its
 // fragment, or a credential in its user info. Those parts let one reader fetch
@@ -26,7 +33,7 @@ func StripAddress(address string) string {
 	return address
 }
 
-// Redact removes the same parts from every http(s) address inside a piece of
+// Redact removes the same parts from every HTTP or SOCKS address inside a piece of
 // text, so an error written by an HTTP client — which quotes the address it
 // could not reach — can be kept whole without keeping the secret.
 func Redact(text string) string {
@@ -38,7 +45,7 @@ func Redact(text string) string {
 			break
 		}
 		end := start
-		for end < len(rest) && !strings.ContainsRune(" \t\r\n\"'<>()[]", rune(rest[end])) {
+		for end < len(rest) && !strings.ContainsRune(" \t\r\n\"'<>()", rune(rest[end])) {
 			end++
 		}
 		out.WriteString(rest[:start])
@@ -49,13 +56,32 @@ func Redact(text string) string {
 	return out.String()
 }
 
-// indexAddress finds the next http or https address in text, or -1.
+// indexAddress finds the next HTTP or SOCKS address in text, or -1.
 func indexAddress(text string) int {
-	best := -1
-	for _, prefix := range []string{"http://", "https://"} {
-		if at := strings.Index(text, prefix); at >= 0 && (best < 0 || at < best) {
-			best = at
+	for i := range len(text) {
+		switch text[i] {
+		case 'h', 'H', 's', 'S':
+			for _, prefix := range []string{"http://", "https://", "socks5://", "socks5h://"} {
+				if len(text)-i >= len(prefix) && strings.EqualFold(text[i:i+len(prefix)], prefix) {
+					return i
+				}
+			}
 		}
 	}
-	return best
+	return -1
+}
+
+// readFailure retains known causes without exposing an original transport
+// error that can carry a signed URL in its unwrap chain.
+func readFailure(message string, err error) error {
+	if err == nil {
+		return errors.New(message + ": media ended before the probe was ready")
+	}
+	text := Redact(message + ": " + err.Error())
+	for _, cause := range []error{context.Canceled, context.DeadlineExceeded, core.ErrInvalid, core.ErrCredentialsInURI} {
+		if errors.Is(err, cause) {
+			return fmt.Errorf("%s: %w", text, cause)
+		}
+	}
+	return errors.New(text)
 }

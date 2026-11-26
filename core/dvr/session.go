@@ -165,8 +165,16 @@ func (s *Session) Close() error {
 }
 
 func (s *Session) removeSessionNames() error {
+	if err := removeSessionNames(s.Dir, os.Remove); err != nil {
+		return err
+	}
+	s.close = true
+	return nil
+}
+
+func removeSessionNames(dir string, removeDir func(string) error) error {
 	const windowsSharingViolation = syscall.Errno(32)
-	path := filepath.Join(s.Dir, lockName)
+	path := filepath.Join(dir, lockName)
 	for attempt := 0; ; attempt++ {
 		err := os.Remove(path)
 		if err == nil || errors.Is(err, os.ErrNotExist) {
@@ -178,13 +186,12 @@ func (s *Session) removeSessionNames() error {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if err := os.Remove(filepath.Join(s.Dir, MarkerName)); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := os.Remove(filepath.Join(dir, MarkerName)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("%w: remove session marker: %v", ErrNoSpace, err)
 	}
-	if err := os.Remove(s.Dir); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := removeDir(dir); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("%w: remove session directory: %v", ErrNoSpace, err)
 	}
-	s.close = true
 	return nil
 }
 
@@ -409,18 +416,18 @@ func sweepOne(dir string) (reason string, live bool, err error) {
 			return "the " + sub + " directory cannot be removed: " + err.Error(), false, nil
 		}
 	}
-	if err := os.Remove(markerPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		_ = releaseLock()
-		return "the marker cannot be removed: " + err.Error(), false, nil
+	if record.State != markerRemoving {
+		record.State = markerRemoving
+		if err := writeMarker(markerPath, record); err != nil {
+			_ = releaseLock()
+			return "the cleanup state cannot be saved: " + err.Error(), false, nil
+		}
 	}
 	if err := releaseLock(); err != nil {
 		return "the stale lock cannot be released: " + err.Error(), false, nil
 	}
-	if err := os.Remove(lockPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return "the lock file cannot be removed: " + err.Error(), false, nil
-	}
-	if err := os.RemoveAll(dir); err != nil {
-		return "the directory cannot be removed: " + err.Error(), false, nil
+	if err := removeSessionNames(dir, os.RemoveAll); err != nil {
+		return err.Error(), false, nil
 	}
 	return "", false, nil
 }

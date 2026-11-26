@@ -1,12 +1,15 @@
 package main
 
 import (
+	"image"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/xswt442-cmd/muxshift/core/dvr"
 )
 
 func TestLifecyclePendingBlocksReloadAndRetry(t *testing.T) {
@@ -33,6 +36,25 @@ func TestLifecyclePendingBlocksReloadAndRetry(t *testing.T) {
 	}
 	if it.player != player || it.generation != 0 {
 		t.Fatalf("opened a replacement while closing: player=%v, generation=%d", it.player, it.generation)
+	}
+}
+
+func TestReplayBlocksReloadAndRetry(t *testing.T) {
+	a, err := newAppState(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := a.session.AddSource("replay.mp4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	it := &item{source: source, uri: "replay.mp4", replay: &dvr.Recording{}}
+	a.items = append(a.items, it)
+	for _, kind := range []commandKind{commandReload, commandRetry} {
+		result := a.runCommand(command{Kind: kind, Source: source.ID})
+		if result.Err == nil || !strings.Contains(result.Err.Error(), "replaying") {
+			t.Errorf("%v: got %v, want a replay refusal", kind, result.Err)
+		}
 	}
 }
 
@@ -73,27 +95,97 @@ func TestCloseAndHandoverRollbackRace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	previous := &ui.VideoPlayer{}
-	replacement := &ui.VideoPlayer{}
+	decoder := &lifecycleDecoder{closed: make(chan struct{}, 2)}
+	previous, err := ui.NewVideoPlayer(decoder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := &fakeSeekPlayer{}
 	kept := &handover{previous: previous}
 	it := &item{uri: "entry.mp4", player: replacement, previous: previous, handover: kept, generation: 1}
-	a.closeOnMain(it)
-	defer func() {
-		close(a.closeDone)
-		a.closeWait.Wait()
+	// The closing thread processes callbacks individually. Hold the rollback
+	// callback until after the current player and its predecessor are detached.
+	type callback struct {
+		run  func()
+		done chan struct{}
+	}
+	queue := make(chan callback)
+	stop := make(chan struct{})
+	a.onMain = func(fn func()) {
+		call := callback{run: fn, done: make(chan struct{})}
+		select {
+		case queue <- call:
+			<-call.done
+		case <-stop:
+		}
+	}
+	savedWait := handoverWait
+	handoverWait = 0
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		a.handOver(it, 1, kept)
 	}()
-	if restored := a.rollbackHandoverOnMain(it, 1, kept); restored != "" || it.player != nil || it.generation != 2 {
-		t.Fatalf("obsolete rollback reinstalled a player: restored=%q generation=%d", restored, it.generation)
+	defer func() {
+		close(stop)
+		<-finished
+		handoverWait = savedWait
+		a.releaseOnce.Do(a.shutdown)
+	}()
+	next := func() callback {
+		select {
+		case call := <-queue:
+			return call
+		case <-time.After(5 * time.Second):
+			t.Fatal("handover did not post its drawing-thread callback")
+			return callback{}
+		}
+	}
+	probe := next()
+	probe.run()
+	close(probe.done)
+	rollback := next()
+	a.closeOnMain(it)
+	rollback.run()
+	close(rollback.done)
+	if it.player != nil || it.generation != 2 {
+		t.Fatalf("obsolete rollback reinstalled a player: generation=%d", it.generation)
 	}
 	if kept.take() != nil || len(a.retiring) != 1 {
 		t.Fatal("ownership of the previous player was not transferred once")
 	}
 	for retirement := range a.retiring {
-		if len(retirement.handles) != 2 || retirement.handles[0].player != previous || retirement.handles[1].player != replacement {
-			t.Fatal("retirement does not own both detached players")
+		if len(retirement.handles) != 1 || retirement.handles[0].player != previous {
+			t.Fatal("retirement does not own the detached MyGo player")
 		}
+		a.finishRetirementOnMain(retirement)
+		if len(a.retiring) != 1 {
+			t.Fatal("retirement ran before three frames were built")
+		}
+		for range 3 {
+			a.signalFrame()
+		}
+		a.finishRetirementOnMain(retirement)
+	}
+	// With no replacement on the stage, shutdown closes the last held player.
+	a.releaseOnce.Do(a.shutdown)
+	select {
+	case <-decoder.closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the detached decoder was not closed")
+	}
+	if len(decoder.closed) != 0 {
+		t.Fatal("the decoder was closed more than once")
 	}
 }
+
+type lifecycleDecoder struct{ closed chan struct{} }
+
+func (d *lifecycleDecoder) Next() (ui.VideoFrame, error) {
+	return ui.VideoFrame{Image: image.NewRGBA(image.Rect(0, 0, 1, 1)), Duration: time.Second}, nil
+}
+func (d *lifecycleDecoder) Rewind() error { return nil }
+func (d *lifecycleDecoder) Close() error  { d.closed <- struct{}{}; return nil }
 
 func TestWorkspaceRemembersWorkbenchBoundsWhenQuittingViewingMode(t *testing.T) {
 	workbench := mygo.Rectangle{X: 50, Y: 80, Width: 1190, Height: 720}

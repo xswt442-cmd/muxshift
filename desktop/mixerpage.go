@@ -63,6 +63,9 @@ func (a *appState) mixerPage(c *ui.Context) {
 func (a *appState) mixerAction(c *ui.Context, key, label string, width, height float32, active bool, activeFill, activeInk ui.Color, onClick func()) ui.Element {
 	button := ui.ButtonBase(c.Key(key)).Width(width).Height(height).
 		Padding(0, spaceSm).Radius(radiusSm).AlignItems(ui.Center)
+	if onClick == nil {
+		button = button.Disabled(true)
+	}
 	fill, ink := ui.Transparent, colorTextDim
 	if active {
 		fill, ink = activeFill, activeInk
@@ -88,6 +91,16 @@ func (a *appState) mixerAction(c *ui.Context, key, label string, width, height f
 // mixerRow is one source: what the scene says, and the overlay's two controls.
 func (a *appState) mixerRow(c *ui.Context, index int, it *item) {
 	soloed := a.solo != "" && a.solo == it.source.ID
+	hasTrack := it.audio != "" && a.isStageMember(it)
+	key := itemKey(it)
+	var mute, solo, hearOnly func()
+	if hasTrack {
+		mute = func() { a.report(a.runCommand(command{Kind: commandMute, Source: key})) }
+		solo = func() { a.report(a.runCommand(command{Kind: commandSolo, Source: key})) }
+	}
+	if hasTrack || (it.canRestoreOnDemand() && a.isStageMember(it)) {
+		hearOnly = func() { a.report(a.runCommand(command{Kind: commandHear, Source: key})) }
+	}
 	ui.Column(c).WidthPercent(100).Gap(spaceXs).Padding(spaceSm).
 		Background(colorPanel).Border(1, colorLineSoft).Radius(radiusMd).Children(func() {
 		ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
@@ -108,17 +121,11 @@ func (a *appState) mixerRow(c *ui.Context, index int, it *item) {
 				muteLabel = a.tr("Unmute source", "取消本路静音")
 			}
 			a.mixerAction(c, fmt.Sprintf("mixer-mute-%d", index), muteLabel, 76, 26,
-				it.muted, ui.RGBA(228, 182, 109, 0.14), colorWarn, func() {
-					a.report(a.runCommand(command{Kind: commandMute, Source: it.source.ID}))
-				})
+				it.muted, ui.RGBA(228, 182, 109, 0.14), colorWarn, mute)
 			a.mixerAction(c, fmt.Sprintf("mixer-solo-%d", index), a.tr("Solo", "独听"), 76, 26,
-				soloed, colorAccentSoft, colorAccent, func() {
-					a.report(a.runCommand(command{Kind: commandSolo, Source: it.source.ID}))
-				})
+				soloed, colorAccentSoft, colorAccent, solo)
 			hear := a.mixerAction(c, fmt.Sprintf("mixer-hear-%d", index), a.tr("Route only", "仅路由此路"), 112, 26,
-				false, ui.Transparent, colorTextDim, func() {
-					a.report(a.runCommand(command{Kind: commandHear, Source: it.source.ID}))
-				})
+				false, ui.Transparent, colorTextDim, hearOnly)
 			hear.Tooltip(a.tr("Replaces this scene's audio routing with this source. This changes the scene; Solo is temporary.",
 				"用这一路替换场景的音频路由。这会修改场景；独听是临时操作。"))
 		})
@@ -129,11 +136,11 @@ func (a *appState) mixerRow(c *ui.Context, index int, it *item) {
 			if current, routed := a.sceneLevel(it); routed {
 				level = current.Volume
 			}
-			if a.rangeSlider(c, fmt.Sprintf("mixer-volume-%d", index), &level, 0, 1, 320) {
+			if hasTrack && a.rangeSlider(c, fmt.Sprintf("mixer-volume-%d", index), &level, 0, 1, 320) {
 				// The slider reports the new value while dragging; the command
 				// writes it to the scene without touching the mute, and refuses
 				// to route a source that is not in the scene yet.
-				a.report(a.runCommand(command{Kind: commandVolume, Source: it.source.ID, Volume: level}))
+				a.report(a.runCommand(command{Kind: commandVolume, Source: key, Volume: level}))
 			}
 			a.numericReadout(c, fmt.Sprintf("%.0f%%", level*100), 46)
 		})

@@ -95,9 +95,6 @@ func (a *appState) openReplacement(it *item, uri string, retainState bool) {
 	it.generation++
 	generation := it.generation
 	a.apply()
-	if kept != nil && kept.retainState {
-		player.SetMuted(true)
-	}
 	wakeNetworkPlayer(uri, player, a.generationIs(it, generation))
 	a.closePendingWhenReady()
 	if kept != nil {
@@ -135,15 +132,6 @@ func (h *handover) open() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return !h.released && h.previous != nil
-}
-
-// releasePlayer closes a player that no frame draws any more.
-func (a *appState) releasePlayer(player *ui.VideoPlayer) {
-	if player == nil {
-		return
-	}
-	a.waitFrames(3)
-	mygoRunOnMain(func() { player.Close() })
 }
 
 // handoverWait is how long a replacement may take to show a picture before the
@@ -200,7 +188,7 @@ func (a *appState) handOver(it *item, generation int, kept *handover) {
 	for {
 		var current, ready bool
 		var playerErr error
-		mygoRunOnMain(func() {
+		a.mainDo(func() {
 			current = it.generation == generation && it.handover == kept && !a.closed
 			if current && it.player != nil {
 				ready = it.player.Ready() && !it.player.Buffering()
@@ -215,7 +203,7 @@ func (a *appState) handOver(it *item, generation int, kept *handover) {
 		}
 		if ready {
 			var confirmed string
-			mygoRunOnMain(func() {
+			a.mainDo(func() {
 				if it.generation == generation && it.handover == kept && !a.closed {
 					old := kept.take()
 					if old == nil {
@@ -262,7 +250,7 @@ func (a *appState) handOver(it *item, generation int, kept *handover) {
 	}
 	// The replacement never started: keep what was drawn and drop the new one.
 	var restored string
-	mygoRunOnMain(func() {
+	a.mainDo(func() {
 		restored = a.rollbackHandoverOnMain(it, generation, kept)
 	})
 	if restored != "" {
@@ -1264,8 +1252,8 @@ func main() {
 			if err := s.flushSessionSave(); err != nil {
 				log.Printf("session: final save failed (%v)", err)
 			}
-			s.release()
 		})
+		window.OnClosed(s.release)
 		if *shot != "" {
 			time.AfterFunc(*shotDelay, func() {
 				// The window and the players belong to the main thread: capturing and

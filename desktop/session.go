@@ -603,12 +603,7 @@ type appState struct {
 	audible map[core.TrackID]bool
 	sync    *syncState
 
-	// frames receives one token for every frame the window builds, which is
-	// what says a player dropped from the view is no longer being drawn.
-	frames chan struct{}
-
-	// frameCount counts the same frames without losing any: the channel drops a
-	// token when the buffer is full, the counter does not.
+	// frameCount counts the frames built by the window.
 	frameCount int
 
 	// probeRunning and lastProbe describe the one alignment comparison that may
@@ -715,7 +710,7 @@ func newAppStateWithSettings(uris []string, loaded settings) (*appState, error) 
 // under the picture, every panel of it visible). Both the command-line start and
 // the saved-session start grow from here, so a restored window looks the same.
 func newAppShell(session *core.Session, scene core.SceneID, output core.OutputID, loaded settings) *appState {
-	app := &appState{session: session, scene: scene, output: output, frames: make(chan struct{}, 1), closeDone: make(chan struct{}), sync: newSyncState(), audible: make(map[core.TrackID]bool), settings: cloneSettings(loaded), settingsDraft: cloneSettings(loaded), settingsSection: "General"}
+	app := &appState{session: session, scene: scene, output: output, closeDone: make(chan struct{}), sync: newSyncState(), audible: make(map[core.TrackID]bool), settings: cloneSettings(loaded), settingsDraft: cloneSettings(loaded), settingsSection: "General"}
 	app.navWidth = 236
 	app.navUp = true
 	app.editingShell = true
@@ -948,6 +943,9 @@ func (a *appState) importSource(ctx context.Context, uri string, token int) {
 // retryUnavailableSource repeats address inspection off the drawing thread;
 // only the resulting Core registration and player open return to the window.
 func (a *appState) retryUnavailableSource(it *item, uri string) error {
+	if it.restoring {
+		return errors.New(a.tr("This source is already being recovered.", "此来源正在恢复。"))
+	}
 	if a.importing != "" {
 		return errors.New("another source read is still in progress")
 	}
@@ -987,7 +985,8 @@ func (a *appState) startStoredSourceRestores() {
 			continue
 		}
 		it := a.itemByPersistentID(stored.ID)
-		if it == nil || it.source.ID != "" || it.restoring || it.openErr != nil || !a.sceneConsumesItem(sceneID, it) {
+		if it == nil || it.source.ID != "" || it.restoring || it.openErr != nil ||
+			a.retryTargetID == stored.ID || !a.sceneConsumesItem(sceneID, it) {
 			continue
 		}
 		it.restoring = true
@@ -1774,7 +1773,7 @@ func (a *appState) apply() {
 }
 
 func (it *item) outputPlayer() desktopPlayer {
-	if it.handover != nil && it.handover.retainState && it.previous != nil {
+	if it.handover != nil && it.previous != nil {
 		return it.previous
 	}
 	return it.player
@@ -1895,14 +1894,16 @@ func (a *appState) showVideo(index int) error {
 	if err != nil {
 		return err
 	}
-	if it.canRestoreOnDemand() {
+	if it.source.ID == "" && (it.canRestoreOnDemand() || a.pendingBindings[scene.ID][it.persistentID].video) {
 		id := a.stageSourceID(it)
 		bindings := a.pendingBindings[scene.ID]
-		if !bindings[id].video {
+		if bindings[id].video {
+			a.removePendingStageRoutes(scene, it, true, false)
+		} else {
 			a.setPendingVideo(scene.ID, id, expandedPendingIndex(len(scene.Video), bindings, pendingVideoSlot))
+			it.openErr = nil
+			a.startStoredSourceRestores()
 		}
-		it.openErr = nil
-		a.startStoredSourceRestores()
 		a.invalidate()
 		return nil
 	}
@@ -1938,6 +1939,7 @@ func (a *appState) showVideo(index int) error {
 }
 
 var errPlayerClosing = errors.New("the previous player is still closing")
+var errPlayerReplaying = errors.New("the source is replaying or preparing a replay")
 
 // ensurePlayer opens the player of a source that has none yet. Sources added
 // while the window runs stay closed until something needs them: the player of
@@ -2254,13 +2256,10 @@ func (a *appState) retireMediaOnMain(handles []pendingClose, keep *ui.VideoPlaye
 	stop := a.closeDone
 	window := a.window
 	a.closeWait.Go(func() {
-		timer := time.NewTimer(2 * time.Second)
-		defer timer.Stop()
 		select {
 		case <-stop:
 			return
 		case <-job.drawn:
-		case <-timer.C:
 		}
 		// The frame waiter holds no player or lease. Shutdown can drain the
 		// queue even if the completion callback has not reached the UI yet.
@@ -2281,7 +2280,7 @@ func (a *appState) readyOutputPlayer() bool {
 }
 
 func (a *appState) finishRetirementOnMain(job *mediaRetirement) {
-	if _, owned := a.retiring[job]; !owned {
+	if _, owned := a.retiring[job]; !owned || a.frameCount < job.frame {
 		return
 	}
 	delete(a.retiring, job)
@@ -2462,20 +2461,6 @@ func (a *appState) closePendingWhenReady() {
 	a.closeMediaOnMain(wait)
 }
 
-// waitFrames blocks until the window built n frames after this call, or until
-// it stops building them.
-func (a *appState) waitFrames(n int) {
-	for i := 0; i < n; i++ {
-		select {
-		case <-a.frames:
-		case <-a.closeDone:
-			return
-		case <-time.After(2 * time.Second):
-			return
-		}
-	}
-}
-
 // signalFrame records that the window built a frame, so a close that just
 // dropped a player can wait for the view to stop drawing it. The counter next to
 // it lets a scenario prove the window kept drawing while a probe ran.
@@ -2488,10 +2473,6 @@ func (a *appState) signalFrame() {
 		} else if job.frame > a.frameCount {
 			a.invalidate()
 		}
-	}
-	select {
-	case a.frames <- struct{}{}:
-	default:
 	}
 }
 

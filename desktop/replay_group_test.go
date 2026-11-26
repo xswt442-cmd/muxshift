@@ -3171,6 +3171,7 @@ func TestShutdownWaitsForAnOpeningPlayer(t *testing.T) {
 		t.Fatalf("the transaction did not start: %v", err)
 	}
 	<-entered
+	txn := session.app.seekInFlight()
 
 	closed := make(chan struct{})
 	go func() {
@@ -3180,9 +3181,17 @@ func TestShutdownWaitsForAnOpeningPlayer(t *testing.T) {
 		close(closed)
 	}()
 	select {
+	case <-txn.ctx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown did not cancel replay preparation")
+	}
+	select {
 	case <-closed:
 		t.Fatal("the session closed while a player was still being opened")
 	case <-time.After(300 * time.Millisecond):
+	}
+	if open, _ := session.app.leaseStats(); open != 1 {
+		t.Errorf("the opening player held %d leases after cancellation, want 1", open)
 	}
 	close(release)
 	select {

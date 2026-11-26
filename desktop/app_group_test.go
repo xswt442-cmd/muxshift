@@ -455,7 +455,6 @@ func bareState(t *testing.T) (*appState, *item) {
 		items:   []*item{it},
 		audible: make(map[core.TrackID]bool),
 		sync:    newSyncState(),
-		frames:  make(chan struct{}, 1),
 	}
 	return a, it
 }

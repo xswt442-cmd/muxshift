@@ -174,6 +174,9 @@ func (a *appState) runCommand(cmd command) commandResult {
 		if it.lifecyclePending {
 			return finish(errPlayerClosing, "")
 		}
+		if it.replay != nil || it.swap != nil {
+			return finish(errPlayerReplaying, "")
+		}
 		if it.player == nil {
 			return finish(fmt.Errorf("%s has no player to reopen", a.name(it)), "")
 		}
@@ -326,6 +329,9 @@ func (a *appState) runCommand(cmd command) commandResult {
 		}
 		if it.lifecyclePending {
 			return finish(errPlayerClosing, "")
+		}
+		if it.replay != nil || it.swap != nil {
+			return finish(errPlayerReplaying, "")
 		}
 		result.Generation = it.generation
 		if it.openErr == nil && it.player != nil {

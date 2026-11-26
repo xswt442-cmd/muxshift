@@ -58,22 +58,33 @@ func (a *appState) toggleDockPanel(id string) {
 // thing folds into a bar when the picture needs the room.
 // eyeIcon and eyeTip are the one eye the window draws: dock rows, the compact
 // source rows and the row layout all ask for the same pair.
+func (a *appState) pictureRequested(it *item) bool {
+	if it.shown || a.pendingBindings[a.scene][it.persistentID].video {
+		return true
+	}
+	if it.player == nil && it.video != "" && a.session != nil {
+		scene, err := a.session.Scene(a.scene)
+		return err == nil && containsTrack(scene.Video, it.video)
+	}
+	return false
+}
+
 func (a *appState) eyeIcon(it *item) *ui.SVG {
-	if it.shown {
+	if a.pictureRequested(it) {
 		return lucide.Eye()
 	}
 	return lucide.EyeOff()
 }
 
 func (a *appState) eyeTip(it *item) string {
-	if it.shown {
+	if a.pictureRequested(it) {
 		return a.tr("Hide picture", "取下舞台")
 	}
 	return a.tr("Show picture", "放上舞台")
 }
 
 func (a *appState) eyeTint(it *item) ui.Color {
-	if it.shown {
+	if a.pictureRequested(it) {
 		return colorTextDim
 	}
 	return colorDim
@@ -564,7 +575,7 @@ func (a *appState) dockRowsBody(c *ui.Context) {
 					})
 					key := string(itemKey(row))
 					visibleLabel := a.tr("Hide", "隐藏")
-					if !row.shown {
+					if !a.pictureRequested(row) {
 						visibleLabel = a.tr("Show", "显示")
 					}
 					if ui.Button(c.Key("source-visible-"+key), visibleLabel).Height(26).Clicked() {

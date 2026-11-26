@@ -1088,8 +1088,15 @@ func TestDeferredHiddenMemberAndCancelledRestoreRemainOpenable(t *testing.T) {
 	}
 	it.restoring = true
 	app.startupRestoreCancel = func() {}
+	if err := app.retryUnavailableSource(it, it.uri); err == nil {
+		t.Fatal("manual retry started while this source was already recovering")
+	}
 	if result := app.runCommand(command{Kind: commandCancelRestore}); result.Err != nil || it.openErr == nil || it.restoring {
 		t.Fatalf("cancel did not leave a retryable source: %+v", result)
+	}
+	app.selectVideo(it)
+	if app.lastCommand.Err != nil || app.pictureRequested(it) {
+		t.Fatalf("hide after cancellation did not remove the video binding: %v", app.lastCommand.Err)
 	}
 	app.selectVideo(it)
 	if app.lastCommand.Err != nil || it.openErr != nil || !app.pendingBindings[app.scene]["hidden"].video {

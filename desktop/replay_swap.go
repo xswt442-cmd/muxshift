@@ -119,17 +119,12 @@ func (a *appState) settleReplay(swap *replaySwap) {
 // conversion.
 func (a *appState) commitReplay(swap *replaySwap, anchor dvr.Anchor, anchorErr error) {
 	it := swap.item
-	var (
-		old      desktopPlayer
-		oldLease *dvr.Lease
-		ok       bool
-	)
+	var ok bool
 	mygoRunOnMain(func() {
 		if it.swap != swap || it.generation != swap.generation {
 			return
 		}
-		old = it.player
-		oldLease = it.replayLease
+		old, oldLease := it.player, it.replayLease
 		it.swap = nil
 		it.player = swap.player
 		it.replayLease = swap.lease
@@ -143,6 +138,7 @@ func (a *appState) commitReplay(swap *replaySwap, anchor dvr.Anchor, anchorErr e
 			it.replayAnchorErr = anchorErr
 		}
 		it.generation++
+		a.closeReplayPlayer(old, oldLease)
 		ok = true
 		logf("replay", "committed %s on %s: shows %s..%s of buffer time",
 			recording.FileName(), shortURI(it.uri), shortDuration(recording.StartBufferTime), shortDuration(recording.EndBufferTime))
@@ -150,15 +146,6 @@ func (a *appState) commitReplay(swap *replaySwap, anchor dvr.Anchor, anchorErr e
 	if !ok {
 		a.abandonReplay(swap, "the item changed while the switch was committing")
 		return
-	}
-	if old != nil {
-		a.releasePlayer(rawPlayer(old))
-	}
-	if oldLease != nil {
-		if err := oldLease.Release(); err != nil {
-			logf("replay", "release the lease of the previous recording: %v", err)
-		}
-		a.leftLease()
 	}
 }
 
@@ -171,23 +158,9 @@ func (a *appState) abandonReplay(swap *replaySwap, why string) {
 		if it.swap == swap {
 			it.swap = nil
 		}
+		swap.finished.Do(func() { a.closeReplayPlayer(swap.player, swap.lease) })
 	})
-	a.finishSwap(swap)
 	logf("replay", "rolled back the switch to %s: %s", swap.recording.FileName(), why)
-}
-
-// finishSwap closes the replacement player and gives its lease back once. A
-// close of the item and a rollback can both end the same attempt; the lease
-// counters must still move exactly once.
-func (a *appState) finishSwap(swap *replaySwap) {
-	swap.finished.Do(func() {
-		a.releasePlayer(swap.player)
-		if err := swap.lease.Release(); err != nil {
-			logf("replay", "release the lease of %s: %v", swap.recording.FileName(), err)
-		}
-		a.leftLease()
-		logf("replay", "finished %s: the replacement player and its lease went back once", swap.recording.FileName())
-	})
 }
 
 // openReplayFile opens the file a recording published. The scenario seam exists

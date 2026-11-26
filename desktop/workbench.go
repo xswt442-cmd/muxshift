@@ -526,7 +526,7 @@ func (a *appState) sourceCompactActions(c *ui.Context, it *item, index int) {
 		}
 	}
 	a.sourceRenameButton(c, it)
-	if it.video != "" || it.canRestoreOnDemand() {
+	if it.video != "" || it.canRestoreOnDemand() || a.pictureRequested(it) {
 		a.quietIconButton(c, "source-visible-"+key, a.eyeIcon(it), a.eyeTip(it), a.eyeTint(it), func() {
 			a.selected = itemKey(it)
 			a.toggleVideo(index)

@@ -11,7 +11,10 @@ This changelog records completed changes that matter to someone using MuxShift. 
 **新增**
 
 - 桌面端分别保存各舞台的布局、主画面和音频分配。来源面板可逐路显示、暂停和恢复播放。
-- 各舞台可从共享目录添加已有来源。解除一个舞台的引用后，其他舞台仍可使用该来源。
+- 新来源默认归导入舞台，移出该舞台即删除。显式共享后，其他舞台可从目录添加，解除舞台引用时仍保留在目录中。
+- 会话重启后恢复各舞台的分配。带凭据、查询参数或片段的 HTTP(S) 地址会省略，保留来源供重新选址。
+- 用 `-media` 打开媒体时保留已保存的会话。
+- 来源和场景可自定义名称。
 - 自由布局可摆放所有已显示的画面。选中来源后可直接拖移、缩放或锁定摆位。
 - 来源可单独刷新。支持多个可播档位的直播主播放列表可逐路选择清晰度。
 - 浏览器扩展的候选地址可以逐条展开，复制完整链接后可在桌面端手动添加。
@@ -21,6 +24,7 @@ This changelog records completed changes that matter to someone using MuxShift. 
 - 应用导航收为「舞台」「诊断」「设置」，来源、混音和同步在舞台控制台内操作。
 - 场景栏可以收起再展开，回放缓存限额可以直接输入。同步面板在顶部显示估算结果和来源编号，目标偏移变化后会隐藏旧建议。
 - 窄窗中的播放栏使用紧凑图标，为单行播放时间留出空间。
+- 配色、字号、字体、紧凑间距和画布下方的时间线开关即时应用并保存。
 
 **修复**
 
@@ -35,13 +39,22 @@ This changelog records completed changes that matter to someone using MuxShift. 
 - 对齐估算会计入参考来源的偏移。回放微调若早于录像首帧，既有偏移保持原值。
 - 舞台播放控制以当前舞台为范围，只有舞台包含活动同步组成员时才会控制该组。观看模式的播放按钮和空格键使用同一规则。
 - 浏览器扩展检测到换页或重载时会清空旧候选，并提示重新扫描。
+- 扩展只在 B 站直播间解析直播地址，保留分线路地址的签名。YouTube 解析会校验当前视频 ID，避免切页后发送上一个视频的流。
+
+**兼容性**
+
+- 公网 HTTP 播放列表需直连或使用 SOCKS5。HTTPS 播放列表仍支持 CONNECT。
+- 未对齐静音保护默认关闭，可在「设置 → 播放」开启。
 
 ### English
 
 **Added**
 
 - The desktop saves each stage's layout, primary picture, and audio routing. The Sources panel can show, pause, and resume individual sources.
-- Each stage can add existing sources from the shared catalog. Unlinking a source from one stage leaves it available to other stages.
+- New sources belong to the importing stage and are deleted when removed from that stage. Explicitly shared sources can be added from the catalog in other stages and remain in the catalog when unlinked.
+- A restart restores each stage's assignments. Session files omit HTTP(S) addresses with credentials, a query, or a fragment, while retaining their sources for address selection.
+- Launching with `-media` preserves the saved session.
+- Sources and scenes can have custom names.
 - Free layout places every shown picture. Select a source to move, resize, or lock its position directly.
 - Refresh sources individually. A live master playlist with multiple playable variants offers a per-source quality choice.
 - Expand any candidate in the browser extension to copy its full link for manual import in the desktop app.
@@ -51,6 +64,7 @@ This changelog records completed changes that matter to someone using MuxShift. 
 - Application navigation uses Stage, Diagnostics, and Settings. Sources, Mixer, and Sync live in the stage console.
 - Collapse or reopen the scene rail and type replay cache limits directly. The Sync panel shows estimates and source numbers at the top, and hides an old suggestion when the target offset changes.
 - The playback bar uses compact icons in narrow windows to keep the playback time on one line.
+- Theme, text size, font, compact spacing, and the timeline toggle under the stage apply and save immediately.
 
 **Fixed**
 
@@ -65,6 +79,12 @@ This changelog records completed changes that matter to someone using MuxShift. 
 - Alignment estimates include the reference source's offset. Replay nudges before the recording's first frame leave the existing offset intact.
 - Stage transport controls the current stage and includes the active sync group only when the stage has a member in that group. The viewing controls and Space shortcut use the same rule.
 - The extension clears old candidates and asks for a fresh scan when it detects a page change or reload.
+- The extension resolves Bilibili streams only in live rooms and keeps mirror signatures. YouTube resolution checks the current video ID so navigation cannot send the previous video's stream.
+
+**Compatibility**
+
+- Public HTTP playlists require a direct connection or SOCKS5. HTTPS playlists also support CONNECT.
+- Unaligned mute protection is off by default. Enable it in Settings → Playback.
 
 ## [0.0.4] - 2026-11-22
 

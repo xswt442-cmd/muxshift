@@ -26,9 +26,9 @@ never copies cookies, request headers, or keys.
 
 There is no native messaging host. The window prints a six-digit pairing code
 on the Diagnostics page; typing it in the popup once exchanges it for a token
-kept in `chrome.storage.local`. A pairing code is used once and replaced by the
-window. The token and the code live only in the window's memory, so closing the
-window ends the pairing and the next launch shows a new code.
+kept in `chrome.storage.local`. A redeemed code expires immediately. Select
+**New code** in Diagnostics to issue another one. The desktop stores its token
+and code in memory, so closing its window ends the pairing.
 
 The extension does not capture a tab's stream. A capture produces a live
 `MediaStream` that only the browser can decode, and the desktop takes playable
@@ -36,13 +36,13 @@ addresses and files; the popup says so instead of pretending.
 
 ## Limits that are part of the design
 
-- `blob:` and `mediasource:` addresses belong to the page. They are listed with
-  a note and refused, because nothing outside the page can read them.
+- Page-owned `blob:` media is reported in **Scan details**. The extension
+  rejects `mediasource:` and other schemes outside HTTP and HTTPS.
 - An address with credentials in it is refused by the window, and the log keeps
   only the scheme, host, and path of an imported address, because a signed
   address carries its credential in the query.
 - The listener only accepts its own `Host`, an empty `Origin` or one starting
-  with `chrome-extension://`, and a JSON body under 8 KiB. None of that is
+  with `chrome-extension://`, and a JSON body up to 8 KiB (8,192 bytes). None of that is
   authentication against another process on this machine; the token is what
   keeps such a process from importing anything the user did not choose.
 - A cross-origin address is played by the window under that origin's normal
@@ -51,7 +51,9 @@ addresses and files; the popup says so instead of pretending.
 - Protected media is not touched: no DRM keys, no decryption, no header replay.
 - Permissions are `activeTab`, `scripting`, and `storage`, plus
   `host_permissions` for `http://127.0.0.1:8731/*` only. The extension cannot
-  read any page until the user clicks it, and it cannot reach any other host.
+  read the active tab until the user opens its popup. Pairing, health checks,
+  and import requests go to the fixed loopback origin. On supported sites,
+  live resolution runs in the page and mirror checks omit credentials.
 
 ## Extension ID
 
@@ -79,9 +81,8 @@ Open Settings → About in the desktop window and press **Open the folder** unde
 "Browser extension" to reach it, or open that folder by hand after unpacking the
 ZIP.
 
-Edge and Chrome load an unpacked extension from `edge://extensions` or
-`chrome://extensions` with developer mode on, or Playwright can start a browser
-with `--load-extension` (see `testplace/.playwright/cli-ext.config.json`).
+In Edge or Chrome, open `edge://extensions` or `chrome://extensions`, enable
+developer mode, and select **Load unpacked** to choose the extension folder.
 
 ## Source layout
 

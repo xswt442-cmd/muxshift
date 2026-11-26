@@ -554,6 +554,9 @@ func TestMeasuredRangeStopsAuthorisingWhenEvicted(t *testing.T) {
 	if anchor, err := runner.bufferAnchor(dvr.Range{Start: 2 * time.Second, End: 4 * time.Second}); err == nil {
 		t.Fatalf("the new range used the anchor of the evicted one: %+v", anchor)
 	}
+	if _, err := runner.waitAnchor(ctx); err != nil {
+		t.Fatalf("wait for the new range measurement: %v", err)
+	}
 }
 
 // TestOldRangeReplaysUnderItsOwnIdentity keeps history usable without letting it
@@ -2989,6 +2992,7 @@ func TestSeekTxnGivesWayWhenAnotherTakesOver(t *testing.T) {
 		t.Fatalf("the first transaction did not start: %v", err)
 	}
 	<-openedOnce
+	old := session.app.seekInFlight()
 
 	newer := &seekTxn{event: 9 * time.Second}
 	session.app.seekMu.Lock()
@@ -2996,21 +3000,8 @@ func TestSeekTxnGivesWayWhenAnotherTakesOver(t *testing.T) {
 	session.app.seekMu.Unlock()
 	close(release)
 
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		allClosed := true
-		for _, player := range *opened {
-			if !player.closed {
-				allClosed = false
-			}
-		}
-		if allClosed && len(*opened) > 0 {
-			break
-		}
-		if !time.Now().Before(deadline) {
-			t.Fatal("the replaced transaction kept its players")
-		}
-		time.Sleep(20 * time.Millisecond)
+	if !session.app.awaitSeekTxn(old, 10*time.Second) || !allClosed(*opened) {
+		t.Fatal("the replaced transaction kept its players")
 	}
 	for i, it := range session.items {
 		if it.replay != before[i] {
@@ -3030,8 +3021,10 @@ func TestSeekTxnGivesWayWhenAnotherTakesOver(t *testing.T) {
 func TestSeekTxnCommitsNothingOnceOwnershipIsGone(t *testing.T) {
 	session, opened := seekTxnFixture(t)
 	newer := &seekTxn{event: 9 * time.Second}
+	replaced := make(chan *seekTxn, 1)
 	session.app.beforeSeekCommit = func() {
 		session.app.seekMu.Lock()
+		replaced <- session.app.seek
 		session.app.seek = newer
 		session.app.seekMu.Unlock()
 	}
@@ -3043,12 +3036,13 @@ func TestSeekTxnCommitsNothingOnceOwnershipIsGone(t *testing.T) {
 	if err := session.app.startSeekTxn(session.items, 6*time.Second); err != nil {
 		t.Fatalf("the transaction did not start: %v", err)
 	}
-	deadline := time.Now().Add(10 * time.Second)
-	for len(*opened) == 0 || !allClosed(*opened) {
-		if !time.Now().Before(deadline) {
+	select {
+	case old := <-replaced:
+		if !session.app.awaitSeekTxn(old, 10*time.Second) || !allClosed(*opened) {
 			t.Fatal("the transaction that lost the session kept its players")
 		}
-		time.Sleep(20 * time.Millisecond)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the transaction did not reach the commit step")
 	}
 	for i, it := range session.items {
 		if it.replay != before[i] || it.generation != 2 {
@@ -3260,22 +3254,23 @@ func TestShutdownWaitsPastTheBudgetForAnOpeningPlayer(t *testing.T) {
 func TestAClosedSessionDoesNotWaitForADrawingThreadItIsBlocking(t *testing.T) {
 	session, opened := seekTxnFixture(t)
 	blocked := make(chan struct{})
+	dispatching := make(chan struct{})
+	var firstDispatch sync.Once
 	defer close(blocked)
 	session.app.seekMain = func(func()) {
 		// This is what mygoRunOnMain does: it waits for the drawing thread to
 		// run the callback. Here the drawing thread is inside the close that
 		// waits for this transaction, so the post itself never returns.
+		firstDispatch.Do(func() { close(dispatching) })
 		<-blocked
 	}
 	if err := session.app.startSeekTxn(session.items, 7*time.Second); err != nil {
 		t.Fatalf("the transaction did not start: %v", err)
 	}
-	deadline := time.Now().Add(10 * time.Second)
-	for len(*opened) == 0 {
-		if !time.Now().Before(deadline) {
-			t.Fatal("no replacement player was opened")
-		}
-		time.Sleep(20 * time.Millisecond)
+	select {
+	case <-dispatching:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the transaction did not reach the drawing thread")
 	}
 
 	start := time.Now()
@@ -3305,8 +3300,8 @@ func TestAStoppedTransactionDoesNotTouchAQueuedStep(t *testing.T) {
 	txn := settleTxnFor(session, player, time.Second)
 	session.app.seek = txn
 
-	var queued []func()
-	session.app.seekMain = func(fn func()) { queued = append(queued, fn) }
+	queued := make(chan func(), 1)
+	session.app.seekMain = func(fn func()) { queued <- fn }
 	previousWait := handoverWait
 	handoverWait = 200 * time.Millisecond
 	defer func() { handoverWait = previousWait }()
@@ -3316,8 +3311,11 @@ func TestAStoppedTransactionDoesNotTouchAQueuedStep(t *testing.T) {
 	}
 
 	session.app.abortSeekTxn(txn, "the session is closing")
-	for _, fn := range queued {
+	select {
+	case fn := <-queued:
 		fn()
+	case <-time.After(10 * time.Second):
+		t.Fatal("the drawing step was not queued")
 	}
 	if player.pauses != 0 || player.seeks != 0 || player.plays != 0 {
 		t.Fatalf("a queued step touched a stopped transaction's player: paused %d, seeks %d, plays %d",

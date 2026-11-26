@@ -1,5 +1,6 @@
 const list = document.getElementById("sources");
 const notesList = document.getElementById("scan-notes");
+const resolverNote = document.getElementById("resolve-note");
 const page = document.getElementById("page");
 const importButton = document.getElementById("import");
 const status = document.getElementById("status");
@@ -14,6 +15,7 @@ let scannedTarget = null;
 let pairEpoch = 0;
 let handoffBusy = false;
 let candidateControls = [];
+let resolvedCandidate = null;
 let scanEpoch = 0;
 let pendingScan = null;
 let nextAddressID = 0;
@@ -28,6 +30,7 @@ const STRINGS = {
     pairButton: "配对",
     importButton: "发送所选地址",
     candidateHeading: (count) => `可选地址（${count}）`,
+    candidateList: "可选媒体地址",
     selectionHint: "使用 Tab 定位候选地址，方向键选择；发送后在桌面「舞台 → 来源」确认是否打开。",
     detailsTitle: "扫描详情",
     advancedMeta: "地址仅按用户选择发送。扩展不会导出 Cookie、请求头或受保护的媒体。",
@@ -61,7 +64,7 @@ const STRINGS = {
     sending: "正在发送地址到本机窗口…",
     accepted: "桌面端已接收导入请求。请在「舞台 → 来源」查看打开状态。",
     sendFailed: "发送失败 · 检查桌面端是否运行及配对状态，然后重试",
-    rejected: "桌面端拒绝了该地址 · 请在「舞台 → 来源」查看原因，确认地址可播放后重试",
+    rejected: "桌面端拒绝了该地址",
     staleTab: "页面已切换或重新加载，旧地址已作废 · 重新打开扩展扫描",
     selectFirst: "先选择一个地址，再发送。",
     expired: "配对已失效 · 请从 MuxShift 诊断页获取新配对码",
@@ -76,6 +79,7 @@ const STRINGS = {
     pairButton: "Pair",
     importButton: "Send selected address",
     candidateHeading: (count) => `Available addresses (${count})`,
+    candidateList: "Available media addresses",
     selectionHint: "Use Tab to focus an address and the arrow keys to select it; after sending, check Stage → Sources to see whether it opened.",
     detailsTitle: "Scan details",
     advancedMeta: "An address is sent only after you choose it. The extension does not export cookies, headers, or protected media.",
@@ -109,7 +113,7 @@ const STRINGS = {
     sending: "sending the address to the local window…",
     accepted: "The desktop accepted the import request. Check Stage → Sources for its status.",
     sendFailed: "Could not send · check that the desktop is running and paired, then retry",
-    rejected: "The desktop rejected this address · check Stage → Sources for the reason and retry with a playable address",
+    rejected: "The desktop rejected this address",
     staleTab: "The page changed or reloaded; this address is discarded · reopen the popup to scan again",
     selectFirst: "Choose an address before sending.",
     expired: "pairing expired · get a new code from MuxShift Diagnostics",
@@ -186,8 +190,10 @@ function clearCandidates() {
   selected = null;
   handoffBusy = false;
   candidateControls = [];
+  resolvedCandidate = null;
   list.replaceChildren();
   notesList.replaceChildren();
+  resolverNote.textContent = "";
   candidateHeading.textContent = t("candidateHeading", 0);
   resolveButton.hidden = true;
   updateHandoffControls();
@@ -195,7 +201,15 @@ function clearCandidates() {
 
 function discardStaleScan() {
   clearCandidates();
+  page.textContent = t("unknownPage");
   setStatus(t("staleTab"), "bad");
+}
+
+function selectCandidate(item, url) {
+  selected = url;
+  for (const other of list.children) other.classList.toggle("selected", other === item);
+  updateHandoffControls();
+  setStatus("");
 }
 
 function addCandidate(url, name, resolved = false) {
@@ -231,22 +245,15 @@ function addCandidate(url, name, resolved = false) {
   row.append(label, toggle);
   item.append(row, address);
 
-  const select = () => {
-    selected = url;
-    for (const other of list.children) other.classList.toggle("selected", other === item);
-    updateHandoffControls();
-  };
-  radio.addEventListener("change", () => {
-    select();
-    setStatus("");
-  });
+  radio.addEventListener("change", () => selectCandidate(item, url));
   if (resolved) {
     list.prepend(item);
     radio.checked = true;
-    select();
+    selectCandidate(item, url);
   } else {
     list.append(item);
   }
+  return { item, radio };
 }
 
 function render(scanned) {
@@ -296,7 +303,7 @@ function liveLabel(url) {
   let host;
   try { host = new URL(url).hostname; } catch { return ""; }
   const matches = (known) => host === known || host.endsWith(`.${known}`);
-  if (matches("bilibili.com")) return t("parseBilibili");
+  if (host === "live.bilibili.com") return t("parseBilibili");
   if (matches("twitch.tv")) return t("parseTwitch");
   if (matches("kick.com")) return t("parseKick");
   if (matches("youtube.com") || matches("youtu.be")) return t("parseYouTube");
@@ -304,13 +311,18 @@ function liveLabel(url) {
 }
 
 function offer(reply) {
+  if (resolvedCandidate) {
+    resolvedCandidate.item.remove();
+    candidateControls = candidateControls.filter(radio => radio !== resolvedCandidate.radio);
+  }
   const name = [t("candidate", list.children.length + 1), t("liveKind"), t("resolvedFrom")].join(" · ");
-  addCandidate(reply.url, name, true);
+  resolvedCandidate = addCandidate(reply.url, name, true);
   candidateHeading.textContent = t("candidateHeading", list.children.length);
 }
 
 function sendAddress(url, done) {
   const epoch = scanEpoch;
+  const pairing = pairEpoch;
   setStatus(t("sending"));
   chrome.runtime.sendMessage({ type: "import", url, target: scannedTarget }, (reply) => {
     if (epoch !== scanEpoch) return;
@@ -321,18 +333,24 @@ function sendAddress(url, done) {
     }
     if (!reply?.ok) {
       if (reply?.failure === "expired") {
-        setPairLine(t("notPairedNew"));
-        setStatus(t("expired"), "bad");
+        if (pairEpoch === pairing) {
+          setPairLine(t("notPairedNew"));
+          setStatus(t("expired"), "bad");
+        }
       } else if (reply?.failure === "not-paired") {
-        setPairLine(t("notPaired"));
-        setStatus(t("notPaired"), "bad");
+        if (pairEpoch === pairing) {
+          setPairLine(t("notPaired"));
+          setStatus(t("notPaired"), "bad");
+        }
       } else if (reply?.failure === "unreachable") {
-        setPairLine(t("pairedUnreachable"));
-        setStatus(t("windowUnreachable"), "bad");
+        if (pairEpoch === pairing) {
+          setPairLine(t("pairedUnreachable"));
+          setStatus(t("windowUnreachable"), "bad");
+        }
       } else if (reply?.failure === "stale-tab") {
         discardStaleScan();
       } else if (reply?.failure === "rejected") {
-        setStatus(t("rejected"), "bad");
+        setStatus(reply.reason ? `${t("rejected")} · ${reply.reason}` : t("rejected"), "bad");
       } else {
         setStatus(t("sendFailed"), "bad");
       }
@@ -349,11 +367,12 @@ resolveButton.addEventListener("click", () => {
   const epoch = scanEpoch;
   handoffBusy = true;
   updateHandoffControls();
+  resolverNote.textContent = "";
   setStatus(t("resolving"));
   chrome.runtime.sendMessage({ type: "resolve", target: scannedTarget }, (reply) => {
     if (epoch !== scanEpoch) return;
     if (chrome.runtime.lastError) {
-      setStatus(t("scanFailed"), "bad");
+      setStatus(t("resolveFailed"), "bad");
       finishHandoff();
       return;
     }
@@ -363,10 +382,13 @@ resolveButton.addEventListener("click", () => {
       return;
     }
     if (reply?.error || !reply?.url) {
-      setStatus(reply?.note ? t("resolveFailed") : t("noLiveAddress"), "bad");
+      const detail = reply?.error || reply?.note;
+      const label = t(reply?.error ? "resolveFailed" : "noLiveAddress");
+      setStatus(detail ? `${label} · ${detail}` : label, "bad");
       finishHandoff();
       return;
     }
+    resolverNote.textContent = reply.note || "";
     offer(reply);
     sendAddress(reply.url, finishHandoff);
   });
@@ -402,7 +424,8 @@ function start() {
       discardStaleScan();
       return;
     }
-    if (chrome.runtime.lastError || reply?.error) {
+    if (chrome.runtime.lastError || reply?.error || !tab) {
+      page.textContent = t("unknownPage");
       setStatus(t("scanFailed"), "bad");
       return;
     }
@@ -453,6 +476,13 @@ pairButton.addEventListener("click", () => {
   });
 });
 
+code.addEventListener("keydown", event => {
+  if (event.key === "Enter" && !event.isComposing) {
+    event.preventDefault();
+    pairButton.click();
+  }
+});
+
 importButton.addEventListener("click", () => {
   if (handoffBusy) return;
   if (!selected) {
@@ -466,6 +496,8 @@ importButton.addEventListener("click", () => {
 
 document.title = "MuxShift";
 code.placeholder = t("pairPlaceholder");
+code.setAttribute("aria-label", t("pairPlaceholder"));
+list.setAttribute("aria-label", t("candidateList"));
 pairButton.textContent = t("pairButton");
 importButton.textContent = t("importButton");
 candidateHeading.textContent = t("candidateHeading", 0);

@@ -27,27 +27,28 @@ func Acquire(path string, create bool) (*Lock, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		if errors.Is(err, syscall.EWOULDBLOCK) {
-			file.Close()
+	var lockErr error
+	for {
+		lockErr = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if !errors.Is(lockErr, syscall.EINTR) {
+			break
+		}
+	}
+	if lockErr != nil {
+		file.Close()
+		if errors.Is(lockErr, syscall.EWOULDBLOCK) {
 			return nil, ErrLocked
 		}
-		file.Close()
-		return nil, err
+		return nil, lockErr
 	}
 	return &Lock{file: file}, nil
 }
 
-// openExistingLock opens a lock file that is already there. A sweep must never
-// create one: a missing lock is an unconfirmed state, not a dead session.
 func (l *Lock) Close() error {
 	if l == nil || l.file == nil {
 		return nil
 	}
-	err := syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN)
-	if cerr := l.file.Close(); err == nil {
-		err = cerr
-	}
+	err := l.file.Close()
 	l.file = nil
 	return err
 }

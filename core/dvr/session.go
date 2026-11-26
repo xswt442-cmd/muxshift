@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/xswt442-cmd/muxshift/core"
@@ -132,6 +133,9 @@ func (s *Session) Close() error {
 		return nil
 	}
 	if s.lock == nil {
+		if s.record.State == markerRemoving {
+			return s.removeSessionNames()
+		}
 		return fmt.Errorf("%w: the session is not open, so it cannot be cleaned up", core.ErrInvalid)
 	}
 	markerPath := filepath.Join(s.Dir, MarkerName)
@@ -145,23 +149,37 @@ func (s *Session) Close() error {
 	if err := writeMarker(markerPath, going); err != nil {
 		return err
 	}
+	s.record = going
 	if left, err := s.emptyContentDirs(); err != nil {
 		return err
 	} else if len(left) > 0 {
 		return fmt.Errorf("%w: the session still holds %s", ErrNoSpace, strings.Join(left, ", "))
 	}
-	if err := os.Remove(markerPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("%w: remove session marker: %v", ErrNoSpace, err)
-	}
-	// The lock file cannot be removed while this process holds the exclusive
-	// handle, so the lock is released just before the last two names go. A sweep
-	// that wins that small race removes the directory itself; both paths treat
-	// an already missing name as success.
+	// Leave the removing marker in place until the lock file is gone. A sweep
+	// can then finish an interrupted close, even if Windows still holds the
+	// lock file open.
 	if err := s.releaseLock(); err != nil {
 		return err
 	}
-	if err := os.Remove(filepath.Join(s.Dir, lockName)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("%w: remove session lock: %v", ErrNoSpace, err)
+	return s.removeSessionNames()
+}
+
+func (s *Session) removeSessionNames() error {
+	const windowsSharingViolation = syscall.Errno(32)
+	path := filepath.Join(s.Dir, lockName)
+	for attempt := 0; ; attempt++ {
+		err := os.Remove(path)
+		if err == nil || errors.Is(err, os.ErrNotExist) {
+			break
+		}
+		if runtime.GOOS != "windows" || attempt == 9 ||
+			(!errors.Is(err, windowsSharingViolation) && !errors.Is(err, os.ErrPermission)) {
+			return fmt.Errorf("%w: remove session lock: %v", ErrNoSpace, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := os.Remove(filepath.Join(s.Dir, MarkerName)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%w: remove session marker: %v", ErrNoSpace, err)
 	}
 	if err := os.Remove(s.Dir); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("%w: remove session directory: %v", ErrNoSpace, err)

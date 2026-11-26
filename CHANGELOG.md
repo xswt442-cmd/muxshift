@@ -31,6 +31,8 @@ This changelog records completed changes that matter to someone using MuxShift. 
 - 启动优先打开当前舞台使用的来源。切走后停用新舞台不再使用的播放器。
 - 检测公网媒体地址或探测 HLS 轨道时，会校验实际连接地址。桌面端拒绝超过 1 MiB 的 HLS 播放列表。
 - 选择清晰度或刷新来源后，清晰度菜单会收起。取消读取后，旧结果不会覆盖新菜单。
+- 原设置文件损坏时，外观更改只在本次运行中生效。保存失败后，可以重新点击「应用」。
+- 对齐估算会计入参考来源的偏移。回放微调若早于录像首帧，既有偏移保持原值。
 - 舞台播放控制以当前舞台为范围，只有舞台包含活动同步组成员时才会控制该组。观看模式的播放按钮和空格键使用同一规则。
 - 浏览器扩展检测到换页或重载时会清空旧候选，并提示重新扫描。
 
@@ -59,6 +61,8 @@ This changelog records completed changes that matter to someone using MuxShift. 
 - Startup opens sources used by the current stage first. Stage changes stop players the new stage no longer uses.
 - Media detection and HLS track probes validate the connection address for public sources. The desktop rejects HLS playlists larger than 1 MiB.
 - Choosing a quality level or refreshing the source closes the quality menu. Canceled requests cannot overwrite the reopened menu.
+- Appearance changes apply for the current run when the original settings file is damaged. Use Apply to retry a failed save.
+- Alignment estimates include the reference source's offset. Replay nudges before the recording's first frame leave the existing offset intact.
 - Stage transport controls the current stage and includes the active sync group only when the stage has a member in that group. The viewing controls and Space shortcut use the same rule.
 - The extension clears old candidates and asks for a fresh scan when it detects a page change or reload.
 

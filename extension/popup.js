@@ -63,6 +63,8 @@ const STRINGS = {
     noLiveAddress: "页面没有提供可用的直播地址",
     sending: "正在发送地址到本机窗口…",
     accepted: "桌面端已接收导入请求。请在「舞台 → 来源」查看打开状态。",
+    unconfirmed: "未收到桌面端确认。请先检查「舞台 → 来源」，再决定是否重试。",
+    unverified: "页面未能确认此地址可用。你可以选中地址，交给桌面端检查。",
     sendFailed: "发送失败 · 检查桌面端是否运行及配对状态，然后重试",
     rejected: "桌面端拒绝了该地址",
     staleTab: "页面已切换或重新加载，旧地址已作废 · 重新打开扩展扫描",
@@ -112,6 +114,8 @@ const STRINGS = {
     noLiveAddress: "the page did not provide a usable live address",
     sending: "sending the address to the local window…",
     accepted: "The desktop accepted the import request. Check Stage → Sources for its status.",
+    unconfirmed: "The desktop did not confirm the import. Check Stage → Sources before retrying.",
+    unverified: "The page could not verify this address. You can select it and send it to the desktop to check.",
     sendFailed: "Could not send · check that the desktop is running and paired, then retry",
     rejected: "The desktop rejected this address",
     staleTab: "The page changed or reloaded; this address is discarded · reopen the popup to scan again",
@@ -334,6 +338,7 @@ function sendAddress(url, done) {
     if (!reply?.ok) {
       if (reply?.failure === "expired") {
         if (pairEpoch === pairing) {
+          pairEpoch++;
           setPairLine(t("notPairedNew"));
           setStatus(t("expired"), "bad");
         }
@@ -347,6 +352,8 @@ function sendAddress(url, done) {
           setPairLine(t("pairedUnreachable"));
           setStatus(t("windowUnreachable"), "bad");
         }
+      } else if (reply?.failure === "unconfirmed") {
+        setStatus(t("unconfirmed"), "bad");
       } else if (reply?.failure === "stale-tab") {
         discardStaleScan();
       } else if (reply?.failure === "rejected") {
@@ -388,8 +395,13 @@ resolveButton.addEventListener("click", () => {
       finishHandoff();
       return;
     }
-    resolverNote.textContent = reply.note || "";
+    resolverNote.textContent = reply.unverified ? t("unverified") : reply.note || "";
     offer(reply);
+    if (reply.unverified) {
+      setStatus(t("unverified"));
+      finishHandoff();
+      return;
+    }
     sendAddress(reply.url, finishHandoff);
   });
 });

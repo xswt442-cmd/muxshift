@@ -129,13 +129,24 @@ function pageMedia(action, ...args) {
   // Keep the deadline active until the response body is consumed.
   async function fetchWithin(url, init, timeoutMs, read) {
     const timer = new AbortController();
-    const timeout = setTimeout(() => timer.abort(), timeoutMs);
-    const signal = init.signal ? AbortSignal.any([timer.signal, init.signal]) : timer.signal;
+    const parent = init.signal;
+    const cancel = () => timer.abort();
+    if (parent?.aborted) cancel();
+    else parent?.addEventListener("abort", cancel, { once: true });
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      timer.abort();
+    }, timeoutMs);
     try {
-      const response = await fetch(url, { ...init, signal });
+      const response = await fetch(url, { ...init, signal: timer.signal });
       return await read(response);
+    } catch (error) {
+      if (timedOut && !parent?.aborted) throw new DOMException("The request timed out.", "TimeoutError");
+      throw error;
     } finally {
       clearTimeout(timeout);
+      parent?.removeEventListener("abort", cancel);
     }
   }
 
@@ -339,6 +350,15 @@ function pageMedia(action, ...args) {
           const [section, id] = location.pathname.split("/").filter(Boolean);
           if (location.hostname === "youtu.be") return section || "";
           if (section === "live" || section === "shorts") return id || "";
+          if (section?.startsWith("@") && id === "live") {
+            const response = window.ytInitialPlayerResponse;
+            const details = response?.videoDetails;
+            const owner = mediaAddress(response?.microformat?.playerMicroformatRenderer?.ownerProfileUrl);
+            if (details?.isLive && owner && (owner.hostname === "www.youtube.com" || owner.hostname === "youtube.com") &&
+                owner.pathname.replace(/\/$/, "").toLowerCase() === `/${section.toLowerCase()}`) {
+              return details.videoId || "";
+            }
+          }
           return section === "watch" ? new URL(location.href).searchParams.get("v") || "" : "";
         },
         // Nothing is requested: the page already holds the answer it was given.
@@ -401,11 +421,11 @@ function pageMedia(action, ...args) {
       }
       const url = await firstReachable(hls);
       if (controller.signal.aborted || location.href !== expectedURL) return { failure: "stale-tab" };
-      if (!url) return { url: "", note: "None of the playlist mirrors responded." };
+      if (!url) return { url: hls[0], unverified: true };
       return { url, note: site.describe(subject, hls.length) };
     } catch (error) {
       if (controller.signal.aborted || location.href !== expectedURL) return { failure: "stale-tab" };
-      if (error?.name === "AbortError") return { url: "", note: `${site.name} did not respond in time.` };
+      if (error?.name === "TimeoutError") return { url: "", note: `${site.name} did not respond in time.` };
       return { url: "", note: `The page could not trade its session for an address: ${String(error?.message || error)}` };
     } finally {
       for (const event of navigationEvents) removeEventListener(event, cancelForNavigation);
@@ -494,7 +514,12 @@ async function request(path, body, token) {
     // Preserve the network-failure category for pair and import callers. The
     // wrapper is an ordinary Error, so callers must not inspect instanceof
     // TypeError after this point.
-    if (error?.name === "TypeError" || error?.name === "AbortError") {
+    if (error?.name === "TimeoutError" && path === "/import") {
+      const unconfirmed = new Error("the desktop did not confirm the import");
+      unconfirmed.failure = "unconfirmed";
+      throw unconfirmed;
+    }
+    if (error?.name === "TypeError" || error?.name === "AbortError" || error?.name === "TimeoutError") {
       const disconnected = new Error("the local MuxShift window could not be reached");
       disconnected.failure = "unreachable";
       throw disconnected;
@@ -570,7 +595,7 @@ async function resolveLive(target) {
   const note = safeReason(found?.note);
   const address = pageMedia("address", found?.url);
   if (!address) return { note: note || "The page did not return a valid HTTP or HTTPS address." };
-  return { url: address.href, note };
+  return { url: address.href, note, unverified: found?.unverified === true };
 }
 
 async function waitForPageResolver(result) {
@@ -610,8 +635,8 @@ async function importAddress(url, target) {
       }
       return { ok: false, failure: "expired" };
     }
-    if (error.failure === "unreachable") {
-      return { ok: false, failure: "unreachable" };
+    if (error.failure === "unreachable" || error.failure === "unconfirmed") {
+      return { ok: false, failure: error.failure };
     }
     return { ok: false, failure: error.status ? "rejected" : "failed", reason: safeReason(error.message) };
   }

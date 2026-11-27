@@ -14,12 +14,16 @@ never copies cookies, request headers, or keys.
 - Pressing **Send selected address** sends
   `{url: ...}` to the window's own loopback listener, `POST http://127.0.0.1:8731/import`,
   with the window's token in `X-MuxShift-Handoff`. On supported live pages,
-  **Resolve and send** explicitly labels the one-click send action.
+  **Resolve and send** sends a candidate if the page's probe reaches it. If
+  the probe cannot reach any candidate, the popup offers an unverified HLS
+  address for you to send explicitly.
 - The window runs the same add command as the stage's Sources panel, so an address
   the extension hands over lands in the same session, with the same errors, as
   one typed in by hand. The popup distinguishes scanning, pairing, sending, and
   acceptance; acceptance means the desktop accepted the import command, not
-  that the media opened. Check Stage → Sources for its status and any later failure.
+  that the media opened. Check Stage → Sources for its status and any later
+  failure. If the popup did not receive confirmation in time, check there
+  before retrying.
 - Resolve and send use the scanned active page. If the tab switches, navigates,
   or reloads, the popup clears the old candidates and asks you to reopen it
   for a fresh scan.
@@ -68,8 +72,8 @@ profile that already trusts the extension keeps the same identity.
    `127.0.0.1:8731 · pairing code 123456 (expires in 2m)`.
 2. Load the extension unpacked (below), open its popup and type that code.
 3. Select an address in the popup's main view and press **Send selected
-   address**. On supported live pages, **Resolve and send** is a separate
-   explicit one-click authorization.
+   address**. On supported live pages, **Resolve and send** can send a
+   reachable candidate in one step.
 
 If the window is closed or restarted, the extension reports that the window is
 not answering; a new window shows a new code, so pair again.

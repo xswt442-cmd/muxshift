@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"image"
 	"os"
 	"strings"
@@ -64,6 +65,34 @@ func TestShutdownDrainsQueuedRecordingRelease(t *testing.T) {
 
 func TestShutdownInterruptsInFlightRetirement(t *testing.T) {
 	checkShutdownRecordingRelease(t, false)
+}
+
+func TestShutdownDrainsNativeReplayCloseFromPreparingWorker(t *testing.T) {
+	app, err := newAppState(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.window = &mygo.Window{}
+	decoder := &lifecycleDecoder{closed: make(chan struct{}, 1)}
+	player, err := ui.NewVideoPlayer(decoder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	txn := &seekTxn{ctx: ctx, cancel: cancel, done: make(chan struct{})}
+	app.seek = txn
+	go func() {
+		defer close(txn.done)
+		<-ctx.Done()
+		app.closeReplayPlayer(player, nil)
+	}()
+	app.shutdown()
+	select {
+	case <-decoder.closed:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown left the worker's player open")
+	}
 }
 
 func checkShutdownRecordingRelease(t *testing.T, advanceFrames bool) {

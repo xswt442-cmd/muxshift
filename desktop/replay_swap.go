@@ -141,7 +141,7 @@ func (a *appState) commitReplay(swap *replaySwap, anchor dvr.Anchor, anchorErr e
 			it.replayAnchorErr = anchorErr
 		}
 		it.generation++
-		a.closeReplayPlayer(old, oldLease)
+		a.closeReplayPlayerOnMain(old, oldLease)
 		ok = true
 		logf("replay", "committed %s on %s: shows %s..%s of buffer time",
 			recording.FileName(), shortURI(it.uri), shortDuration(recording.StartBufferTime), shortDuration(recording.EndBufferTime))
@@ -161,7 +161,7 @@ func (a *appState) abandonReplay(swap *replaySwap, why string) {
 		if it.swap == swap {
 			it.swap = nil
 		}
-		swap.finished.Do(func() { a.closeReplayPlayer(swap.player, swap.lease) })
+		swap.finished.Do(func() { a.closeReplayPlayerOnMain(swap.player, swap.lease) })
 	})
 	logf("replay", "rolled back the switch to %s: %s", swap.recording.FileName(), why)
 }

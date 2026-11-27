@@ -331,7 +331,7 @@ func validateSourceMemory(m sourceMemory) error {
 	}
 	seen := make(map[string]bool, len(m.Entries))
 	for i, entry := range m.Entries {
-		if entry.Volume < 0 || entry.Volume > 1 {
+		if math.IsNaN(entry.Volume) || entry.Volume < 0 || entry.Volume > 1 {
 			return fmt.Errorf("sourceMemory.entries[%d].volume %.3f is not a level between 0 and 1", i, entry.Volume)
 		}
 		identity, err := normalizeSourceIdentity(entry.Address)

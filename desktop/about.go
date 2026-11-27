@@ -205,6 +205,9 @@ func (a *appState) openReleasePage(address string, fallback func(string, func(er
 	if opener == nil {
 		opener = fallback
 	}
+	if opener == nil {
+		return
+	}
 	opener(address, func(err error) {
 		if err != nil {
 			a.lastErr = safeOpenError(err)

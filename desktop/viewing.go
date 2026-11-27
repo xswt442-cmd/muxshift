@@ -511,7 +511,7 @@ func (a *appState) viewingShortcuts(c *ui.Context) {
 	})
 	c.OnWindowShortcut(0, ui.KeyM, func() {
 		it := a.firstShown()
-		if it == nil || it.player == nil {
+		if it == nil || it.player == nil || it.audio == "" {
 			return
 		}
 		a.report(a.runCommand(command{Kind: commandMute, Source: it.source.ID}))

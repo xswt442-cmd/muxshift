@@ -120,7 +120,7 @@ func (a *appState) mixerRow(c *ui.Context, index int, it *item) {
 			if it.muted {
 				muteLabel = a.tr("Unmute source", "取消本路静音")
 			}
-			a.mixerAction(c, fmt.Sprintf("mixer-mute-%d", index), muteLabel, 76, 26,
+			a.mixerAction(c, fmt.Sprintf("mixer-mute-%d", index), muteLabel, 116, 26,
 				it.muted, ui.RGBA(228, 182, 109, 0.14), colorWarn, mute)
 			a.mixerAction(c, fmt.Sprintf("mixer-solo-%d", index), a.tr("Solo", "独听"), 76, 26,
 				soloed, colorAccentSoft, colorAccent, solo)

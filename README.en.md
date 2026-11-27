@@ -21,7 +21,7 @@
 
 ## What it does
 
-- **Several sources in one session**: each source keeps its own audio and video tracks, and a scene picks which picture is shown and which sound is played. Volume is set per source.
+- **Several sources in one session**. Each source keeps its own audio and video tracks, and a scene picks which picture is shown and which sound is played. Volume is set per source.
 - **Session recovery**. Startup restores the stage arrangement and opens recoverable sources used by the active stage. Session files omit HTTP(S) addresses with credentials, a query, or a fragment, while retaining their sources and stage assignments for address selection in Stage → Sources.
 - **Temporary sessions**. Launching with `-media` preserves the saved session. When multiple windows use the same session file, only the window holding its lock can save it.
 - **Per-source controls**. Use Stage → Sources to show, play, pause, or refresh an individual source. A live master playlist with multiple playable variants offers a quality choice for that source.
@@ -32,7 +32,7 @@
 - **Free placement**: select a picture to move, resize, lock, or position it precisely. Each stage saves its positions and stacking order.
 - **Four viewing modes**: editing, cinema, F11 full screen, and a small always-on-top window. Switching between them does not reload a player.
 - **Appearance**. Theme, text size, font, compact spacing, and “Show the timeline under the stage” apply and save immediately. Select Apply to save Console layout in Appearance or Language in General.
-- **About**: the About section in settings shows the current version and build commit, Windows version and architecture, logical processors, physical memory, and the settings file path; opening it asks GitHub for the latest release, and the check can be retried manually.
+- **About**. The About section in settings shows the current version and build commit, Windows version and architecture, logical processors, physical memory, and the settings file path. Opening it checks GitHub for the latest release. You can also retry the check.
 - **Web client**: binds to loopback only, plays with hls.js, and can switch scenes.
 - **Browser extension**: hands the media address a page has already loaded to the desktop app, without cookies, request headers, or keys.
 
@@ -68,7 +68,7 @@ Media metadata reads verify the actual connection address for public sources. Pl
 
 ## Adding a source
 
-`+ Source` opens one panel with three choices:
+Select `+` in the stage's Sources panel or the add button on an empty stage to open the three import options.
 
 - **Local file** opens the system file picker and adds the chosen file to the current session; cancelling changes nothing.
 - **Media link** opens an HTTP(S) HLS playlist or a directly readable media file. The desktop checks the response and reports a web page, a 404, or an unsupported media type.

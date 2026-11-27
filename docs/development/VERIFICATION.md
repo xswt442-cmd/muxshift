@@ -5,7 +5,7 @@ What exists to check this repository, what each check covers, and what it cannot
 Two Go modules, two test commands:
 
 ```sh
-go test ./...            # root module: core, core/hls, core/dvr, web, tools
+go test ./...            # root: core, core/align, core/hls, core/dvr, internal/filelock, internal/netguard, web, tools
 cd desktop && go test ./...   # the MyGo client is its own module and is NOT reached by the root command
 go vet ./...             # in each module
 ```
@@ -25,10 +25,10 @@ go vet ./...             # in each module
 | Settings | `cd desktop && go test ./...` | defaults, validation ranges, save/load round trip, damaged files, live application of a draft, and the About version comparison | passing |
 | Browser extension location | `cd desktop && go test ./...` | the About page finds the shipped `extension\` folder beside the binary and one level up in a checkout, reports a folder without `manifest.json`, and the open-folder command asks the shell for that folder and refuses when there is none | passing |
 | Replay seek and internal entry | desktop module suite, replay tests in desktop/replay_group_test.go | Seek authorization, commit and rollback, queued steps after cancellation, and recording ownership while a replacement player opens. The internal live-to-replay transaction has no user-facing entry. | passing |
-| Player lifecycle | desktop module suite, desktop/player_lifecycle_test.go | Generation guards, source detach and reload interleaving, lease order at shutdown, and original workbench bounds when leaving viewing mode. | passing |
+| Player lifecycle | desktop module suite, desktop/player_lifecycle_test.go | Generation guards, source detach and reload interleaving, lease release and recording cleanup at shutdown, and original workbench bounds when leaving viewing mode. | passing |
 | Session recovery and membership | desktop module suite, desktop/session_store_test.go, desktop/stage_members_test.go, and desktop/startup_video_test.go | Single writer, preservation of invalid snapshots, address reselection, ordered pending routes, hidden members, and first startup picture. | passing |
-| Stage transport and workbench | desktop module suite, including `transport_stage_test.go` and `workbench_polish_test.go` | Scope of the active sync group, wide and narrow navigation, draft save recovery, and refusal of negative replay positions before offset changes. | passing |
-| HLS destination and quality controls | go test ./internal/netguard and desktop tests in desktop/live_variants_test.go and desktop/source_media_test.go | Address classification, loopback policy, preserved authority during pinning, playlist validation and limits, and stale quality callbacks. | passing |
+| Stage transport and workbench | desktop module suite, including `transport_stage_test.go`, `workbench_polish_test.go`, and `p27_regression_test.go` | Scope of the active sync group, wide and narrow navigation, draft save recovery, and refusal of negative replay positions before offset changes. | passing |
+| HLS destination and quality controls | `go test ./internal/netguard ./core/hls` and desktop tests in `live_variants_test.go` and `source_media_test.go` | Literal-IP dialing after one DNS lookup, mixed-address rejection, HTTP CONNECT and SOCKS5 pinning, HTTP forwarding refusal, redirect policy, playlist limits, signed URL redaction, and stale quality callbacks. | passing |
 | Alignment rows | desktop module suite, including `align_row_test.go` | Result ownership and expiry when the reference, target, or offsets change. | passing |
 | Core session snapshots and file locks | go test ./core ./internal/filelock | Session event ordering, snapshot and return-value isolation, exclusive lock contention and release. | passing |
 

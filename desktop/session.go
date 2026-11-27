@@ -15,6 +15,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -39,7 +40,8 @@ type item struct {
 
 	// origin says whether the address came from the command line; only a source
 	// somebody added by hand writes its level back to the settings file.
-	origin sourceOrigin
+	origin              sourceOrigin
+	startupPictureScene core.SceneID
 
 	source core.Source
 	video  core.TrackID
@@ -646,6 +648,8 @@ type appState struct {
 	mediaCloseQueue     []queuedMediaClose
 	mediaCloseScheduled bool
 	leaseCloseWait      sync.WaitGroup
+	replayCloseMu       sync.Mutex
+	replayCloses        []pendingClose
 }
 
 // newAppState builds a session with one scene per given source set, opens a
@@ -1129,7 +1133,8 @@ func (a *appState) landUnavailableRetry(token int, targetID, requestedURI string
 	if a.scene != a.retryScene || a.stageGeneration != a.retryStageGeneration || !a.isStageMember(it) {
 		a.clearUnavailableRetry()
 		a.importText = ""
-		a.lastErr = errors.New("stage changed while the source was being reopened; retry it on the active stage")
+		a.lastErr = errors.New("the reopen request ended because the source left the active stage")
+		a.reconcileScenePlayers(a.scene, a.stageGeneration)
 		a.invalidate()
 		return
 	}
@@ -1401,17 +1406,6 @@ func (a *appState) landImportPlan(token int, plan importPlan, probeErr error) {
 			if target == a.scene {
 				a.setSelectedSource(it.source.ID)
 			}
-			// Ordinary startup selects the first video whose source and player
-			// both landed successfully. A failed earlier CLI candidate must not
-			// leave the stage pointing at a track that can never show a picture.
-			// UI and handoff imports keep their explicit Show behavior.
-			if origin == originCommandLine && targetAvailable && it.video != "" {
-				if scene, sceneErr := a.session.Scene(target); sceneErr == nil && len(scene.Video) == 0 {
-					if _, setErr := a.session.SetSceneVideo(target, it.video); setErr != nil {
-						a.lastErr = safeOpenError(setErr)
-					}
-				}
-			}
 			// A source the user just imported is audible by default: route its
 			// audio into the scene at its own level, exactly the way a source
 			// given on the command line is routed at startup.
@@ -1422,6 +1416,9 @@ func (a *appState) landImportPlan(token int, plan importPlan, probeErr error) {
 						a.lastErr = safeOpenError(err)
 					}
 				}
+			}
+			if origin == originCommandLine && targetAvailable {
+				a.selectStartupPicture(target)
 			}
 			a.apply()
 			a.saveSession()
@@ -1547,6 +1544,7 @@ func (a *appState) abandonImport(it *item, generation int, cause error, keepSour
 			a.closeOnMain(it)
 			err := safeOpenError(cause)
 			it.openErr = err
+			a.replaceFailedStartupPicture(it)
 			a.lastErr = err
 			result := commandResult{
 				Command: command{Kind: commandRetry, Source: itemKey(it)},
@@ -1561,7 +1559,7 @@ func (a *appState) abandonImport(it *item, generation int, cause error, keepSour
 			return
 		}
 		removed := false
-		wasStartupPicture := it.origin == originCommandLine && it.shown
+		startupScene := it.startupPictureScene
 		for index, candidate := range a.items {
 			if candidate != it {
 				continue
@@ -1574,8 +1572,9 @@ func (a *appState) abandonImport(it *item, generation int, cause error, keepSour
 			break
 		}
 		if removed {
-			if wasStartupPicture {
-				a.selectStartupPicture()
+			if startupScene != "" {
+				a.selectStartupPicture(startupScene)
+				a.reconcileScenePlayers(a.scene, a.stageGeneration)
 			}
 			a.saveSession()
 		}
@@ -1597,21 +1596,50 @@ func (a *appState) abandonImport(it *item, generation int, cause error, keepSour
 	})
 }
 
-func (a *appState) selectStartupPicture() {
-	scene, err := a.session.Scene(a.scene)
+func (a *appState) replaceFailedStartupPicture(it *item) {
+	sceneID := it.startupPictureScene
+	it.startupPictureScene = ""
+	if sceneID == "" {
+		return
+	}
+	scene, err := a.session.Scene(sceneID)
+	if err != nil || !containsTrack(scene.Video, it.video) {
+		return
+	}
+	video := slices.DeleteFunc(slices.Clone(scene.Video), func(track core.TrackID) bool { return track == it.video })
+	if _, err := a.session.SetSceneVideo(sceneID, video...); err != nil {
+		a.lastErr = safeOpenError(err)
+		return
+	}
+	a.selectStartupPicture(sceneID)
+	a.apply()
+	a.reconcileScenePlayers(a.scene, a.stageGeneration)
+}
+
+func (a *appState) selectStartupPicture(sceneID core.SceneID) {
+	scene, err := a.session.Scene(sceneID)
 	if err != nil || len(scene.Video) != 0 {
 		return
 	}
+	for _, binding := range a.pendingBindings[sceneID] {
+		if binding.video {
+			return
+		}
+	}
+	members := a.sceneMembers[sceneID]
 	for _, candidate := range a.items {
-		if candidate.origin == originCommandLine && a.isStageMember(candidate) && candidate.video != "" &&
-			candidate.player != nil && candidate.player.Err() == nil {
-			if _, err := a.session.SetSceneVideo(a.scene, candidate.video); err != nil {
+		if candidate.origin == originCommandLine && (members == nil || members[candidate.persistentID]) &&
+			candidate.video != "" && candidate.openErr == nil && (candidate.player == nil || candidate.player.Err() == nil) {
+			if _, err := a.session.SetSceneVideo(sceneID, candidate.video); err != nil {
 				a.lastErr = safeOpenError(err)
 				return
 			}
-			a.setSelectedSource(itemKey(candidate))
-			a.apply()
-			a.wakeShown(candidate)
+			candidate.startupPictureScene = sceneID
+			if sceneID == a.scene {
+				a.setSelectedSource(itemKey(candidate))
+				a.apply()
+				a.wakeShown(candidate)
+			}
 			return
 		}
 	}
@@ -1850,6 +1878,8 @@ func (a *appState) reconcileScenePlayers(sceneID core.SceneID, generation uint64
 				if err != nil {
 					source.openErr = safeOpenError(err)
 					a.lastErr = source.openErr
+					a.replaceFailedStartupPicture(source)
+					a.saveSession()
 					a.invalidate()
 					return
 				}
@@ -1924,6 +1954,9 @@ func (a *appState) showVideo(index int) error {
 	}
 	if _, err := a.session.SetSceneVideo(a.scene, tracks...); err != nil {
 		return err
+	}
+	if it.startupPictureScene == a.scene {
+		it.startupPictureScene = ""
 	}
 	if showing {
 		a.removePendingStageRoutes(scene, it, true, false)
@@ -2546,6 +2579,7 @@ func (a *appState) shutdown() {
 	// A transaction still preparing owns files and players of its own; give them
 	// back before the sources they were cut from are closed.
 	a.shutdownReplayTxn()
+	a.drainReplayCloses()
 	a.stopRecording()
 	log.Printf("shutdown: recording stopped; closing %d player(s)", len(a.items))
 	for _, it := range a.items {

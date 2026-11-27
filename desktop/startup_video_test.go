@@ -73,6 +73,35 @@ func TestOrdinaryImportDoesNotAutoSelectItsVideo(t *testing.T) {
 	}
 }
 
+func TestDeferredStartupFailureOnlyReplacesAutomaticPicture(t *testing.T) {
+	for _, explicit := range []bool{false, true} {
+		app, scene, _ := newStoreFixture(t)
+		first := app.items[0]
+		first.origin, first.persistentID = originCommandLine, "first"
+		second := &item{uri: "https://example.test/next", origin: originCommandLine, persistentID: "second"}
+		if err := app.addDirect(second); err != nil {
+			t.Fatal(err)
+		}
+		app.items = append(app.items, second)
+		if !explicit {
+			first.startupPictureScene = scene
+		}
+		first.openErr = errors.New("deferred open failed")
+		app.replaceFailedStartupPicture(first)
+		selected, err := app.session.Scene(scene)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := second.video
+		if explicit {
+			want = first.video
+		}
+		if len(selected.Video) != 1 || selected.Video[0] != want {
+			t.Fatalf("explicit=%v: selected %v, want %s", explicit, selected.Video, want)
+		}
+	}
+}
+
 func TestStageTransportControllerRequiresPlayers(t *testing.T) {
 	app, scene, _ := newStoreFixture(t)
 	if _, err := app.session.SetSceneVideo(scene); err != nil {

@@ -99,6 +99,9 @@ func (a *appState) unlinkStageMember(it *item) {
 	}
 	sourceID := a.stageSourceID(it)
 	delete(a.materializeStageMembers(scene.ID), sourceID)
+	if it.startupPictureScene == scene.ID {
+		it.startupPictureScene = ""
+	}
 	it.closeMediaMenu()
 	if a.retryScene == scene.ID && a.retryTargetID == sourceID {
 		a.importToken++

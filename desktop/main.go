@@ -209,6 +209,10 @@ func (a *appState) handOver(it *item, generation int, kept *handover) {
 			var confirmed string
 			a.mainDo(func() {
 				if it.generation == generation && it.handover == kept && !a.closed {
+					player := it.player
+					if player == nil || !player.Ready() || player.Buffering() || player.Err() != nil {
+						return
+					}
 					old := kept.take()
 					if old == nil {
 						return
@@ -240,8 +244,8 @@ func (a *appState) handOver(it *item, generation int, kept *handover) {
 			})
 			if confirmed != "" {
 				log.Printf("handover: replaced the player of %s after %s", confirmed, "a picture")
+				return
 			}
-			return
 		}
 		if !time.Now().Before(deadline) {
 			break
@@ -278,14 +282,13 @@ func (a *appState) rollbackHandoverOnMain(it *item, generation int, kept *handov
 	if replacement != nil {
 		a.retireMediaOnMain([]pendingClose{{player: replacement}}, nil, nil)
 	}
+	a.apply()
 	if kept.retainState {
-		a.apply()
 		it.mediaReplaceErr = fmt.Errorf("replacement did not start; kept the previous player")
-		a.invalidate()
 	} else {
-		it.shown = true
 		it.openErr = fmt.Errorf("reopen did not start within %s; kept the previous player", handoverWait)
 	}
+	a.invalidate()
 	return shortURI(it.uri)
 }
 
@@ -1125,15 +1128,17 @@ func main() {
 	if *trace {
 		go func() {
 			for range time.Tick(500 * time.Millisecond) {
-				for i, it := range s.items {
-					if it.player == nil {
-						log.Printf("trace %d: no player", i+1)
-						continue
+				mygoRunOnMain(func() {
+					for i, it := range s.items {
+						if it.player == nil {
+							log.Printf("trace %d: no player", i+1)
+							continue
+						}
+						p := it.player
+						log.Printf("trace %d: ready=%v playing=%v muted=%v buffering=%v duration=%s position=%s err=%v",
+							i+1, p.Ready(), p.Playing(), p.Muted(), p.Buffering(), p.Duration(), p.Position(), safeOpenError(p.Err()))
 					}
-					p := it.player
-					log.Printf("trace %d: ready=%v playing=%v muted=%v buffering=%v duration=%s position=%s err=%v",
-						i+1, p.Ready(), p.Playing(), p.Muted(), p.Buffering(), p.Duration(), p.Position(), p.Err())
-				}
+				})
 			}
 		}()
 	}

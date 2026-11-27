@@ -55,6 +55,28 @@ func TestRedactMediaAndProxySchemes(t *testing.T) {
 	}
 }
 
+func TestRedactAdjacentBracketedAddresses(t *testing.T) {
+	const input = "[https://user:first@[2001:db8::1]:8443/a?signed][https://user:second@example.test/b#fragment]"
+	const want = "[https://[2001:db8::1]:8443/a][https://example.test/b]"
+	if got := Redact(input); got != want {
+		t.Fatalf("redacted text = %q, want %q", got, want)
+	}
+}
+
+type fixtureNetworkTimeout struct{}
+
+func (fixtureNetworkTimeout) Error() string {
+	return "timeout reading https://example.test/live?fixture-signature"
+}
+func (fixtureNetworkTimeout) Timeout() bool { return true }
+
+func TestReadFailureKeepsTimeoutCategory(t *testing.T) {
+	err := readFailure("read playlist", fixtureNetworkTimeout{})
+	if !errors.Is(err, ErrTimeout) || strings.Contains(err.Error(), "fixture-signature") {
+		t.Fatalf("timeout = %v", err)
+	}
+}
+
 func TestProbeDoesNotLogSignedURLs(t *testing.T) {
 	const signature = "fixture-query"
 	var signedDownloads atomic.Int32

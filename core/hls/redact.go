@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"strings"
 
 	"github.com/xswt442-cmd/muxshift/core"
@@ -46,7 +47,22 @@ func Redact(text string) string {
 			break
 		}
 		end := start
-		for end < len(rest) && !strings.ContainsRune(" \t\r\n\"'<>()", rune(rest[end])) {
+		authority := start + strings.Index(rest[start:], "://") + 3
+		delimiters := " \t\r\n\"'<>()"
+		bracketed := start > 0 && rest[start-1] == '['
+		for end < len(rest) && !strings.ContainsRune(delimiters, rune(rest[end])) {
+			if rest[end] == ']' && bracketed && (end+1 == len(rest) ||
+				strings.ContainsRune(delimiters+"[", rune(rest[end+1]))) {
+				break
+			}
+			if rest[end] == '[' && (end == authority || end > authority && rest[end-1] == '@') {
+				address, _, found := strings.Cut(rest[end+1:], "]")
+				ip, err := netip.ParseAddr(address)
+				if found && err == nil && ip.Is6() {
+					end += len(address) + 2
+					continue
+				}
+			}
 			end++
 		}
 		out.WriteString(rest[:start])
@@ -83,6 +99,10 @@ func readFailure(message string, err error) error {
 		if errors.Is(err, cause) {
 			return fmt.Errorf("%s: %w", text, cause)
 		}
+	}
+	var timeout interface{ Timeout() bool }
+	if errors.As(err, &timeout) && timeout.Timeout() {
+		return fmt.Errorf("%s: %w", text, ErrTimeout)
 	}
 	return errors.New(text)
 }

@@ -238,7 +238,13 @@ func (t transport) RoundTrip(req *http.Request) (*http.Response, error) {
 				return nil, err
 			}
 			secure := tls.Client(conn, &tls.Config{ServerName: proxy.Hostname()})
-			if err := secure.HandshakeContext(ctx); err != nil {
+			timeout := t.base.TLSHandshakeTimeout
+			if timeout <= 0 {
+				timeout = 10 * time.Second
+			}
+			handshake, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			if err := secure.HandshakeContext(handshake); err != nil {
 				conn.Close()
 				return nil, err
 			}
@@ -281,7 +287,10 @@ func networkError(err error, message string) error {
 		return context.Canceled
 	case errors.Is(err, context.DeadlineExceeded):
 		return context.DeadlineExceeded
-	default:
-		return errors.New(message)
 	}
+	var timeout net.Error
+	if errors.As(err, &timeout) && timeout.Timeout() {
+		return context.DeadlineExceeded
+	}
+	return errors.New(message)
 }

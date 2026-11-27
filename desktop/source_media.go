@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/url"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/xswt442-cmd/muxshift/core"
@@ -89,11 +90,12 @@ func (a *appState) sourceQualityOptions(c *ui.Context, it *item, key string) {
 
 func currentQuality(address string, variants []liveVariant) int {
 	match, matches := -1, 0
+	identity := qualityAddress(address)
 	for i, variant := range variants {
 		if variant.address == address {
 			return i
 		}
-		if stripSecrets(variant.address) == stripSecrets(address) {
+		if identity != "" && qualityAddress(variant.address) == identity {
 			match, matches = i, matches+1
 		}
 	}
@@ -101,6 +103,22 @@ func currentQuality(address string, variants []liveVariant) int {
 		return match
 	}
 	return -1
+}
+
+// Keep variant selectors when comparing addresses with rotating tokens.
+func qualityAddress(address string) string {
+	parsed, err := url.Parse(address)
+	if err != nil {
+		return ""
+	}
+	query, err := url.ParseQuery(parsed.RawQuery)
+	if err != nil {
+		return ""
+	}
+	query.Del("token")
+	parsed.RawQuery = query.Encode()
+	parsed.Fragment = ""
+	return parsed.String()
 }
 
 func (a *appState) canReplaceSourceMedia(it *item) bool {

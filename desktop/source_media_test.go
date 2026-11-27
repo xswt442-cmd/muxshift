@@ -99,4 +99,8 @@ func TestRotatingQueryTokensDoNotDuplicateCurrentQuality(t *testing.T) {
 	if got := currentQuality("https://example.test/720.m3u8?quality=low", levels); got != 1 {
 		t.Fatalf("exact match lost a quality selected by query: index %d", got)
 	}
+	levels = []liveVariant{{address: "https://example.test/stream.m3u8?quality=low&token=new"}}
+	if got := currentQuality("https://example.test/stream.m3u8?quality=high&token=old", levels); got != -1 {
+		t.Fatalf("a distinct quality was marked current: %d", got)
+	}
 }

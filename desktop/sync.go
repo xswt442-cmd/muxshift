@@ -666,16 +666,22 @@ func (a *appState) nudge(index int, delta time.Duration) (string, error) {
 	// source move together. Keeping their offsets equal is what makes the
 	// target of either one describe the same content.
 	current, _ := a.sync.timeline.Shift(track)
-	projected, err := offsetAfter(current.Offset, delta)
-	if err != nil {
-		return "", fmt.Errorf("source %d: %w", index+1, err)
-	}
 	_, grouped := a.existingGroup()
-	target, err := mediaFromEvent(a.sync.playhead.Event(), projected)
-	if grouped && !a.sourceInExplicitGroup(it) {
+	independent := grouped && !a.sourceInExplicitGroup(it)
+	event := a.sync.playhead.Event()
+	var target, projected time.Duration
+	if independent {
 		target, err = addDuration(player.Position(), delta)
 		if err == nil && it.replay != nil {
 			target, err = addDuration(target, it.replay.StartBufferTime)
+		}
+		if err == nil {
+			projected, err = addDuration(target, -event)
+		}
+	} else {
+		projected, err = offsetAfter(current.Offset, delta)
+		if err == nil {
+			target, err = mediaFromEvent(event, projected)
 		}
 	}
 	if err != nil {
@@ -687,13 +693,15 @@ func (a *appState) nudge(index int, delta time.Duration) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("source %d: %w", index+1, err)
 	}
-	for _, other := range []core.TrackID{it.video, it.audio} {
-		if other == "" || other == track {
-			continue
-		}
-		current, _ := a.sync.timeline.Shift(other)
-		if _, err := offsetAfter(current.Offset, delta); err != nil {
-			return "", fmt.Errorf("source %d: %w", index+1, err)
+	offsets := [2]time.Duration{projected, projected}
+	tracks := [2]core.TrackID{it.video, it.audio}
+	for i, other := range tracks {
+		if !independent && other != "" && other != track {
+			otherShift, _ := a.sync.timeline.Shift(other)
+			offsets[i], err = offsetAfter(otherShift.Offset, delta)
+			if err != nil {
+				return "", fmt.Errorf("source %d: %w", index+1, err)
+			}
 		}
 	}
 	if !grouped {
@@ -702,16 +710,11 @@ func (a *appState) nudge(index int, delta time.Duration) (string, error) {
 		}
 	}
 	// Validate every track and the player's target before storing the shifts.
-	shift, err := a.sync.timeline.AdjustShift(track, delta)
-	if err != nil {
-		return "", err
-	}
-	for _, other := range []core.TrackID{it.video, it.audio} {
-		if other == "" || other == track {
-			continue
-		}
-		if _, err := a.sync.timeline.AdjustShift(other, delta); err != nil {
-			return "", err
+	for i, other := range tracks {
+		if other != "" {
+			if err := a.sync.timeline.SetShift(other, offsets[i]); err != nil {
+				return "", err
+			}
 		}
 	}
 	if a.alignRow.Reference == it.source.ID || a.alignRow.Target == it.source.ID {
@@ -734,7 +737,7 @@ func (a *appState) nudge(index int, delta time.Duration) (string, error) {
 	a.lastSeekSource = it.source.ID
 	a.saveSession()
 	return fmt.Sprintf("source %d offset=%+.3fs requested=%s actual=%s residual=%s window=%s at %s",
-		index+1, shift.Offset.Seconds(), outcome.Requested.Round(time.Millisecond),
+		index+1, projected.Seconds(), outcome.Requested.Round(time.Millisecond),
 		outcome.Actual.Round(time.Millisecond), outcome.Residual.Round(time.Millisecond),
 		outcome.Window.String(), outcome.RequestedAt.Format("15:04:05.000")), nil
 }

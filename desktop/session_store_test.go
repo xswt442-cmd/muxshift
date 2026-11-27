@@ -1043,6 +1043,28 @@ func TestPlaceholderLayerPreservesPendingOrder(t *testing.T) {
 	}
 }
 
+func TestMovingLoadedLayerPreservesOfflineSlot(t *testing.T) {
+	app, scene, _ := newStoreFixture(t)
+	back := app.items[0]
+	back.player, back.persistentID = &ui.VideoPlayer{}, "back"
+	front := &item{uri: "https://example.test/front", persistentID: "front", player: &ui.VideoPlayer{}, shown: true}
+	if err := app.addDirect(front); err != nil {
+		t.Fatal(err)
+	}
+	app.items = append(app.items, &item{persistentID: "offline"}, front)
+	app.persistentSceneIDs = map[string]core.SceneID{"stage": scene}
+	app.pendingStageEdits = []storedStageEdits{{Scene: "stage", Order: []string{"back", "offline", "front"}}}
+	app.raiseStage(back.source.ID, false)
+	want := []string{"front", "offline", "back"}
+	if got := app.pendingStageEdits[0].Order; !slices.Equal(got, want) {
+		t.Fatalf("pending order = %v, want %v", got, want)
+	}
+	saved := app.captureSessionStore()
+	if len(saved.StageEdits) != 1 || !slices.Equal(saved.StageEdits[0].Order, want) {
+		t.Fatalf("saved layer edits = %+v", saved.StageEdits)
+	}
+}
+
 func TestLandUnavailableRetryKeepsSourceOnLateDecodeFailure(t *testing.T) {
 	app, scene, _ := newStoreFixture(t)
 	app.sync = newSyncState()

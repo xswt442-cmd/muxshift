@@ -1480,22 +1480,33 @@ func (a *appState) forgetPendingSourceEdits(scene core.SceneID, source string) {
 	})
 }
 
-func (a *appState) clearPendingStageOrder(scene core.SceneID) {
-	persistent := ""
-	for id, current := range a.persistentSceneIDs {
-		if current == scene {
-			persistent = id
-			break
-		}
-	}
+// Refill the visible source slots in their new order. Offline sources keep
+// their slots and recover into the same order the user saved.
+func (a *appState) mergePendingStageOrder(scene core.SceneID, visible []core.SourceID) {
 	for i := range a.pendingStageEdits {
-		if a.pendingStageEdits[i].Scene == persistent {
-			a.pendingStageEdits[i].Order = nil
+		edit := &a.pendingStageEdits[i]
+		if a.persistentSceneIDs[edit.Scene] != scene || len(edit.Order) == 0 {
+			continue
 		}
+		moved := make([]string, 0, len(visible))
+		slots := make(map[string]bool, len(visible))
+		for _, id := range visible {
+			if it := a.itemOf(id); it != nil {
+				persistent := a.stageSourceID(it)
+				moved = append(moved, persistent)
+				slots[persistent] = true
+			}
+		}
+		next := 0
+		for slot, source := range edit.Order {
+			if slots[source] {
+				edit.Order[slot] = moved[next]
+				next++
+				delete(slots, source)
+			}
+		}
+		edit.Order = append(edit.Order, moved[next:]...)
 	}
-	a.pendingStageEdits = slices.DeleteFunc(a.pendingStageEdits, func(edit storedStageEdits) bool {
-		return edit.Scene == persistent && len(edit.Boxes)+len(edit.Order)+len(edit.Locked) == 0
-	})
 }
 
 func (a *appState) forgetPendingStageEdits(scene core.SceneID) {

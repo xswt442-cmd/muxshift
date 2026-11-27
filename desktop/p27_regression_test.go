@@ -133,6 +133,11 @@ func TestNudgeOnAnIndependentStageUsesItsPlayerClock(t *testing.T) {
 	if player.position != 3*time.Second || a.sync.playhead.Event() != 30*time.Second || a.sourceInExplicitGroup(it) {
 		t.Fatalf("independent nudge used the group clock or membership: %s", player.position)
 	}
+	for _, track := range []core.TrackID{it.video, it.audio} {
+		if mapped, err := a.sync.timeline.MediaTime(track, a.sync.playhead.Event()); err != nil || mapped != player.position {
+			t.Fatalf("track %s maps to %s, %v, want %s", track, mapped, err, player.position)
+		}
+	}
 }
 
 func TestAlignCoreOffsetIncludesNonZeroRefShiftAndExpiresOnRefNudge(t *testing.T) {

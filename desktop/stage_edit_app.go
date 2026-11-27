@@ -781,7 +781,7 @@ func (a *appState) moveStageLayer(id core.SourceID, forward, allTheWay bool) {
 		return
 	}
 	a.sceneEdits().move(id, order, forward, allTheWay)
-	a.clearPendingStageOrder(a.scene)
+	a.mergePendingStageOrder(a.scene, a.currentEdits().order)
 	a.invalidate()
 	a.saveSession()
 }

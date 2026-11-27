@@ -43,7 +43,7 @@ Addresses must use HTTP or HTTPS and contain no credentials. Public metadata rea
 
 `desktop/` registers opened media as Core sources. HLS probing registers declared tracks, while a local file or direct media address uses video and audio placeholders because MyGo does not enumerate those tracks. A session can hold several saved stages, each represented by a Core Scene. The desktop output points to the stage the user selects. `apply()` sets each player's visibility, mute, and volume from that stage and the current listening controls.
 
-The desktop adapter keeps one player per source. When the active stage uses a source only for sound, the adapter keeps its player alive and hides its picture.
+The desktop adapter keeps one player per source during steady playback. During a reload, the previous player continues supplying picture and sound until its replacement is ready. When the active stage uses a source only for sound, the adapter keeps its player alive and hides its picture.
 
 The application exposes Stage, Diagnostics, and Settings from a shared navigation bar or narrow-window menu. The stage contains its scene rail, canvas, transport, and Sources, Mixer, and Sync console. The console can fold, hide individual panels, or resize. A narrow window uses tabs and a Properties drawer, and a setting switches to one row per source.
 
@@ -300,7 +300,7 @@ The difference from the desktop is stated rather than assumed: the web client do
 
 `extension/` is a Manifest V3 extension whose permissions are `activeTab`, `scripting`, and `storage`, with a `host_permissions` entry for `http://127.0.0.1:8731/*` only, so it cannot read any page until the user clicks it. After a click the background script runs one read-only scan in the active tab: it collects `src` and `currentSrc` from `video`, `audio`, and `source` elements plus media-looking resource entries. For `blob:` addresses, the extension explains that the page holds the media segments. It rejects `mediasource:` and other non-HTTP(S) schemes, as well as addresses carrying credentials.
 
-The popup shows candidate addresses with keyboard selection and an expandable full link on each row. A supported live page offers “Resolve and send” for the scanned page. Navigation invalidates older candidates and pending responses.
+The popup shows candidate addresses with keyboard selection and an expandable full link on each row. A supported live page offers “Resolve and send” for the scanned page. If the page's probe cannot reach any mirror, the popup offers an unverified candidate for manual handoff. Navigation invalidates older candidates and pending responses.
 
 The popup exchanges the six-digit Diagnostics code for a token at POST /pair and stores it in chrome.storage.local. Redemption expires the code. Select New code in Diagnostics to generate another. The desktop stores its token in memory, so closing the window ends the pairing.
 

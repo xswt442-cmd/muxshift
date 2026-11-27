@@ -1,10 +1,15 @@
 package hls
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -34,6 +39,48 @@ func TestStripAddressKeepsTheNameAndDropsTheSecret(t *testing.T) {
 	}
 	if got := StripAddress(""); got != "" {
 		t.Fatalf("empty address = %q", got)
+	}
+	address := "https://user:fixture-secret@example.test/@channel/live.m3u8?token=fixture-query#fixture-fragment"
+	if got, want := StripAddress(address), "https://example.test/@channel/live.m3u8"; got != want {
+		t.Fatalf("address with @ in path: got %q, want %q", got, want)
+	}
+}
+
+func TestRedactMediaAndProxySchemes(t *testing.T) {
+	for _, scheme := range []string{"SOCKS", "socks4", "socks4a", "socks5h", "rtsp", "rtsps", "rtmp", "rtmps", "ftp"} {
+		address := scheme + "://user:fixture-secret@example.test/@path?fixture-query#fixture-fragment"
+		if got, want := Redact("could not use "+address), "could not use "+scheme+"://example.test/@path"; got != want {
+			t.Errorf("%s: got %q, want %q", scheme, got, want)
+		}
+	}
+}
+
+func TestProbeDoesNotLogSignedURLs(t *testing.T) {
+	const signature = "fixture-query"
+	var signedDownloads atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.RawQuery == signature {
+			signedDownloads.Add(1)
+		}
+		if r.URL.Path == "/vod/signed.m3u8" {
+			fmt.Fprint(w, "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXTINF:2.000,\nseg0.ts?"+signature+"\n#EXT-X-ENDLIST\n")
+			return
+		}
+		http.FileServer(http.Dir("testdata")).ServeHTTP(w, r)
+	}))
+	defer server.Close()
+	var logs bytes.Buffer
+	writer := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(writer)
+	if _, err := Probe(context.Background(), server.URL+"/vod/signed.m3u8?"+signature+"#fixture-fragment", Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if signedDownloads.Load() < 3 {
+		t.Fatal("the probe did not fetch the signed playlist and segment")
+	}
+	if strings.Contains(logs.String(), signature) || strings.Contains(logs.String(), "fixture-fragment") {
+		t.Fatal("the probe logged part of a signed URL")
 	}
 }
 

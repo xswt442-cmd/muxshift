@@ -68,7 +68,7 @@ type Alignment struct {
 // instead of a guessed offset.
 func (s Stream) Align() ([]Alignment, error) {
 	if len(s.Tracks) == 0 {
-		return nil, fmt.Errorf("%w: %s", ErrNoTracks, s.URI)
+		return nil, fmt.Errorf("%w: %s", ErrNoTracks, StripAddress(s.URI))
 	}
 
 	var base time.Time

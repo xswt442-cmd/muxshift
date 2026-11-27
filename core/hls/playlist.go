@@ -163,7 +163,7 @@ func describe(base *url.URL, media *playlist.Media) (Info, error) {
 		EndList:        media.Endlist,
 	}
 	if len(media.Segments) == 0 {
-		return info, fmt.Errorf("%w: %s", ErrNoSegments, base.Redacted())
+		return info, fmt.Errorf("%w: %s", ErrNoSegments, StripAddress(base.String()))
 	}
 
 	for i, seg := range media.Segments {

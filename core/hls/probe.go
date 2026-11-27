@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -85,10 +86,15 @@ func Probe(ctx context.Context, rawURL string, opts Options) (Stream, error) {
 	}
 
 	client := &gohlslib.Client{
-		URI:           endpoint.String(),
-		HTTPClient:    opts.client(endpoint),
-		StartDistance: opts.StartDistance,
-		MaxDistance:   opts.MaxDistance,
+		URI:                       endpoint.String(),
+		HTTPClient:                opts.client(endpoint),
+		StartDistance:             opts.StartDistance,
+		MaxDistance:               opts.MaxDistance,
+		OnDownloadPrimaryPlaylist: func(string) {},
+		OnDownloadStreamPlaylist:  func(string) {},
+		OnDownloadSegment:         func(string) {},
+		OnDownloadPart:            func(string) {},
+		OnDecodeError:             func(err error) { log.Printf("hls: decode error: %s", Redact(err.Error())) },
 	}
 	client.OnTracks = func(tracks []*gohlslib.Track) error {
 		return state.onTracks(client, tracks)

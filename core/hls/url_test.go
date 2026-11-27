@@ -1,12 +1,52 @@
 package hls
 
 import (
+	"context"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/xswt442-cmd/muxshift/core"
 )
+
+func TestReadAndProbeRefusePublicToPrivateRedirect(t *testing.T) {
+	var localRequests atomic.Int32
+	local := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		localRequests.Add(1)
+		http.Error(w, "redirect reached local fixture", http.StatusBadRequest)
+	}))
+	defer local.Close()
+	public := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, local.URL+"/hidden.m3u8?fixture-signature", http.StatusFound)
+	}))
+	defer public.Close()
+	base := http.DefaultTransport.(*http.Transport).Clone()
+	base.Proxy = nil
+	defer base.CloseIdleConnections()
+	dialer := net.Dialer{}
+	base.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		if address == "media.example.test:80" {
+			address = public.Listener.Addr().String()
+		}
+		return dialer.DialContext(ctx, network, address)
+	}
+	opts := Options{HTTPClient: &http.Client{Transport: base, CheckRedirect: redirectAllowed}}
+	address := "http://media.example.test/live.m3u8?fixture-signature#fixture-fragment"
+	_, readErr := Read(context.Background(), address, opts)
+	_, probeErr := Probe(context.Background(), address, opts)
+	for _, err := range []error{readErr, probeErr} {
+		if !errorsIs(err, core.ErrInvalid) || strings.Contains(err.Error(), "fixture-") {
+			t.Errorf("redirect error = %v, want redacted destination refusal", err)
+		}
+	}
+	if hits := localRequests.Load(); hits != 0 {
+		t.Fatalf("the refused destination received %d requests", hits)
+	}
+}
 
 // TestCheckURI fixes what an address may look like: http or https, a host, and
 // no credentials.

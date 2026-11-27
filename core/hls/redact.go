@@ -26,14 +26,15 @@ func StripAddress(address string) string {
 	}
 	if scheme := strings.Index(address, "://"); scheme >= 0 {
 		rest := address[scheme+3:]
-		if at := strings.LastIndex(rest, "@"); at >= 0 && !strings.Contains(rest[:at], "/") {
+		authority, _, _ := strings.Cut(rest, "/")
+		if at := strings.LastIndex(authority, "@"); at >= 0 {
 			address = address[:scheme+3] + rest[at+1:]
 		}
 	}
 	return address
 }
 
-// Redact removes the same parts from every HTTP or SOCKS address inside a piece of
+// Redact removes the same parts from every media or proxy address inside a piece of
 // text, so an error written by an HTTP client — which quotes the address it
 // could not reach — can be kept whole without keeping the secret.
 func Redact(text string) string {
@@ -56,12 +57,12 @@ func Redact(text string) string {
 	return out.String()
 }
 
-// indexAddress finds the next HTTP or SOCKS address in text, or -1.
+// indexAddress finds the next media or proxy address in text, or -1.
 func indexAddress(text string) int {
 	for i := range len(text) {
 		switch text[i] {
-		case 'h', 'H', 's', 'S':
-			for _, prefix := range []string{"http://", "https://", "socks5://", "socks5h://"} {
+		case 'h', 'H', 's', 'S', 'r', 'R', 'f', 'F':
+			for _, prefix := range []string{"http://", "https://", "socks://", "socks4://", "socks4a://", "socks5://", "socks5h://", "rtsp://", "rtsps://", "rtmp://", "rtmps://", "ftp://"} {
 				if len(text)-i >= len(prefix) && strings.EqualFold(text[i:i+len(prefix)], prefix) {
 					return i
 				}

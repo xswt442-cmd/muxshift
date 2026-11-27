@@ -142,8 +142,7 @@ function pageMedia(action, ...args) {
   // collectMedia runs inside the page.
   function collectMedia() {
     const notes = [];
-    const sources = [];
-    const seen = new Set();
+    const candidates = new Map();
 
     const add = (url, type, fallback, from) => {
       if (!url) return;
@@ -153,9 +152,10 @@ function pageMedia(action, ...args) {
       } catch {
         return;
       }
-      if (seen.has(parsed.href)) return;
-      seen.add(parsed.href);
+      const existing = candidates.get(parsed.href);
+      if (existing === null) return;
       if (parsed.protocol === "blob:") {
+        candidates.set(parsed.href, null);
         notes.push({
           kind: "blob",
           detail: "A media element is playing a Media Source blob; the page keeps the segments, so there is no address to import.",
@@ -163,20 +163,26 @@ function pageMedia(action, ...args) {
         return;
       }
       if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        candidates.set(parsed.href, null);
         notes.push({ kind: parsed.protocol, detail: "Only http and https addresses can be imported." });
         return;
       }
       if (!isMediaAddress(parsed)) {
+        candidates.set(parsed.href, null);
         notes.push({ kind: "credentials", detail: "The address carries credentials, so it is refused." });
         return;
       }
       const pathname = parsed.pathname.toLowerCase();
       const mime = (type || "").split(";")[0].trim().toLowerCase();
-      let kind = fallback;
+      let kind;
       if (pathname.endsWith(".m3u8") || /^(application|audio)\/(vnd\.apple\.mpegurl|x-mpegurl|mpegurl)$/.test(mime)) kind = "hls";
       else if (pathname.endsWith(".mpd") || mime === "application/dash+xml") kind = "dash";
       else if (mime.startsWith("audio/")) kind = "audio";
-      sources.push({ url: parsed.href, kind, from });
+      if (!existing) {
+        candidates.set(parsed.href, { url: parsed.href, kind: kind || fallback, from });
+      } else if (kind && existing.kind !== "hls" && existing.kind !== "dash") {
+        existing.kind = kind;
+      }
     };
 
     for (const element of document.querySelectorAll("video, audio")) {
@@ -212,6 +218,7 @@ function pageMedia(action, ...args) {
       });
     }
 
+    const sources = [...candidates.values()].filter(Boolean);
     if (!sources.length) {
       notes.push({
         kind: "none",

@@ -23,6 +23,35 @@ import (
 
 // These tests were grouped from alignreport_test.go, anchor_epoch_test.go, dvr_read_test.go, dvrusage_test.go, replay_clock_test.go, replay_enter_test.go, replay_enter_txn_test.go, replay_entry_test.go, replay_report_test.go, replay_seek_test.go, replay_txn_test.go, replay_wiring_test.go, timebase_test.go.
 
+func TestWaitSeekPlayersReturnsAfterAbortWithQueuedUICallback(t *testing.T) {
+	app, _, _ := newStoreFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	step := &seekTxnStep{item: app.items[0], player: &fakeSeekPlayer{}}
+	txn := &seekTxn{ctx: ctx, cancel: cancel, steps: []*seekTxnStep{step}}
+	app.seek = txn
+	callbacks := make(chan func(), 1)
+	app.seekMain = func(fn func()) { callbacks <- fn }
+	finished := make(chan error, 1)
+	go func() { finished <- app.waitSeekPlayers(txn) }()
+	var queued func()
+	select {
+	case queued = <-callbacks:
+	case <-time.After(time.Second):
+		t.Fatal("the wait did not post its picture check")
+	}
+	app.abortSeekTxn(txn, "test stopped the replay")
+	select {
+	case err := <-finished:
+		if err == nil || !strings.Contains(err.Error(), "transaction had been stopped") {
+			t.Fatalf("wait returned %v after abort", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the wait stayed blocked on the UI after abort")
+	}
+	queued()
+}
+
 func suggestionFor(reference, target string) alignSuggestion {
 	return alignSuggestion{
 		Reference: alignWindow{Source: "source-1", Index: 0, URI: reference, Track: "track-1", Start: 0, Length: 30 * time.Second},

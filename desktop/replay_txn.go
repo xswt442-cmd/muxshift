@@ -381,7 +381,7 @@ func (a *appState) commitSeekTxn(txn *seekTxn) {
 	// installing them would leave the first source committed when the second
 	// one turns out to have moved; checking everything first and installing
 	// afterwards is what makes the commit all-or-nothing.
-	ran := a.seekOnMain(func() {
+	ran := a.seekOnMain(nil, func() {
 		// The decision to commit and the installation it authorises happen under
 		// the same lock. Ownership cannot change between "this transaction still
 		// owns the session" and the step that acts on it, and the slot is given
@@ -517,8 +517,12 @@ type stepOutcome struct {
 // call; the result comes back on its own channel, so a late callback cannot
 // write into state its caller has already returned from.
 func (a *appState) seekStep(txn *seekTxn, step *seekTxnStep, fn func(desktopPlayer) stepOutcome) (stepOutcome, bool) {
+	var cancelled <-chan struct{}
+	if txn.ctx != nil {
+		cancelled = txn.ctx.Done()
+	}
 	results := make(chan stepOutcome, 1)
-	dispatched := a.seekOnMain(func() {
+	dispatched := a.seekOnMain(cancelled, func() {
 		a.seekMu.Lock()
 		if txn.stopped || step.player == nil {
 			a.seekMu.Unlock()
@@ -531,6 +535,9 @@ func (a *appState) seekStep(txn *seekTxn, step *seekTxnStep, fn func(desktopPlay
 		results <- out
 	})
 	if !dispatched {
+		if txn.ctx != nil && txn.ctx.Err() != nil {
+			return stepOutcome{}, true
+		}
 		return stepOutcome{}, false
 	}
 	return <-results, true
@@ -722,8 +729,7 @@ func (a *appState) settleSeekTxn(txn *seekTxn) error {
 						break
 					}
 					if !out.acted {
-						short = fmt.Sprintf("%s was not asked to seek again: the transaction had been stopped", a.name(step.item))
-						break
+						return fmt.Errorf("%s was not asked to seek again: the transaction had been stopped", a.name(step.item))
 					}
 					stable = 0
 				}
@@ -856,7 +862,10 @@ func (a *appState) waitSeekPlayers(txn *seekTxn) error {
 				// budget. Say so and let the transaction end.
 				return fmt.Errorf("%s: the session did not run the picture check within %s", a.name(step.item), seekDispatchWait)
 			}
-			if !out.acted || !out.started {
+			if !out.acted {
+				return fmt.Errorf("%s: the transaction had been stopped", a.name(step.item))
+			}
+			if !out.started {
 				pending = a.name(step.item)
 				break
 			}
@@ -884,7 +893,7 @@ const seekDispatchWait = 2 * time.Second
 
 // seekOnMain runs a step on the drawing thread and reports whether it ran.
 // Tests replace it with a direct call, because they run without a window.
-func (a *appState) seekOnMain(fn func()) bool {
+func (a *appState) seekOnMain(cancelled <-chan struct{}, fn func()) bool {
 	done := make(chan struct{})
 	var once sync.Once
 	run := func() {
@@ -907,6 +916,8 @@ func (a *appState) seekOnMain(fn func()) bool {
 	select {
 	case <-done:
 		return true
+	case <-cancelled:
+		return false
 	case <-time.After(seekDispatchWait):
 		return false
 	}

@@ -1026,6 +1026,43 @@ func TestUnlinkCancelsUnavailableRetry(t *testing.T) {
 	}
 }
 
+func TestUnavailableRetryRestartsOnStageThatStillUsesSource(t *testing.T) {
+	app, scene, _ := newStoreFixture(t)
+	it := app.items[0]
+	it.persistentID = "camera"
+	it.openErr = errors.New("the previous open failed")
+	previous, err := app.session.AddScene("Previous stage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.retryScene = previous.ID
+	app.retryTargetID = it.persistentID
+	app.importToken = 1
+	app.stageGeneration = 1
+	wantURI := filepath.Join(t.TempDir(), "replacement.mp4")
+	app.importing = wantURI
+	callbacks := make(chan func(), 1)
+	app.onMain = func(fn func()) { callbacks <- fn }
+	app.openPlayerForImport = func(string) (*ui.VideoPlayer, error) {
+		t.Fatal("a stale or cancelled completion reached the player")
+		return nil, nil
+	}
+	originalURI := it.uri
+	app.landUnavailableRetry(1, it.persistentID, wantURI, importPlan{}, nil)
+	if app.retryScene != scene || app.retryTargetID != it.persistentID || app.importToken != 2 ||
+		app.importing != wantURI || app.retryStageGeneration != app.stageGeneration || it.uri != originalURI {
+		t.Fatal("the active stage did not start a fresh check, or accepted the old result")
+	}
+	app.importToken++
+	app.clearUnavailableRetry()
+	select {
+	case landed := <-callbacks:
+		landed()
+	case <-time.After(time.Second):
+		t.Fatal("the retried address check did not return")
+	}
+}
+
 func TestPlaceholderLayerPreservesPendingOrder(t *testing.T) {
 	app, scene, _ := newStoreFixture(t)
 	it := app.items[0]

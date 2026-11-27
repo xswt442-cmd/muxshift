@@ -976,7 +976,7 @@ func (a *appState) retryUnavailableSource(it *item, uri string) error {
 	go a.tickImport(a.importDone)
 	go func(targetID string) {
 		plan, err := inspectImport(ctx, uri)
-		mygoRunOnMain(func() { a.landUnavailableRetry(token, targetID, uri, plan, err) })
+		a.mainDo(func() { a.landUnavailableRetry(token, targetID, uri, plan, err) })
 	}(it.persistentID)
 	return nil
 }
@@ -1133,7 +1133,11 @@ func (a *appState) landUnavailableRetry(token int, targetID, requestedURI string
 	if a.scene != a.retryScene || a.stageGeneration != a.retryStageGeneration || !a.isStageMember(it) {
 		a.clearUnavailableRetry()
 		a.importText = ""
-		a.lastErr = errors.New("the reopen request ended because the source left the active stage")
+		if a.isStageMember(it) && a.sceneConsumesItem(a.scene, it) {
+			a.lastErr = a.retryUnavailableSource(it, requestedURI)
+		} else {
+			a.lastErr = errors.New("the reopen request ended because the active stage no longer uses the source")
+		}
 		a.reconcileScenePlayers(a.scene, a.stageGeneration)
 		a.invalidate()
 		return

@@ -1,4 +1,4 @@
-// Package netguard restricts HTTP requests made for media metadata.
+// Package netguard restricts HTTP requests made for media.
 package netguard
 
 import (
@@ -42,8 +42,11 @@ var excludedPrefixes = []netip.Prefix{
 // PublicIP reports whether a media reader may connect to an internet address.
 // Special-purpose and transition networks are excluded conservatively.
 func PublicIP(ip netip.Addr) bool {
+	if ip.Zone() != "" {
+		return false
+	}
 	ip = ip.Unmap()
-	return ip.Zone() == "" && ip.IsGlobalUnicast() && !ip.IsPrivate() &&
+	return ip.IsGlobalUnicast() && !ip.IsPrivate() &&
 		!slices.ContainsFunc(excludedPrefixes, func(prefix netip.Prefix) bool { return prefix.Contains(ip) })
 }
 
@@ -53,7 +56,7 @@ func LocalHost(host string) bool {
 	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
 	if ip, err := netip.ParseAddr(host); err == nil {
 		ip = ip.Unmap().WithZone("")
-		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		return ip.IsUnspecified() || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
 			ip.IsLinkLocalMulticast() || excludedPrefixes[0].Contains(ip) || sharedAddressSpace.Contains(ip)
 	}
 	host = strings.TrimSuffix(strings.ToLower(host), ".")
@@ -101,11 +104,11 @@ func CheckRedirect(request *http.Request, via []*http.Request) error {
 // Client permits local connections only when the caller has an explicit local
 // entry point. Every request is checked, including playlist subresources.
 func Client(timeout time.Duration, allowLocal bool) *http.Client {
-	return &http.Client{Timeout: timeout, CheckRedirect: CheckRedirect, Transport: transport{allowLocal}}
+	return defaultTransport.client(timeout, allowLocal)
 }
 
-func resolvePublicIPs(ctx context.Context, host string) ([]netip.Addr, error) {
-	addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+func (t *mediaTransport) resolvePublicIPs(ctx context.Context, host string) ([]netip.Addr, error) {
+	addrs, err := t.lookup(ctx, "ip", host)
 	if err != nil {
 		return nil, networkError(err, "could not resolve the media host")
 	}
@@ -127,33 +130,54 @@ func validatePublicAddresses(addrs []netip.Addr) error {
 	return nil
 }
 
-var networkDialer = net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+type mediaTransport struct {
+	base   *http.Transport
+	direct *http.Transport
+	lookup func(context.Context, string, string) ([]netip.Addr, error)
+	proxy  func(*http.Request) (*url.URL, error)
+}
 
-var publicTransport = func() *http.Transport {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = nil
-	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-		host, port, err := net.SplitHostPort(address)
-		if err != nil {
-			return nil, err
-		}
-		addrs, err := resolvePublicIPs(ctx, host)
-		if err != nil {
-			return nil, err
-		}
-		for _, ip := range addrs {
-			conn, dialErr := networkDialer.DialContext(ctx, network, net.JoinHostPort(ip.Unmap().String(), port))
-			if dialErr == nil {
-				return conn, nil
-			}
-			err = dialErr
-		}
-		return nil, networkError(err, "could not connect to the media host")
-	}
-	return transport
+var defaultTransport = func() *mediaTransport {
+	base := http.DefaultTransport.(*http.Transport).Clone()
+	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+	base.DialContext = dialer.DialContext
+	return newMediaTransport(base, net.DefaultResolver.LookupNetIP, http.ProxyFromEnvironment)
 }()
 
-type transport struct{ allowLocal bool }
+func newMediaTransport(base *http.Transport, lookup func(context.Context, string, string) ([]netip.Addr, error), proxy func(*http.Request) (*url.URL, error)) *mediaTransport {
+	t := &mediaTransport{base: base, direct: base.Clone(), lookup: lookup, proxy: proxy}
+	t.direct.Proxy = nil
+	t.direct.DialContext = t.dialPublic
+	return t
+}
+
+func (t *mediaTransport) dialPublic(ctx context.Context, network, address string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	addrs, err := t.resolvePublicIPs(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	for _, ip := range addrs {
+		conn, dialErr := t.base.DialContext(ctx, network, net.JoinHostPort(ip.Unmap().String(), port))
+		if dialErr == nil {
+			return conn, nil
+		}
+		err = dialErr
+	}
+	return nil, networkError(err, "could not connect to the media host")
+}
+
+func (t *mediaTransport) client(timeout time.Duration, allowLocal bool) *http.Client {
+	return &http.Client{Timeout: timeout, CheckRedirect: CheckRedirect, Transport: transport{mediaTransport: t, allowLocal: allowLocal}}
+}
+
+type transport struct {
+	*mediaTransport
+	allowLocal bool
+}
 
 func (t transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err := ValidateURL(req.URL); err != nil {
@@ -164,15 +188,15 @@ func (t transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if !t.allowLocal {
 			return nil, ErrDestination
 		}
-		resp, err := http.DefaultTransport.RoundTrip(req)
+		resp, err := t.base.RoundTrip(req)
 		return resp, networkError(err, "could not read the local media address")
 	}
-	proxy, err := http.ProxyFromEnvironment(req)
+	proxy, err := t.proxy(req)
 	if err != nil {
 		return nil, networkError(err, "invalid media proxy configuration")
 	}
 	if proxy == nil {
-		resp, err := publicTransport.RoundTrip(req)
+		resp, err := t.direct.RoundTrip(req)
 		if errors.Is(err, ErrDestination) {
 			return nil, ErrDestination
 		}
@@ -190,7 +214,7 @@ func (t transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	default:
 		return nil, errors.New("unsupported media proxy protocol")
 	}
-	addrs, err := resolvePublicIPs(req.Context(), host)
+	addrs, err := t.resolvePublicIPs(req.Context(), host)
 	if err != nil {
 		return nil, err
 	}
@@ -201,19 +225,32 @@ func (t transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			port = "80"
 		}
 	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport := t.base.Clone()
 	proxyURL := *proxy
 	if proxy.Scheme == "https" {
 		proxyURL.Scheme = "http"
 		if proxy.Port() == "" {
 			proxyURL.Host = net.JoinHostPort(proxy.Hostname(), "443")
 		}
-		dialer := tls.Dialer{NetDialer: &networkDialer, Config: &tls.Config{ServerName: proxy.Hostname()}}
-		transport.DialContext = dialer.DialContext
+		transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+			conn, err := t.base.DialContext(ctx, network, address)
+			if err != nil {
+				return nil, err
+			}
+			secure := tls.Client(conn, &tls.Config{ServerName: proxy.Hostname()})
+			if err := secure.HandshakeContext(ctx); err != nil {
+				conn.Close()
+				return nil, err
+			}
+			return secure, nil
+		}
 	}
 	transport.Proxy = http.ProxyURL(&proxyURL)
 	transport.DisableKeepAlives = true
-	transport.TLSClientConfig = &tls.Config{ServerName: host}
+	if transport.TLSClientConfig == nil {
+		transport.TLSClientConfig = &tls.Config{}
+	}
+	transport.TLSClientConfig.ServerName = host
 	for _, ip := range addrs {
 		pinned := pinRequest(req, ip, port)
 		response, requestErr := transport.RoundTrip(pinned)

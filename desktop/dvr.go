@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/xswt442-cmd/muxshift/core"
 	"github.com/xswt442-cmd/muxshift/core/dvr"
 	"github.com/xswt442-cmd/muxshift/core/hls"
+	"github.com/xswt442-cmd/muxshift/internal/netguard"
 )
 
 // dvrRunner polls one live source's playlist into a bounded buffer and turns
@@ -65,6 +67,13 @@ type dvrRunner struct {
 
 // startDVR opens a buffer for one source and starts polling its playlist.
 func startDVR(uri string, opts dvr.Options) (*dvrRunner, error) {
+	endpoint, err := url.Parse(uri)
+	if err != nil {
+		return nil, netguard.ErrInvalidURL
+	}
+	if err := netguard.ValidateURL(endpoint); err != nil {
+		return nil, err
+	}
 	buffer, err := dvr.New(opts)
 	if err != nil {
 		return nil, err
@@ -72,7 +81,7 @@ func startDVR(uri string, opts dvr.Options) (*dvrRunner, error) {
 	runner := &dvrRunner{
 		uri:    uri,
 		buffer: buffer,
-		client: &http.Client{Timeout: 10 * time.Second},
+		client: netguard.Client(10*time.Second, netguard.LocalHost(endpoint.Hostname())),
 		source: opts.Source,
 		budget: opts.RecordingBytes,
 		stop:   make(chan struct{}),

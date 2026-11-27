@@ -64,7 +64,7 @@ func (a *appState) reopenPlayer(it *item) {
 func (a *appState) openReplacement(it *item, uri string, retainState bool) {
 	it.closeMediaMenu()
 	previous := it.player
-	player, err := openPlayerOnMain(uri)
+	player, err := a.openImportedPlayer(uri)
 	if err != nil {
 		if retainState {
 			it.mediaReplaceErr = safeOpenError(err)
@@ -94,6 +94,9 @@ func (a *appState) openReplacement(it *item, uri string, retainState bool) {
 	it.handover = kept
 	it.player = player
 	it.generation++
+	if key := itemKey(it); key != "" && (a.alignRow.Reference == key || a.alignRow.Target == key) {
+		a.invalidateAlignmentRow()
+	}
 	generation := it.generation
 	a.apply()
 	wakeNetworkPlayer(uri, player, a.generationIs(it, generation))
@@ -758,7 +761,7 @@ func (a *appState) stage(c *ui.Context) {
 
 // selectVideo shows a source's picture and makes the inspector follow it.
 func (a *appState) selectVideo(it *item) {
-	a.selected = itemKey(it)
+	a.setSelectedSource(itemKey(it))
 	a.report(a.runCommand(command{Kind: commandShow, Source: a.selected}))
 }
 
@@ -776,7 +779,7 @@ func (a *appState) toggleVideo(index int) {
 
 // selectAudio plays a source's sound and makes the inspector follow it.
 func (a *appState) selectAudio(it *item) {
-	a.selected = itemKey(it)
+	a.setSelectedSource(itemKey(it))
 	a.report(a.runCommand(command{Kind: commandHear, Source: a.selected}))
 }
 

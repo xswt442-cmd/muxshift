@@ -5,11 +5,12 @@ import (
 	"fmt"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/xswt442-cmd/muxshift/core"
 )
 
 func (a *appState) sourceMediaControls(c *ui.Context, it *item) {
 	if a.selected != itemKey(it) || it.player == nil || !a.isStageMember(it) {
-		if it.mediaMenu {
+		if it.mediaMenu || it.mediaLoading {
 			it.closeMediaMenu()
 		}
 		return
@@ -126,6 +127,21 @@ func (it *item) closeMediaMenu() {
 	it.mediaLoading = false
 }
 
+func (a *appState) closeMediaMenus() {
+	for _, it := range a.items {
+		it.closeMediaMenu()
+	}
+}
+
+func (a *appState) setSelectedSource(id core.SourceID) {
+	if id != a.selected {
+		if it := a.find(a.selected); it != nil {
+			it.closeMediaMenu()
+		}
+		a.selected = id
+	}
+}
+
 func (a *appState) loadSourceQualities(it *item) {
 	if it.mediaLoading {
 		return
@@ -143,15 +159,18 @@ func (a *appState) loadSourceQualities(it *item) {
 		defer cancel()
 		list, err := inspectLivePlaylist(ctx, master)
 		a.mainDo(func() {
-			if it.mediaLoadSeq != seq || a.closed || a.stageGeneration != stage {
+			if it.mediaLoadSeq != seq {
+				return
+			}
+			it.mediaLoading = false
+			it.mediaCancel = nil
+			if a.closed || a.stageGeneration != stage {
 				return
 			}
 			current, _, lookupErr := a.itemBySource(key)
 			if lookupErr != nil || current != it || !it.mediaMenu {
 				return
 			}
-			it.mediaLoading = false
-			it.mediaCancel = nil
 			if err != nil || it.generation != generation {
 				it.mediaError = a.tr("Could not read quality levels. Reopen this menu to retry.", "清晰度读取失败，重新打开菜单可重试。")
 			} else {

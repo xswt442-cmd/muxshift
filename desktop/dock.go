@@ -50,6 +50,8 @@ func (a *appState) toggleDockPanel(id string) {
 	a.dockHidden[id] = !a.dockHidden[id]
 	if !a.dockHidden[id] {
 		a.dockUp = true
+	} else if id == dockSources {
+		a.closeMediaMenus()
 	}
 	a.invalidate()
 }
@@ -125,6 +127,11 @@ func (a *appState) dockArea(c *ui.Context) {
 }
 
 func (a *appState) dockBody(c *ui.Context) {
+	fold := func() {
+		a.closeMediaMenus()
+		a.dockUp = false
+		a.invalidate()
+	}
 	ui.Column(c).Fill().WidthPercent(100).Background(colorBg).Children(func() {
 		if normalizeConsoleLayout(a.settings.ConsoleLayout) == consoleRows {
 			// The row layout is the setting's alternative to the panels: the
@@ -134,10 +141,7 @@ func (a *appState) dockBody(c *ui.Context) {
 				AlignItems(ui.Center).Children(func() {
 				ui.Text(c, a.tr("Console", "控制台")).FontSize(textMicro).TextColor(colorDim)
 				ui.Box(c).Grow(1)
-				a.iconButtonSized(c, "dock-fold", lucide.ChevronDown(), a.tr("fold the console", "收起控制台"), 24, colorTextDim, false, func() {
-					a.dockUp = false
-					a.invalidate()
-				})
+				a.iconButtonSized(c, "dock-fold", lucide.ChevronDown(), a.tr("fold the console", "收起控制台"), 24, colorTextDim, false, fold)
 			})
 			ui.Box(c).WidthPercent(100).Height(1).Background(colorLine)
 			ui.Scroll(c).WidthPercent(100).Grow(1).Children(func() { a.dockRowsBody(c) })
@@ -170,16 +174,16 @@ func (a *appState) dockBody(c *ui.Context) {
 						for i, label := range labels {
 							idx := i
 							a.segmentedOption(c, "dock-tab-"+ids[idx], label, a.dockTab == idx, false, func() {
+								if a.dockTab != idx {
+									a.closeMediaMenus()
+								}
 								a.dockTab = idx
 							})
 						}
 					})
 					ui.Box(c).Grow(1)
 				}
-				a.iconButtonSized(c, "dock-fold", lucide.ChevronDown(), a.tr("fold the console", "收起控制台"), 24, colorTextDim, false, func() {
-					a.dockUp = false
-					a.invalidate()
-				})
+				a.iconButtonSized(c, "dock-fold", lucide.ChevronDown(), a.tr("fold the console", "收起控制台"), 24, colorTextDim, false, fold)
 			})
 			if len(ids) == 0 {
 				return
@@ -202,10 +206,7 @@ func (a *appState) dockBody(c *ui.Context) {
 				}
 			})
 			a.iconButtonSized(c, "dock-fold", lucide.ChevronDown(),
-				a.tr("fold the console", "收起控制台"), 24, colorTextDim, false, func() {
-					a.dockUp = false
-					a.invalidate()
-				})
+				a.tr("fold the console", "收起控制台"), 24, colorTextDim, false, fold)
 		})
 		ui.Box(c).WidthPercent(100).Height(1).Background(colorLine)
 		row := ui.Row(c).WidthPercent(100).Grow(1).AlignItems(ui.Stretch)
@@ -357,17 +358,17 @@ func (a *appState) dockSourcesBody(c *ui.Context) {
 			}
 		})
 		a.iconButton(c, "dock-src-up", lucide.ChevronUp(), a.tr("toward the front", "往前一层"), false, func() {
-			if it := a.find(a.selected); it != nil {
+			if it := a.find(a.selected); it != nil && it.source.ID != "" && it.shown {
 				a.raiseStage(it.source.ID, false)
 			}
 		})
 		a.iconButton(c, "dock-src-down", lucide.ChevronDown(), a.tr("toward the back", "往后一层"), false, func() {
-			if it := a.find(a.selected); it != nil {
+			if it := a.find(a.selected); it != nil && it.source.ID != "" && it.shown {
 				a.lowerStage(it.source.ID, false)
 			}
 		})
 		ui.Box(c).Grow(1)
-		if it := a.find(a.selected); it != nil {
+		if it := a.find(a.selected); it != nil && it.source.ID != "" && it.shown {
 			ui.Text(c, a.layerNote(it)).FontSize(textMicro).TextColor(colorDim).SingleLine()
 		}
 	})
@@ -467,7 +468,10 @@ func (a *appState) syncBadge(it *item) string {
 // layerNote names where the selected source sits in the stack, so the arrows
 // have a visible effect even when two pictures do not overlap.
 func (a *appState) layerNote(it *item) string {
-	order := a.sceneEdits().ordered(a.shownIDs())
+	if it == nil || it.source.ID == "" || !it.shown {
+		return ""
+	}
+	order := a.currentEdits().ordered(a.shownIDs())
 	for i, id := range order {
 		if id == it.source.ID {
 			return fmt.Sprintf("%d/%d", i+1, len(order))

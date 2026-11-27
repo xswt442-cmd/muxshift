@@ -58,7 +58,16 @@ func TestReplayBlocksReloadAndRetry(t *testing.T) {
 	}
 }
 
-func TestShutdownWaitsForBackgroundReconcileClose(t *testing.T) {
+func TestShutdownDrainsQueuedRecordingRelease(t *testing.T) {
+	checkShutdownRecordingRelease(t, true)
+}
+
+func TestShutdownInterruptsInFlightRetirement(t *testing.T) {
+	checkShutdownRecordingRelease(t, false)
+}
+
+func checkShutdownRecordingRelease(t *testing.T, advanceFrames bool) {
+	t.Helper()
 	a, err := newAppState(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -78,10 +87,24 @@ func TestShutdownWaitsForBackgroundReconcileClose(t *testing.T) {
 	if len(a.retiring) != 1 || it.replayLease != nil || it.generation != 1 {
 		t.Fatal("retirement did not take ownership and invalidate the item")
 	}
+	if advanceFrames {
+		for job := range a.retiring {
+			for range 3 {
+				a.signalFrame()
+			}
+			a.finishRetirementOnMain(job)
+		}
+		if len(a.retiring) != 0 || len(a.mediaCloseQueue) != 1 || a.mediaCloseQueue[0].handle.lease != lease {
+			t.Fatal("the close queue did not take ownership of the recording lease")
+		}
+	}
 	if _, err := os.Stat(recording.Path); err != nil {
 		t.Fatalf("the retiring player lost its recording: %v", err)
 	}
 	a.shutdown()
+	if len(a.retiring) != 0 || len(a.mediaCloseQueue) != 0 {
+		t.Fatal("shutdown left outstanding player retirements")
+	}
 	if open, _ := a.leaseStats(); open != 0 {
 		t.Fatalf("shutdown left %d recording leases open", open)
 	}

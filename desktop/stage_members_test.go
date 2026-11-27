@@ -1,16 +1,87 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/xswt442-cmd/muxshift/core"
 	"github.com/xswt442-cmd/muxshift/core/hls"
 )
+
+func TestUnlinkSharedSourceStopsPlayerWhenNoLongerConsumed(t *testing.T) {
+	app, scene, _ := newStoreFixture(t)
+	prepareStageMembershipFixture(t, app, scene)
+	app.window = &mygo.Window{}
+	it := app.items[0]
+	decoder := &lifecycleDecoder{closed: make(chan struct{}, 1)}
+	player, err := ui.NewVideoPlayer(decoder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	it.player = player
+	generation := it.generation
+	app.unlinkStageMember(it)
+	if len(app.items) != 1 || app.items[0] != it || app.isStageMember(it) || it.player != nil || it.shown {
+		t.Fatal("unlink should detach the player while keeping the shared source")
+	}
+	if it.generation != generation+1 || len(app.retiring) != 1 {
+		t.Fatal("unlink did not schedule exactly one retirement")
+	}
+	for retirement := range app.retiring {
+		if len(retirement.handles) != 1 || retirement.handles[0].player != player {
+			t.Fatal("retirement did not acquire the detached player")
+		}
+	}
+	app.shutdown()
+	select {
+	case <-decoder.closed:
+	case <-time.After(time.Second):
+		t.Fatal("the detached player's decoder is still open")
+	}
+}
+
+func TestAlignInvalidatedWhenLinkChangesImplicitReference(t *testing.T) {
+	app, scene, _ := newStoreFixture(t)
+	first := app.items[0]
+	first.persistentID = "first"
+	first.player = &ui.VideoPlayer{}
+	first.shown = false
+	if _, err := app.session.SetSceneVideo(scene); err != nil {
+		t.Fatal(err)
+	}
+	second := &item{source: core.Source{ID: "current-ref"}, persistentID: "second", player: &ui.VideoPlayer{}, shown: true}
+	app.items = append(app.items, second)
+	app.sceneMembers = map[core.SceneID]map[string]bool{scene: {second.persistentID: true}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	app.probeRunning, app.probeCancel = true, cancel
+	app.alignRow = alignRowResult{RequestID: 1, Reference: second.source.ID}
+	app.linkStageMember(first)
+	if app.syncReference() != first || app.probeRunning || ctx.Err() == nil || app.alignRow.RequestID != 0 {
+		t.Fatal("linking the new implicit reference did not cancel the alignment request")
+	}
+}
+
+func TestAlignInvalidatedWhenReplacingSource(t *testing.T) {
+	app, _, _ := newStoreFixture(t)
+	it := app.items[0]
+	app.openPlayerForImport = func(string) (*ui.VideoPlayer, error) { return &ui.VideoPlayer{}, nil }
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	app.probeRunning, app.probeCancel = true, cancel
+	app.alignRow = alignRowResult{RequestID: 1, Target: it.source.ID}
+	app.openReplacement(it, "replacement.mp4", true)
+	if it.generation != 1 || app.probeRunning || ctx.Err() == nil || app.alignRow.RequestID != 0 {
+		t.Fatal("replacing the target did not cancel the alignment request")
+	}
+}
 
 func TestStageMembershipSharesSourcesWithoutSharingRoutes(t *testing.T) {
 	app, first, _ := newStoreFixture(t)

@@ -987,6 +987,62 @@ func TestLoadSessionStoreRejectsTopLevelNullAndDeduplicatesSourceIDs(t *testing.
 	}
 }
 
+func TestUnlinkCancelsUnavailableRetry(t *testing.T) {
+	app, scene, _ := newStoreFixture(t)
+	it := app.items[0]
+	it.persistentID = "camera"
+	originalURI := it.uri
+	replacement := filepath.Join(t.TempDir(), "replacement.mp4")
+	app.retryScene = scene
+	app.retryTargetID = it.persistentID
+	app.importing = replacement
+	app.importDone = make(chan struct{})
+	done := app.importDone
+	app.openPlayerForImport = func(string) (*ui.VideoPlayer, error) {
+		t.Fatal("the stale retry opened a player")
+		return nil, nil
+	}
+
+	token := app.importToken
+	app.unlinkStageMember(it)
+	if app.isStageMember(it) || app.importing != "" || app.retryTargetID != "" {
+		t.Fatal("unlink did not clear the pending retry")
+	}
+	select {
+	case <-done:
+	default:
+		t.Fatal("unlink left the retry ticker running")
+	}
+	if err := app.retryUnavailableSource(it, replacement); err == nil {
+		t.Fatal("a source outside the active stage could start a retry")
+	}
+	app.linkStageMember(it)
+	if !app.isStageMember(it) {
+		t.Fatal("the source was not linked back")
+	}
+	app.landUnavailableRetry(token, it.persistentID, replacement, importPlan{uri: replacement, mode: importDirect}, nil)
+	if it.uri != originalURI {
+		t.Fatalf("the stale retry changed the source address to %q", it.uri)
+	}
+}
+
+func TestPlaceholderLayerPreservesPendingOrder(t *testing.T) {
+	app, scene, _ := newStoreFixture(t)
+	it := app.items[0]
+	it.source = core.Source{}
+	it.persistentID = "offline"
+	app.persistentSceneIDs = map[string]core.SceneID{"stage": scene}
+	app.pendingStageEdits = []storedStageEdits{{Scene: "stage", Order: []string{"offline", "other"}}}
+	app.raiseStage(it.source.ID, false)
+	app.lowerStage(itemKey(it), false)
+	if note := app.layerNote(it); note != "" || len(app.edits) != 0 {
+		t.Fatalf("placeholder layer note = %q, edits = %+v", note, app.edits)
+	}
+	if len(app.pendingStageEdits) != 1 || !slices.Equal(app.pendingStageEdits[0].Order, []string{"offline", "other"}) {
+		t.Fatalf("placeholder changed the pending layer order: %+v", app.pendingStageEdits)
+	}
+}
+
 func TestLandUnavailableRetryKeepsSourceOnLateDecodeFailure(t *testing.T) {
 	app, scene, _ := newStoreFixture(t)
 	app.sync = newSyncState()

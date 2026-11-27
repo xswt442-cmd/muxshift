@@ -66,7 +66,10 @@ func (a *appState) playRecording(it *item, runner *dvrRunner, from time.Duration
 		player:     player,
 		generation: it.generation,
 	}
-	mygoRunOnMain(func() { it.swap = swap })
+	mygoRunOnMain(func() {
+		it.closeMediaMenu()
+		it.swap = swap
+	})
 	logf("replay", "waiting for %s to show a picture (generation %d, %s, buffer %s epoch %d)",
 		recording.FileName(), swap.generation, shortURI(it.uri), recording.BufferInstance, recording.SourceMediaEpoch)
 	go a.settleReplay(swap)

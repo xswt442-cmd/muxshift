@@ -1493,6 +1493,9 @@ func (a *appState) clearPendingStageOrder(scene core.SceneID) {
 			a.pendingStageEdits[i].Order = nil
 		}
 	}
+	a.pendingStageEdits = slices.DeleteFunc(a.pendingStageEdits, func(edit storedStageEdits) bool {
+		return edit.Scene == persistent && len(edit.Boxes)+len(edit.Order)+len(edit.Locked) == 0
+	})
 }
 
 func (a *appState) forgetPendingStageEdits(scene core.SceneID) {

@@ -61,6 +61,35 @@ func TestReplaceSourceMediaBlockedDuringReplaySwap(t *testing.T) {
 	}
 }
 
+func TestLoadSourceQualitiesReopensAfterHiddenCompletion(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "#EXTM3U\n#EXTINF:6,\nsegment.ts\n")
+	}))
+	defer server.Close()
+	app, _, _ := newStoreFixture(t)
+	callbacks := make(chan func(), 2)
+	app.onMain = func(fn func()) { callbacks <- fn }
+	it := app.items[0]
+	it.playlistMaster = server.URL
+	for _, reopen := range []bool{false, true} {
+		it.mediaMenu = true
+		app.loadSourceQualities(it)
+		if !it.mediaLoading {
+			t.Fatal("opening the menu did not start a new playlist read")
+		}
+		it.mediaMenu = reopen
+		select {
+		case landed := <-callbacks:
+			landed()
+		case <-time.After(5 * time.Second):
+			t.Fatal("quality request did not complete")
+		}
+		if it.mediaLoading || it.mediaCancel != nil {
+			t.Fatal("completion left the menu loading")
+		}
+	}
+}
+
 func TestRotatingQueryTokensDoNotDuplicateCurrentQuality(t *testing.T) {
 	levels := []liveVariant{{address: "https://example.test/720.m3u8?token=new"}}
 	if got := currentQuality("https://example.test/720.m3u8?token=old", levels); got != 0 {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -178,7 +179,7 @@ func (a *appState) enterStageEdit() {
 		a.invalidate()
 		return
 	}
-	a.selected = stageEditSelection(a.selected, geometry)
+	a.setSelectedSource(stageEditSelection(a.selected, geometry))
 	a.editMode = true
 	a.editNote = a.tr("Drag the picture to move it, or drag a handle to resize it.", "拖动画面调整位置，拖动把手调整大小。")
 	a.invalidate()
@@ -370,7 +371,7 @@ func boxPixels(b stageBox, w, h float32) stageBox {
 // selectFromStage makes a picture the inspector's subject. It deliberately
 // does not touch the scene's audio: selecting a picture is not routing sound.
 func (a *appState) selectFromStage(it *item) {
-	a.selected = it.source.ID
+	a.setSelectedSource(it.source.ID)
 	a.boxFields = boxFields{}
 	if !a.editMode {
 		a.editMode = true
@@ -388,7 +389,7 @@ func (a *appState) selectStageSource(it *item) {
 			return
 		}
 	}
-	a.selected = itemKey(it)
+	a.setSelectedSource(itemKey(it))
 	a.boxFields = boxFields{}
 	a.editNote = ""
 	if it.shown {
@@ -762,15 +763,24 @@ func lockLabel(locked bool) string {
 // and the inspector both call it, so the stacking order a person sets there is
 // the order the stage draws.
 func (a *appState) raiseStage(id core.SourceID, toFront bool) {
-	a.sceneEdits().raise(id, a.shownIDs(), toFront)
-	a.clearPendingStageOrder(a.scene)
-	a.invalidate()
-	a.saveSession()
+	a.moveStageLayer(id, true, toFront)
 }
 
 // lowerStage is the other direction of raiseStage.
 func (a *appState) lowerStage(id core.SourceID, toBack bool) {
-	a.sceneEdits().lower(id, a.shownIDs(), toBack)
+	a.moveStageLayer(id, false, toBack)
+}
+
+func (a *appState) moveStageLayer(id core.SourceID, forward, allTheWay bool) {
+	if id == "" {
+		return
+	}
+	order := a.currentEdits().ordered(a.shownIDs())
+	index := slices.Index(order, id)
+	if index < 0 || (forward && index == len(order)-1) || (!forward && index == 0) {
+		return
+	}
+	a.sceneEdits().move(id, order, forward, allTheWay)
 	a.clearPendingStageOrder(a.scene)
 	a.invalidate()
 	a.saveSession()

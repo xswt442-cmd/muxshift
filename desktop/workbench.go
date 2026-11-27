@@ -253,6 +253,7 @@ func (a *appState) workspacePageActive(page workspace) bool {
 }
 
 func (a *appState) navigateWorkspace(page workspace) {
+	a.closeMediaMenus()
 	a.pageMenu = false
 	a.drawerOpen = false
 	if page == workspaceSources {
@@ -420,12 +421,12 @@ func (a *appState) sourceEntry(c *ui.Context, it *item, index int, compact bool,
 		ui.Row(c).WidthPercent(100).Wrap().Gap(spaceXs).AlignItems(ui.Center).Children(func() {
 			if ui.Button(c.Key("compact-retry-"+string(itemKey(it))), a.tr("Retry", "重试")).
 				Height(24).Disabled(a.importing != "").Clicked() {
-				a.selected = itemKey(it)
+				a.setSelectedSource(itemKey(it))
 				a.runCommand(command{Kind: commandRetry, Source: itemKey(it)})
 			}
 			if ui.Button(c.Key("compact-reselect-"+string(itemKey(it))), a.tr("Choose address", "重新选择地址")).
 				Height(24).Clicked() {
-				a.selected = itemKey(it)
+				a.setSelectedSource(itemKey(it))
 				a.reselectSource = itemKey(it)
 				a.reselectText = ""
 				a.reselectProblem = ""
@@ -531,7 +532,7 @@ func (a *appState) sourceCompactActions(c *ui.Context, it *item, index int) {
 	a.sourceRenameButton(c, it)
 	if it.video != "" || it.canRestoreOnDemand() || a.pictureRequested(it) {
 		a.quietIconButton(c, "source-visible-"+key, a.eyeIcon(it), a.eyeTip(it), a.eyeTint(it), func() {
-			a.selected = itemKey(it)
+			a.setSelectedSource(itemKey(it))
 			a.toggleVideo(index)
 		})
 	}
@@ -559,10 +560,10 @@ func (a *appState) sourceActions(c *ui.Context, it *item, index int) {
 		if !it.shown {
 			show = a.tr("Show", "显示")
 		}
-		if ui.Button(c.Key("card-show-"+string(it.source.ID)), show).Height(28).Clicked() {
+		if ui.Button(c.Key("card-show-"+string(itemKey(it))), show).Height(28).Clicked() {
 			a.toggleVideo(index)
 		}
-		if ui.Button(c.Key("card-hear-"+string(it.source.ID)), a.tr("Hear", "试听")).Height(28).Clicked() {
+		if ui.Button(c.Key("card-hear-"+string(itemKey(it))), a.tr("Hear", "试听")).Height(28).Clicked() {
 			a.selectAudio(it)
 		}
 		if it.audio != "" {
@@ -575,7 +576,7 @@ func (a *appState) sourceActions(c *ui.Context, it *item, index int) {
 				a.runCommand(command{Kind: commandRetry, Source: itemKey(it)})
 			}
 			if ui.Button(c.Key("card-reselect-"+string(itemKey(it))), a.tr("Choose address", "重新选择地址")).Height(28).Clicked() {
-				a.selected = itemKey(it)
+				a.setSelectedSource(itemKey(it))
 				a.reselectSource = itemKey(it)
 				a.reselectText = ""
 				a.reselectProblem = ""
@@ -607,7 +608,7 @@ func (a *appState) sceneColumnBody(c *ui.Context, expanded bool) {
 						}
 						if ui.Button(c.Key("rail-src-"+string(itemKey(it))), "▢").Width(28).Height(26).
 							Tooltip(sourceDisplayName(it)).Clicked() {
-							a.selected = itemKey(it)
+							a.setSelectedSource(itemKey(it))
 							a.invalidate()
 						}
 						if it.shown {
@@ -1216,8 +1217,8 @@ func (a *appState) soundTab(c *ui.Context, it *item, index int) {
 			TextColor(colorText).FontFeatures("tnum")
 	})
 	ui.Row(c).Wrap().Gap(spaceXs).Children(func() {
-		if ui.Button(c.Key("snd-mute"), a.muteLabel(it)).Height(26).Clicked() {
-			a.runCommand(command{Kind: commandMute, Source: it.source.ID})
+		if ui.Button(c.Key("snd-mute"), a.muteLabel(it)).Height(26).Disabled(it.audio == "").Clicked() {
+			a.runCommand(command{Kind: commandMute, Source: itemKey(it)})
 		}
 		if it.audio != "" {
 			if ui.Button(c.Key("snd-allow"), a.shortAllowLabel(it)).Height(26).Clicked() {
@@ -1226,7 +1227,7 @@ func (a *appState) soundTab(c *ui.Context, it *item, index int) {
 		}
 		if it.openErr != nil {
 			if ui.Button(c.Key("snd-retry"), a.tr("Retry", "重试")).Height(26).Clicked() {
-				a.runCommand(command{Kind: commandRetry, Source: it.source.ID})
+				a.runCommand(command{Kind: commandRetry, Source: itemKey(it)})
 			}
 		}
 		if ui.Button(c.Key("snd-remove"), a.tr("Remove", "移除")).Height(26).Clicked() {
@@ -1234,6 +1235,9 @@ func (a *appState) soundTab(c *ui.Context, it *item, index int) {
 		}
 	})
 	a.detailRow(c, a.tr("Align", "对齐"), a.alignedState(a.entryOf(it)))
+	if it.source.ID == "" {
+		return
+	}
 	ui.Row(c).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, a.tr("Offset", "偏移")).FontSize(textMicro).TextColor(colorDim).Width(52)
 		a.offsetStepper(c, "snd-step", a.entryOf(it).Offset, a.settingsNudge(1),
@@ -1561,7 +1565,9 @@ func (a *appState) pageMenuPanel(c *ui.Context, width float32) {
 		if ui.Button(c.Key("menu-quit"), a.tr("Quit MuxShift", "退出 MuxShift")).Height(a.controlHeight()).
 			Padding(0, spaceSm).TextColor(colorBad).Clicked() {
 			a.pageMenu = false
-			a.window.Update(a.window.Close)
+			if a.window != nil {
+				a.window.Update(a.window.Close)
+			}
 		}
 	})
 }

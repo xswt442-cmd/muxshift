@@ -206,6 +206,9 @@ func (a *appState) runCommand(cmd command) commandResult {
 			}
 			if cmd.Kind == commandSourcePause {
 				player.Pause()
+				if _, grouped := a.existingGroup(); !grouped && a.sync != nil && a.sync.playhead != nil && !a.playing() {
+					a.sync.playhead.Pause()
+				}
 			} else {
 				player.Play()
 			}
@@ -273,17 +276,11 @@ func (a *appState) runCommand(cmd command) commandResult {
 		}
 		uri := a.importing
 		a.importToken++
-		if a.importCancel != nil {
-			a.importCancel()
-			a.importCancel = nil
-		}
 		a.startupMediaQueue = nil
 		a.startupMediaScene = ""
 		a.pendingImportOrigin = originAdded
 		a.importScene = ""
-		a.retryTargetID = ""
-		a.closeImportTicker()
-		a.importing = ""
+		a.clearUnavailableRetry()
 		a.importText = ""
 		result.Message = fmt.Sprintf("cancelled reading %s; nothing was added", shortURI(uri))
 		a.lastCommand = result
@@ -298,7 +295,7 @@ func (a *appState) runCommand(cmd command) commandResult {
 		a.startupRestoreCancel()
 		a.startupRestoreCancel = nil
 		for _, it := range a.items {
-			if it.restoring && it.source.ID == "" {
+			if it.source.ID == "" && (it.restoring || it.openErr == nil && a.sceneConsumesItem(a.scene, it)) {
 				it.openErr = errors.New(a.tr("Recovery was cancelled. Retry or choose an address.", "已取消恢复。可以重试或重新选择地址。"))
 			}
 			it.restoring = false
@@ -318,7 +315,7 @@ func (a *appState) runCommand(cmd command) commandResult {
 			return finish(err, "")
 		}
 		if a.selected == cmd.Source || a.selected == itemKey(it) {
-			a.selected = ""
+			a.setSelectedSource("")
 		}
 		return finish(nil, fmt.Sprintf("removed %s; %d source(s) left", name, len(a.items)))
 

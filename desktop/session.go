@@ -642,6 +642,10 @@ type appState struct {
 	retiring  map[*mediaRetirement]struct{}
 	closeDone chan struct{}
 	closeWait sync.WaitGroup
+
+	mediaCloseQueue     []queuedMediaClose
+	mediaCloseScheduled bool
+	leaseCloseWait      sync.WaitGroup
 }
 
 // newAppState builds a session with one scene per given source set, opens a
@@ -943,6 +947,9 @@ func (a *appState) importSource(ctx context.Context, uri string, token int) {
 // retryUnavailableSource repeats address inspection off the drawing thread;
 // only the resulting Core registration and player open return to the window.
 func (a *appState) retryUnavailableSource(it *item, uri string) error {
+	if !a.isStageMember(it) {
+		return errors.New(a.tr("This source is no longer on the active stage.", "此来源已不在当前舞台上。"))
+	}
 	if it.restoring {
 		return errors.New(a.tr("This source is already being recovered.", "此来源正在恢复。"))
 	}
@@ -1115,26 +1122,15 @@ func (a *appState) landUnavailableRetry(token int, targetID, requestedURI string
 		return
 	}
 	if a.closed {
-		a.closeImportTicker()
-		a.importing = ""
-		a.retryTargetID = ""
-		return
-	}
-	if a.scene != a.retryScene || a.stageGeneration != a.retryStageGeneration {
-		a.closeImportTicker()
-		a.importing = ""
-		a.retryTargetID = ""
-		a.retryScene = ""
-		a.importText = ""
-		a.lastErr = errors.New("stage changed while the source was being reopened; retry it on the active stage")
-		a.invalidate()
+		a.clearUnavailableRetry()
 		return
 	}
 	it := a.itemByPersistentID(targetID)
-	if it == nil {
-		a.closeImportTicker()
-		a.importing = ""
-		a.retryTargetID = ""
+	if a.scene != a.retryScene || a.stageGeneration != a.retryStageGeneration || !a.isStageMember(it) {
+		a.clearUnavailableRetry()
+		a.importText = ""
+		a.lastErr = errors.New("stage changed while the source was being reopened; retry it on the active stage")
+		a.invalidate()
 		return
 	}
 	err := a.installSavedSource(it, plan, inspectErr)
@@ -1144,10 +1140,7 @@ func (a *appState) landUnavailableRetry(token int, targetID, requestedURI string
 			go a.watchFirstOpen(it, it.generation, true)
 		}
 	}
-	a.closeImportTicker()
-	a.importing = ""
-	a.retryTargetID = ""
-	a.retryScene = ""
+	a.clearUnavailableRetry()
 	result := commandResult{Command: command{Kind: commandRetry, Source: commandID, URI: requestedURI}, At: time.Now()}
 	if err != nil {
 		it.openErr = safeOpenError(err)
@@ -1162,6 +1155,13 @@ func (a *appState) landUnavailableRetry(token int, targetID, requestedURI string
 	a.lastCommand = result
 	a.report(result)
 	a.invalidate()
+}
+
+func (a *appState) clearUnavailableRetry() {
+	a.closeImportTicker()
+	a.importing = ""
+	a.retryTargetID = ""
+	a.retryScene = ""
 }
 
 func (a *appState) installSavedSource(it *item, plan importPlan, inspectErr error) error {
@@ -1399,7 +1399,7 @@ func (a *appState) landImportPlan(token int, plan importPlan, probeErr error) {
 			}
 			a.items = append(a.items, it)
 			if target == a.scene {
-				a.selected = it.source.ID
+				a.setSelectedSource(it.source.ID)
 			}
 			// Ordinary startup selects the first video whose source and player
 			// both landed successfully. A failed earlier CLI candidate must not
@@ -1609,7 +1609,7 @@ func (a *appState) selectStartupPicture() {
 				a.lastErr = safeOpenError(err)
 				return
 			}
-			a.selected = itemKey(candidate)
+			a.setSelectedSource(itemKey(candidate))
 			a.apply()
 			a.wakeShown(candidate)
 			return
@@ -2128,6 +2128,10 @@ func (a *appState) remove(index int) error {
 	for _, scene := range scenes {
 		a.removePendingStageRoutes(scene, it, true, true)
 	}
+	if a.retryTargetID != "" && a.retryTargetID == it.persistentID {
+		a.importToken++
+		a.clearUnavailableRetry()
+	}
 	if a.probeRunning {
 		a.invalidateAlignmentRow()
 	}
@@ -2179,6 +2183,11 @@ type mediaRetirement struct {
 	after   func()
 	frame   int
 	drawn   chan struct{}
+}
+
+type queuedMediaClose struct {
+	handle pendingClose
+	after  func()
 }
 
 func (a *appState) closeOnMain(it *item) {
@@ -2234,7 +2243,9 @@ func (a *appState) retireMediaOnMain(handles []pendingClose, keep *ui.VideoPlaye
 	}
 	select {
 	case <-a.closeDone:
-		a.closeMediaOnMain(handles)
+		for _, handle := range handles {
+			a.closeMediaOnMain(handle)
+		}
 		return
 	default:
 	}
@@ -2280,6 +2291,7 @@ func (a *appState) finishRetirementOnMain(job *mediaRetirement) {
 	}
 	delete(a.retiring, job)
 	keep := job.keep != nil && !a.readyOutputPlayer()
+	var handles []pendingClose
 	for _, handle := range job.handles {
 		if keep && handle.player == job.keep {
 			// MyGo needs a paused player until another player produces a
@@ -2294,19 +2306,53 @@ func (a *appState) finishRetirementOnMain(job *mediaRetirement) {
 				continue
 			}
 		}
-		a.closeMediaOnMain([]pendingClose{handle})
+		handles = append(handles, handle)
 	}
-	if job.after != nil {
-		job.after()
-	}
+	a.queueMediaCloseOnMain(handles, job.after)
 }
 
-func (a *appState) closeMediaOnMain(handles []pendingClose) {
-	for _, handle := range handles {
-		if handle.player != nil {
-			handle.player.Close()
+func (a *appState) queueMediaCloseOnMain(handles []pendingClose, after func()) {
+	if len(handles) == 0 {
+		if after != nil {
+			after()
 		}
-		a.releaseLease(handle.lease, "of a closed player")
+		return
+	}
+	for _, handle := range handles {
+		a.mediaCloseQueue = append(a.mediaCloseQueue, queuedMediaClose{handle: handle})
+	}
+	a.mediaCloseQueue[len(a.mediaCloseQueue)-1].after = after
+	a.invalidate()
+}
+
+// MyGo closes native players on the UI thread. Post one close after a frame
+// so the drawing callback itself never closes a player or releases its lease.
+func (a *appState) scheduleMediaCloseOnMain() {
+	if a.window == nil || a.mediaCloseScheduled || len(a.mediaCloseQueue) == 0 {
+		return
+	}
+	a.mediaCloseScheduled = true
+	a.window.Update(func() {
+		a.mediaCloseScheduled = false
+		if len(a.mediaCloseQueue) == 0 {
+			return
+		}
+		next := a.mediaCloseQueue[0]
+		a.mediaCloseQueue[0] = queuedMediaClose{}
+		a.mediaCloseQueue = a.mediaCloseQueue[1:]
+		a.closeMediaOnMain(next.handle)
+		if next.after != nil {
+			next.after()
+		}
+	})
+}
+
+func (a *appState) closeMediaOnMain(handle pendingClose) {
+	if handle.player != nil {
+		handle.player.Close()
+	}
+	if handle.lease != nil {
+		a.leaseCloseWait.Go(func() { a.releaseLease(handle.lease, "of a closed player") })
 	}
 }
 
@@ -2443,7 +2489,7 @@ func (a *appState) rememberSource(it *item) {
 	}()
 }
 
-// closePendingWhenReady closes the retained player only after another output
+// closePendingWhenReady queues the retained player for closing after another output
 // can supply an actual picture. It runs on the drawing thread.
 func (a *appState) closePendingWhenReady() {
 	if len(a.pending) == 0 || !a.readyOutputPlayer() {
@@ -2453,7 +2499,7 @@ func (a *appState) closePendingWhenReady() {
 	wait := a.pending
 	a.pending = nil
 	a.pendingMu.Unlock()
-	a.closeMediaOnMain(wait)
+	a.queueMediaCloseOnMain(wait, nil)
 }
 
 // signalFrame records that the window built a frame, so a close that just
@@ -2462,6 +2508,7 @@ func (a *appState) closePendingWhenReady() {
 func (a *appState) signalFrame() {
 	a.frameCount++
 	a.closePendingWhenReady()
+	a.scheduleMediaCloseOnMain()
 	for job := range a.retiring {
 		if job.frame == a.frameCount {
 			close(job.drawn)
@@ -2507,13 +2554,22 @@ func (a *appState) shutdown() {
 	a.closeWait.Wait()
 	for job := range a.retiring {
 		delete(a.retiring, job)
-		a.closeMediaOnMain(job.handles)
+		for _, handle := range job.handles {
+			a.closeMediaOnMain(handle)
+		}
 	}
+	for _, queued := range a.mediaCloseQueue {
+		a.closeMediaOnMain(queued.handle)
+	}
+	a.mediaCloseQueue = nil
 	a.pendingMu.Lock()
 	wait := a.pending
 	a.pending = nil
 	a.pendingMu.Unlock()
-	a.closeMediaOnMain(wait)
+	for _, handle := range wait {
+		a.closeMediaOnMain(handle)
+	}
+	a.leaseCloseWait.Wait()
 	if pending := a.releaseLeases(); len(pending) > 0 {
 		log.Printf("shutdown: the system still holds %s", strings.Join(pending, ", "))
 	}

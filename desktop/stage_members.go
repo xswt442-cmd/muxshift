@@ -38,6 +38,8 @@ func (a *appState) linkStageMember(it *item) {
 	if it == nil || it.stageOnly || a.isStageMember(it) {
 		return
 	}
+	reference := a.syncReference()
+	defer a.invalidateChangedAlignmentReference(reference)
 	scene, err := a.session.Scene(a.scene)
 	if err != nil {
 		a.lastErr = safeOpenError(err)
@@ -62,7 +64,7 @@ func (a *appState) linkStageMember(it *item) {
 		a.setPendingAudio(scene.ID, sourceID, storedAudio{Source: sourceID, Volume: it.volume}, index)
 	}
 	a.materializeStageMembers(scene.ID)[sourceID] = true
-	a.selected = itemKey(it)
+	a.setSelectedSource(itemKey(it))
 	a.apply()
 	a.wakeShown(it)
 	a.reconcileScenePlayers(scene.ID, a.stageGeneration)
@@ -97,6 +99,11 @@ func (a *appState) unlinkStageMember(it *item) {
 	}
 	sourceID := a.stageSourceID(it)
 	delete(a.materializeStageMembers(scene.ID), sourceID)
+	it.closeMediaMenu()
+	if a.retryScene == scene.ID && a.retryTargetID == sourceID {
+		a.importToken++
+		a.clearUnavailableRetry()
+	}
 	a.removePendingStageRoutes(scene, it, true, true)
 	a.layoutTaken = removeTrackID(a.layoutTaken, it.source.ID)
 	a.pendingLayoutOrder = removeString(a.pendingLayoutOrder, it.persistentID)
@@ -236,7 +243,7 @@ func (a *appState) reconcileStageSelection() {
 		return err == nil && a.isStageMember(it)
 	}
 	if !onStage(a.selected) {
-		a.selected = ""
+		a.setSelectedSource("")
 	}
 	if !onStage(a.syncRef) {
 		a.syncRef = ""

@@ -9,7 +9,7 @@
   </p>
   <p>
     <a href="https://github.com/xswt442-cmd/muxshift/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/xswt442-cmd/muxshift/actions/workflows/ci.yml/badge.svg?branch=dev"></a>
-    <a href="https://github.com/xswt442-cmd/muxshift/releases"><img alt="release" src="https://img.shields.io/badge/release-v0.0.4-5d77f5"></a>
+    <a href="https://github.com/xswt442-cmd/muxshift/releases"><img alt="release" src="https://img.shields.io/badge/release-v0.0.5-5d77f5"></a>
     <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-5d77f5"></a>
     <a href="go.mod"><img alt="Go 1.27" src="https://img.shields.io/badge/go-1.27-5d77f5"></a>
   </p>
@@ -17,7 +17,7 @@
 
 ## 下载
 
-[Releases](https://github.com/xswt442-cmd/muxshift/releases) 提供 Windows amd64 安装器（`muxshift-0.0.4-windows-amd64-setup.exe`）和便携 ZIP（`muxshift-0.0.4-windows-amd64.zip`）。安装器按当前用户安装，创建开始菜单快捷方式与可选的桌面快捷方式，并注册卸载项；ZIP 解压后直接运行 `muxshift.exe`。两种方式得到同一套目录：程序与 `VERSION.txt` 在顶层，浏览器扩展在 `extension\`，文档在 `docs\`。两者都是 GUI 程序，正常启动不会带控制台窗口；运行需要 Windows 10/11 和系统自带的 Media Foundation。从源码构建见[快速开始](#快速开始)。
+[Releases](https://github.com/xswt442-cmd/muxshift/releases) 提供 Windows amd64 安装器（`muxshift-0.0.5-windows-amd64-setup.exe`）和便携 ZIP（`muxshift-0.0.5-windows-amd64.zip`）。安装器按当前用户安装，创建开始菜单快捷方式与可选的桌面快捷方式，并注册卸载项；ZIP 解压后直接运行 `muxshift.exe`。两种方式得到同一套目录：程序与 `VERSION.txt` 在顶层，浏览器扩展在 `extension\`，文档在 `docs\`。两者都是 GUI 程序，正常启动不会带控制台窗口；运行需要 Windows 10/11 和系统自带的 Media Foundation。从源码构建见[快速开始](#快速开始)。
 
 ## 能做什么
 

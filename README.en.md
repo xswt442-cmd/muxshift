@@ -9,7 +9,7 @@
   </p>
   <p>
     <a href="https://github.com/xswt442-cmd/muxshift/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/xswt442-cmd/muxshift/actions/workflows/ci.yml/badge.svg?branch=dev"></a>
-    <a href="https://github.com/xswt442-cmd/muxshift/releases"><img alt="release" src="https://img.shields.io/badge/release-v0.0.4-5d77f5"></a>
+    <a href="https://github.com/xswt442-cmd/muxshift/releases"><img alt="release" src="https://img.shields.io/badge/release-v0.0.5-5d77f5"></a>
     <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-5d77f5"></a>
     <a href="go.mod"><img alt="Go 1.27" src="https://img.shields.io/badge/go-1.27-5d77f5"></a>
   </p>
@@ -17,7 +17,7 @@
 
 ## Download
 
-[Releases](https://github.com/xswt442-cmd/muxshift/releases) ship a Windows amd64 installer (`muxshift-0.0.4-windows-amd64-setup.exe`) and a portable ZIP (`muxshift-0.0.4-windows-amd64.zip`). The installer installs per user, creates Start Menu and optional desktop shortcuts, and registers an uninstall entry; the ZIP runs `muxshift.exe` after unpacking. Both give the same layout: the program and `VERSION.txt` at the top, the browser extension under `extension\`, and the documents under `docs\`. Both are GUI programs, so a normal start carries no console window; they need Windows 10/11 and the Media Foundation that comes with it. Building from source is under [quick start](#quick-start).
+[Releases](https://github.com/xswt442-cmd/muxshift/releases) ship a Windows amd64 installer (`muxshift-0.0.5-windows-amd64-setup.exe`) and a portable ZIP (`muxshift-0.0.5-windows-amd64.zip`). The installer installs per user, creates Start Menu and optional desktop shortcuts, and registers an uninstall entry; the ZIP runs `muxshift.exe` after unpacking. Both give the same layout: the program and `VERSION.txt` at the top, the browser extension under `extension\`, and the documents under `docs\`. Both are GUI programs, so a normal start carries no console window; they need Windows 10/11 and the Media Foundation that comes with it. Building from source is under [quick start](#quick-start).
 
 ## What it does
 

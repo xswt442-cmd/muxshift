@@ -4,7 +4,7 @@
 
 This changelog records completed changes that matter to someone using MuxShift. GitHub Release notes come from the matching tagged section, not a separately maintained summary.
 
-## [Unreleased]
+## [0.0.5] - 2026-11-28
 
 ### 简体中文
 
@@ -33,13 +33,15 @@ This changelog records completed changes that matter to someone using MuxShift. 
 - 同一个会话文件只允许一个窗口保存，避免旧窗口覆盖较新的舞台布置。
 - 离线来源保留待恢复的舞台摆位和音视频分配。
 - 启动优先打开当前舞台使用的来源。切走后停用新舞台不再使用的播放器。
-- 检测公网媒体地址或探测 HLS 轨道时，会校验实际连接地址。桌面端拒绝超过 1 MiB 的 HLS 播放列表。
+- 检测媒体地址、探测 HLS 轨道和下载回放分片时，会校验公网请求的实际连接地址。桌面端拒绝超过 1 MiB 的 HLS 播放列表，HLS 诊断日志省略 URL 中的凭据和签名。
 - 选择清晰度或刷新来源后，清晰度菜单会收起。取消读取后，旧结果不会覆盖新菜单。
 - 原设置文件损坏时，外观更改只在本次运行中生效。保存失败后，可以重新点击「应用」。
 - 对齐估算会计入参考来源的偏移。回放微调若早于录像首帧，既有偏移保持原值。
 - 舞台播放控制以当前舞台为范围，只有舞台包含活动同步组成员时才会控制该组。观看模式的播放按钮和空格键使用同一规则。
 - 浏览器扩展检测到换页或重载时会清空旧候选，并提示重新扫描。
-- 扩展只在 B 站直播间解析直播地址，保留分线路地址的签名。YouTube 解析会校验当前视频 ID，避免切页后发送上一个视频的流。
+- 扩展只在 B 站直播间解析直播地址，保留分线路地址的签名。YouTube 解析会核对当前视频或直播频道。
+- 页面探测未能连接直播候选时，扩展会保留一个未验证的地址，供用户手动发送。发送超时时，扩展会提示先查看桌面端的来源面板。
+- 关闭窗口会取消尚未完成的回放准备。播放器重开期间，回放不会覆盖仍在输出的画面。
 
 **兼容性**
 
@@ -73,13 +75,15 @@ This changelog records completed changes that matter to someone using MuxShift. 
 - Only one window can save a given session file, so an older window cannot overwrite a newer stage arrangement.
 - Unavailable sources retain pending stage placement and audio and video assignments.
 - Startup opens sources used by the current stage first. Stage changes stop players the new stage no longer uses.
-- Media detection and HLS track probes validate the connection address for public sources. The desktop rejects HLS playlists larger than 1 MiB.
+- Media detection, HLS track probes, and replay segment downloads validate the connection address for public requests. The desktop rejects HLS playlists larger than 1 MiB, and HLS diagnostic logs omit URL credentials and signatures.
 - Choosing a quality level or refreshing the source closes the quality menu. Canceled requests cannot overwrite the reopened menu.
 - Appearance changes apply for the current run when the original settings file is damaged. Use Apply to retry a failed save.
 - Alignment estimates include the reference source's offset. Replay nudges before the recording's first frame leave the existing offset intact.
 - Stage transport controls the current stage and includes the active sync group only when the stage has a member in that group. The viewing controls and Space shortcut use the same rule.
 - The extension clears old candidates and asks for a fresh scan when it detects a page change or reload.
-- The extension resolves Bilibili streams only in live rooms and keeps mirror signatures. YouTube resolution checks the current video ID so navigation cannot send the previous video's stream.
+- The extension resolves Bilibili streams only in live rooms and keeps mirror signatures. YouTube resolution checks the current video or live channel.
+- If the page cannot reach a live candidate, the extension offers an unverified address for manual handoff. If handoff times out, it asks you to check Sources in the desktop app before retrying.
+- Closing the window cancels replay preparation. During a player reload, replay cannot replace the picture that is still playing.
 
 **Compatibility**
 

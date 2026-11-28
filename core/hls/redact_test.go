@@ -56,10 +56,12 @@ func TestRedactMediaAndProxySchemes(t *testing.T) {
 }
 
 func TestRedactAdjacentBracketedAddresses(t *testing.T) {
-	const input = "[https://user:first@[2001:db8::1]:8443/a?signed][https://user:second@example.test/b#fragment]"
-	const want = "[https://[2001:db8::1]:8443/a][https://example.test/b]"
-	if got := Redact(input); got != want {
-		t.Fatalf("redacted text = %q, want %q", got, want)
+	for _, separator := range []string{"", ",", "; "} {
+		input := "[https://user:first@[2001:db8::1]:8443/a?signed]" + separator + "[https://user:second@example.test/b#fragment]"
+		want := "[https://[2001:db8::1]:8443/a]" + separator + "[https://example.test/b]"
+		if got := Redact(input); got != want {
+			t.Fatalf("redacted text = %q, want %q", got, want)
+		}
 	}
 }
 

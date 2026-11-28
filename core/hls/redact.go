@@ -51,8 +51,7 @@ func Redact(text string) string {
 		delimiters := " \t\r\n\"'<>()"
 		bracketed := start > 0 && rest[start-1] == '['
 		for end < len(rest) && !strings.ContainsRune(delimiters, rune(rest[end])) {
-			if rest[end] == ']' && bracketed && (end+1 == len(rest) ||
-				strings.ContainsRune(delimiters+"[", rune(rest[end+1]))) {
+			if rest[end] == ']' && bracketed {
 				break
 			}
 			if rest[end] == '[' && (end == authority || end > authority && rest[end-1] == '@') {

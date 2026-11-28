@@ -123,8 +123,8 @@ func (a *appState) settleReplay(swap *replaySwap) {
 func (a *appState) commitReplay(swap *replaySwap, anchor dvr.Anchor, anchorErr error) {
 	it := swap.item
 	var ok bool
-	mygoRunOnMain(func() {
-		if it.swap != swap || it.generation != swap.generation {
+	a.mainDo(func() {
+		if it.swap != swap || it.generation != swap.generation || it.handover != nil {
 			return
 		}
 		old, oldLease := it.player, it.replayLease
@@ -157,7 +157,7 @@ func (a *appState) commitReplay(swap *replaySwap, anchor dvr.Anchor, anchorErr e
 // replacement player and its lease are released here.
 func (a *appState) abandonReplay(swap *replaySwap, why string) {
 	it := swap.item
-	mygoRunOnMain(func() {
+	a.mainDo(func() {
 		if it.swap == swap {
 			it.swap = nil
 		}

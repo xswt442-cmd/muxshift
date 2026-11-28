@@ -330,6 +330,11 @@ func seekTxnSources(txn *seekTxn) []dvr.SeekSource {
 // thread step that installs the new resources, so nothing can move between the
 // confirmation and the installation.
 func (a *appState) recheckTxn(txn *seekTxn) error {
+	for _, step := range txn.steps {
+		if step.item.handover != nil {
+			return fmt.Errorf("%s: a player replacement is still in progress", a.name(step.item))
+		}
+	}
 	if txn.kind == replayKindEnter {
 		return a.recheckReplayEntry(txn.entry)
 	}
@@ -388,7 +393,7 @@ func (a *appState) commitSeekTxn(txn *seekTxn) {
 		// up as part of the same critical section, so a transaction that lost it
 		// cannot install anything or clear whoever took its place.
 		a.seekMu.Lock()
-		if a.seek != txn {
+		if a.seek != txn || txn.stopped {
 			a.seekMu.Unlock()
 			refusal = fmt.Errorf("this replay transaction no longer owns the session")
 			return

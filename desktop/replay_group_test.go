@@ -3086,6 +3086,39 @@ func TestSeekTxnCommitsNothingOnceOwnershipIsGone(t *testing.T) {
 	}
 }
 
+// A stopped transaction may still own the slot while rollback closes players.
+func TestSeekTxnCommitsNothingWhileRollbackStillOwnsSlot(t *testing.T) {
+	session, opened := seekTxnFixture(t)
+	stopped := make(chan *seekTxn, 1)
+	session.app.beforeSeekCommit = func() {
+		session.app.seekMu.Lock()
+		txn := session.app.seek
+		txn.stopped = true
+		session.app.seekMu.Unlock()
+		stopped <- txn
+	}
+	before := make([]*dvr.Recording, len(session.items))
+	for i, it := range session.items {
+		before[i] = it.replay
+	}
+	if err := session.app.startSeekTxn(session.items, 6*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case txn := <-stopped:
+		if !session.app.awaitSeekTxn(txn, 10*time.Second) || !allClosed(*opened) {
+			t.Fatal("the stopped transaction kept its replacement players")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the transaction did not reach the commit step")
+	}
+	for i, it := range session.items {
+		if it.replay != before[i] || it.generation != 2 {
+			t.Fatalf("source %d was changed by the stopped transaction", i+1)
+		}
+	}
+}
+
 // Rolling an old transaction back must not clear the transaction that replaced
 // it, even when the abort arrives after the replacement.
 func TestSeekTxnAbortLeavesANewerTransactionAlone(t *testing.T) {

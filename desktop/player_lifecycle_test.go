@@ -95,6 +95,34 @@ func TestShutdownDrainsNativeReplayCloseFromPreparingWorker(t *testing.T) {
 	}
 }
 
+func TestReplayCommitKeepsDrawnPlayerDuringHandover(t *testing.T) {
+	app, err := newAppState(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.onMain = func(fn func()) { fn() }
+	decoder := &lifecycleDecoder{closed: make(chan struct{}, 1)}
+	player, err := ui.NewVideoPlayer(decoder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, drawn := &fakeSeekPlayer{}, &fakeSeekPlayer{}
+	it := &item{player: current, previous: drawn, handover: &handover{}, generation: 2}
+	app.items = append(app.items, it)
+	swap := &replaySwap{item: it, player: player, generation: it.generation, recording: dvr.Recording{StartBufferTime: time.Second}}
+	it.swap = swap
+	app.commitReplay(swap, dvr.Anchor{}, nil)
+	if it.outputPlayer() != drawn || it.player != current || it.replay != nil || it.generation != 2 || it.swap != nil {
+		t.Fatal("replay overwrote a source that was still handing over")
+	}
+	app.shutdown()
+	select {
+	case <-decoder.closed:
+	case <-time.After(time.Second):
+		t.Fatal("the refused replay player was not closed")
+	}
+}
+
 func checkShutdownRecordingRelease(t *testing.T, advanceFrames bool) {
 	t.Helper()
 	a, err := newAppState(nil)

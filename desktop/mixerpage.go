@@ -7,6 +7,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -27,9 +28,9 @@ func (a *appState) mixerPage(c *ui.Context) {
 				ui.Text(c, a.overlayLine()).FontSize(textSmall).TextColor(colorText).Wrap()
 
 				ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
-					label := a.tr("Mute everything", "全部静音")
+					label := a.tr("Mute all", "全部静音")
 					if a.masterMute {
-						label = a.tr("Everything muted", "已全部静音")
+						label = a.tr("Unmute all", "取消全部静音")
 					}
 					a.mixerAction(c, "mixer-master", label, 150, 30, a.masterMute,
 						ui.RGBA(228, 182, 109, 0.14), colorWarn, func() {
@@ -62,6 +63,9 @@ func (a *appState) mixerPage(c *ui.Context) {
 func (a *appState) mixerAction(c *ui.Context, key, label string, width, height float32, active bool, activeFill, activeInk ui.Color, onClick func()) ui.Element {
 	button := ui.ButtonBase(c.Key(key)).Width(width).Height(height).
 		Padding(0, spaceSm).Radius(radiusSm).AlignItems(ui.Center)
+	if onClick == nil {
+		button = button.Disabled(true)
+	}
 	fill, ink := ui.Transparent, colorTextDim
 	if active {
 		fill, ink = activeFill, activeInk
@@ -86,37 +90,44 @@ func (a *appState) mixerAction(c *ui.Context, key, label string, width, height f
 
 // mixerRow is one source: what the scene says, and the overlay's two controls.
 func (a *appState) mixerRow(c *ui.Context, index int, it *item) {
-	soloed := a.solo == it.source.ID
+	soloed := a.solo != "" && a.solo == it.source.ID
+	hasTrack := it.audio != "" && a.isStageMember(it)
+	key := itemKey(it)
+	var mute, solo, hearOnly func()
+	if hasTrack {
+		mute = func() { a.report(a.runCommand(command{Kind: commandMute, Source: key})) }
+		solo = func() { a.report(a.runCommand(command{Kind: commandSolo, Source: key})) }
+	}
+	if hasTrack || (it.canRestoreOnDemand() && a.isStageMember(it)) {
+		hearOnly = func() { a.report(a.runCommand(command{Kind: commandHear, Source: key})) }
+	}
 	ui.Column(c).WidthPercent(100).Gap(spaceXs).Padding(spaceSm).
 		Background(colorPanel).Border(1, colorLineSoft).Radius(radiusMd).Children(func() {
 		ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
-			name := string(it.source.ID)
-			if len(it.source.URI) > 0 {
-				name = shortURI(it.source.URI)
-			}
+			name := sourceDisplayName(it)
 			ui.Text(c, fmt.Sprintf("%d  %s", index+1, name)).
 				FontSize(textSmall).SingleLine()
+			routeColor := colorDim
+			if a.routed(it) {
+				routeColor = colorAccent
+			}
+			pill(c, a.audioRouteLabel(it), routeColor, false)
 			if soloed {
-				pill(c, "solo", colorWarn, false)
+				pill(c, a.tr("Solo", "独听"), colorWarn, false)
 			}
 			ui.Box(c).Grow(1)
-			muteLabel := "Mute"
+			muteLabel := a.tr("Mute source", "静音本路")
 			if it.muted {
-				muteLabel = "Muted"
+				muteLabel = a.tr("Unmute source", "取消本路静音")
 			}
-			a.mixerAction(c, fmt.Sprintf("mixer-mute-%d", index), muteLabel, 76, 26,
-				it.muted, ui.RGBA(228, 182, 109, 0.14), colorWarn, func() {
-					a.report(a.runCommand(command{Kind: commandMute, Source: it.source.ID}))
-				})
-			a.mixerAction(c, fmt.Sprintf("mixer-solo-%d", index), "Solo", 76, 26,
-				soloed, colorAccentSoft, colorAccent, func() {
-					a.report(a.runCommand(command{Kind: commandSolo, Source: it.source.ID}))
-				})
-			hear := a.mixerAction(c, fmt.Sprintf("mixer-hear-%d", index), "Hear", 70, 26,
-				false, ui.Transparent, colorTextDim, func() {
-					a.report(a.runCommand(command{Kind: commandHear, Source: it.source.ID}))
-				})
-			hear.Tooltip("routes this source's sound and takes the other sources out of the scene's audio")
+			a.mixerAction(c, fmt.Sprintf("mixer-mute-%d", index), muteLabel, 116, 26,
+				it.muted, ui.RGBA(228, 182, 109, 0.14), colorWarn, mute)
+			a.mixerAction(c, fmt.Sprintf("mixer-solo-%d", index), a.tr("Solo", "独听"), 76, 26,
+				soloed, colorAccentSoft, colorAccent, solo)
+			hear := a.mixerAction(c, fmt.Sprintf("mixer-hear-%d", index), a.tr("Route only", "仅路由此路"), 112, 26,
+				false, ui.Transparent, colorTextDim, hearOnly)
+			hear.Tooltip(a.tr("Replaces this scene's audio routing with this source. This changes the scene; Solo is temporary.",
+				"用这一路替换场景的音频路由。这会修改场景；独听是临时操作。"))
 		})
 		ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).Children(func() {
 			// Show the level the scene actually holds, so a slider and its label
@@ -125,24 +136,35 @@ func (a *appState) mixerRow(c *ui.Context, index int, it *item) {
 			if current, routed := a.sceneLevel(it); routed {
 				level = current.Volume
 			}
-			if a.rangeSlider(c, fmt.Sprintf("mixer-volume-%d", index), &level, 0, 1, 320) {
+			if hasTrack && a.rangeSlider(c, fmt.Sprintf("mixer-volume-%d", index), &level, 0, 1, 320) {
 				// The slider reports the new value while dragging; the command
 				// writes it to the scene without touching the mute, and refuses
 				// to route a source that is not in the scene yet.
-				a.report(a.runCommand(command{Kind: commandVolume, Source: it.source.ID, Volume: level}))
+				a.report(a.runCommand(command{Kind: commandVolume, Source: key, Volume: level}))
 			}
-			ui.Text(c, fmt.Sprintf("%.0f%%", level*100)).Width(46).
-				FontSize(textSmall).FontWeight(500).TextColor(colorTextDim).TextAlign(ui.End).
-				FontFeatures("tnum")
+			a.numericReadout(c, fmt.Sprintf("%.0f%%", level*100), 46)
 		})
-		ui.Text(c, a.mixerLine(it)).FontSize(textMicro).TextColor(colorTextDim).Wrap()
+		if sceneLevel, routed := a.sceneLevel(it); routed && sceneLevel.Muted {
+			ui.Row(c).WidthPercent(100).Children(func() {
+				a.mixerAction(c, fmt.Sprintf("mixer-scene-unmute-%d", index),
+					a.tr("Clear scene mute", "取消场景静音"), 142, 24, false,
+					ui.Transparent, colorTextDim, func() {
+						if err := a.clearSceneMute(it); err != nil {
+							a.lastErr = safeOpenError(err)
+							a.invalidate()
+						}
+					})
+			})
+		}
+		ui.Text(c, a.localizedMixerLine(it)).FontSize(textMicro).TextColor(colorTextDim).Wrap()
 	})
 }
 
 // masterNote says what the master mute would do with what is on screen.
 func (a *appState) masterNote() string {
 	if a.masterMute {
-		return "every source is silent; each one keeps its own mute and level for when this is off"
+		return a.tr("Every source is silenced. Each keeps its source mute, scene route and level.",
+			"所有来源均已静音；每一路仍保留本路静音、场景路由和音量。")
 	}
 	audible := 0
 	for _, it := range a.items {
@@ -150,7 +172,7 @@ func (a *appState) masterNote() string {
 			audible++
 		}
 	}
-	return fmt.Sprintf("%d of %d source(s) would be heard", audible, len(a.items))
+	return fmt.Sprintf(a.tr("%d of %d source(s) would be audible", "%d/%d 路可听"), audible, len(a.items))
 }
 
 // overlayLine sums up the overlay for the page header.
@@ -158,17 +180,20 @@ func (a *appState) overlayLine() string {
 	heard := make([]string, 0, len(a.items))
 	for _, it := range a.items {
 		if a.heard(it) {
-			heard = append(heard, string(it.source.ID))
+			heard = append(heard, sourceDisplayName(it))
 		}
 	}
 	if a.masterMute {
-		return "master mute is on; the sources below keep what they were told"
+		return a.tr("Master mute is on; each source keeps its own state.", "总静音已开启；各路仍保留自身状态。")
 	}
 	if a.solo != "" {
-		return fmt.Sprintf("solo on source %s: it is the only source the overlay lets through", a.solo)
+		if it := a.itemOf(a.solo); it != nil {
+			return fmt.Sprintf(a.tr("Solo on %s: other routed sources are temporarily silenced.", "%s 正在独听：其他已路由来源暂时静音。"), sourceDisplayName(it))
+		}
+		return a.tr("Solo target is no longer available.", "独听目标已不可用。")
 	}
 	if len(heard) == 0 {
-		return "no source would be heard; check each row for the reason"
+		return a.tr("No source is currently audible. Check each row for its reason.", "当前没有可听来源，请查看各行显示的原因。")
 	}
-	return "heard: " + joinWords(heard)
+	return a.tr("Audible: ", "可听：") + strings.Join(heard, a.tr(", ", "、"))
 }

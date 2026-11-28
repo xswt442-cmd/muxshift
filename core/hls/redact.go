@@ -1,6 +1,14 @@
 package hls
 
-import "strings"
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/netip"
+	"strings"
+
+	"github.com/xswt442-cmd/muxshift/core"
+)
 
 // A stream can be signed: the address carries a token in its query, a key in its
 // fragment, or a credential in its user info. Those parts let one reader fetch
@@ -19,14 +27,15 @@ func StripAddress(address string) string {
 	}
 	if scheme := strings.Index(address, "://"); scheme >= 0 {
 		rest := address[scheme+3:]
-		if at := strings.LastIndex(rest, "@"); at >= 0 && !strings.Contains(rest[:at], "/") {
+		authority, _, _ := strings.Cut(rest, "/")
+		if at := strings.LastIndex(authority, "@"); at >= 0 {
 			address = address[:scheme+3] + rest[at+1:]
 		}
 	}
 	return address
 }
 
-// Redact removes the same parts from every http(s) address inside a piece of
+// Redact removes the same parts from every media or proxy address inside a piece of
 // text, so an error written by an HTTP client — which quotes the address it
 // could not reach — can be kept whole without keeping the secret.
 func Redact(text string) string {
@@ -38,7 +47,21 @@ func Redact(text string) string {
 			break
 		}
 		end := start
-		for end < len(rest) && !strings.ContainsRune(" \t\r\n\"'<>()[]", rune(rest[end])) {
+		authority := start + strings.Index(rest[start:], "://") + 3
+		delimiters := " \t\r\n\"'<>()"
+		bracketed := start > 0 && rest[start-1] == '['
+		for end < len(rest) && !strings.ContainsRune(delimiters, rune(rest[end])) {
+			if rest[end] == ']' && bracketed {
+				break
+			}
+			if rest[end] == '[' && (end == authority || end > authority && rest[end-1] == '@') {
+				address, _, found := strings.Cut(rest[end+1:], "]")
+				ip, err := netip.ParseAddr(address)
+				if found && err == nil && ip.Is6() {
+					end += len(address) + 2
+					continue
+				}
+			}
 			end++
 		}
 		out.WriteString(rest[:start])
@@ -49,13 +72,36 @@ func Redact(text string) string {
 	return out.String()
 }
 
-// indexAddress finds the next http or https address in text, or -1.
+// indexAddress finds the next media or proxy address in text, or -1.
 func indexAddress(text string) int {
-	best := -1
-	for _, prefix := range []string{"http://", "https://"} {
-		if at := strings.Index(text, prefix); at >= 0 && (best < 0 || at < best) {
-			best = at
+	for i := range len(text) {
+		switch text[i] {
+		case 'h', 'H', 's', 'S', 'r', 'R', 'f', 'F':
+			for _, prefix := range []string{"http://", "https://", "socks://", "socks4://", "socks4a://", "socks5://", "socks5h://", "rtsp://", "rtsps://", "rtmp://", "rtmps://", "ftp://"} {
+				if len(text)-i >= len(prefix) && strings.EqualFold(text[i:i+len(prefix)], prefix) {
+					return i
+				}
+			}
 		}
 	}
-	return best
+	return -1
+}
+
+// readFailure retains known causes without exposing an original transport
+// error that can carry a signed URL in its unwrap chain.
+func readFailure(message string, err error) error {
+	if err == nil {
+		return errors.New(message + ": media ended before the probe was ready")
+	}
+	text := Redact(message + ": " + err.Error())
+	for _, cause := range []error{context.Canceled, context.DeadlineExceeded, core.ErrInvalid, core.ErrCredentialsInURI} {
+		if errors.Is(err, cause) {
+			return fmt.Errorf("%s: %w", text, cause)
+		}
+	}
+	var timeout interface{ Timeout() bool }
+	if errors.As(err, &timeout) && timeout.Timeout() {
+		return fmt.Errorf("%s: %w", text, ErrTimeout)
+	}
+	return errors.New(text)
 }

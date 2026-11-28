@@ -19,6 +19,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -35,6 +36,7 @@ import (
 	"github.com/xswt442-cmd/muxshift/core/dvr"
 	"github.com/xswt442-cmd/muxshift/desktop/internal/version"
 	"github.com/xswt442-cmd/muxshift/desktop/internal/win"
+	"github.com/xswt442-cmd/muxshift/internal/filelock"
 )
 
 // mygoRunOnMain runs fn on the thread that draws the window and waits for it.
@@ -54,34 +56,53 @@ func mygoRunOnMain(fn func()) {
 // -reopen-mode keep). So the old player stays drawn until the new one has a
 // picture, and is closed then.
 func (a *appState) reopenPlayer(it *item) {
+	a.openReplacement(it, it.uri, false)
+}
+
+// openReplacement keeps the original media address until the selected
+// replacement is ready. Explicit media controls also retain the old play state.
+func (a *appState) openReplacement(it *item, uri string, retainState bool) {
+	it.closeMediaMenu()
 	previous := it.player
-	player, err := openPlayerOnMain(it.uri)
+	player, err := a.openImportedPlayer(uri)
 	if err != nil {
-		it.openErr = safeOpenError(err)
+		if retainState {
+			it.mediaReplaceErr = safeOpenError(err)
+		} else {
+			it.openErr = safeOpenError(err)
+		}
 		return
 	}
-	it.openErr = nil
-	var kept *handover
-	if previous != nil {
-		kept = &handover{previous: rawPlayer(previous)}
-		it.previous = previous
+	if !retainState {
+		it.openErr = nil
 	}
-	// The handover that was still waiting for an older replacement owns the
-	// player it kept drawn; it is not drawn any more, so the new task releases
-	// it. Transferring the pointer here is what keeps a burst of reloads from
-	// releasing the same player twice.
-	older := it.handover
+	// During a burst of reloads the original player is still drawn. Carry it
+	// forward and retire the uncommitted candidate, so a rollback stays usable.
+	if older := it.handover; older != nil {
+		if original := older.take(); original != nil {
+			if candidate := rawPlayer(previous); candidate != nil {
+				a.retireMediaOnMain([]pendingClose{{player: candidate}}, nil, nil)
+			}
+			previous = original
+		}
+	}
+	var kept *handover
+	it.previous = previous
+	if previous != nil {
+		kept = &handover{previous: rawPlayer(previous), uri: uri, retainState: retainState}
+	}
 	it.handover = kept
 	it.player = player
 	it.generation++
+	if key := itemKey(it); key != "" && (a.alignRow.Reference == key || a.alignRow.Target == key) {
+		a.invalidateAlignmentRow()
+	}
 	generation := it.generation
 	a.apply()
-	wakeNetworkPlayer(it.uri, player, a.generationIs(it, generation))
+	wakeNetworkPlayer(uri, player, a.generationIs(it, generation))
 	a.closePendingWhenReady()
 	if kept != nil {
-		go a.handOver(it, generation, kept, older)
-	} else if older != nil {
-		a.releasePlayer(older.take())
+		go a.handOver(it, generation, kept)
 	}
 }
 
@@ -89,9 +110,11 @@ func (a *appState) reopenPlayer(it *item) {
 // picture. Exactly one goroutine releases each player: the task that started
 // the handover, or the task a later reopen hands the player over to.
 type handover struct {
-	mu       sync.Mutex
-	previous *ui.VideoPlayer
-	released bool
+	mu          sync.Mutex
+	previous    *ui.VideoPlayer
+	released    bool
+	uri         string
+	retainState bool
 }
 
 // take returns the player this handover still owns, or nil when it was
@@ -113,15 +136,6 @@ func (h *handover) open() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return !h.released && h.previous != nil
-}
-
-// releasePlayer closes a player that no frame draws any more.
-func (a *appState) releasePlayer(player *ui.VideoPlayer) {
-	if player == nil {
-		return
-	}
-	a.waitFrames(3)
-	mygoRunOnMain(func() { player.Close() })
 }
 
 // handoverWait is how long a replacement may take to show a picture before the
@@ -173,68 +187,109 @@ var (
 // Every step checks the item's generation. A newer reload, or a close, bumps it,
 // and this task then only releases the player it still owns: the view draws a
 // newer player, so the pointer it was waiting on is not drawn any more.
-func (a *appState) handOver(it *item, generation int, kept *handover, older *handover) {
-	if older != nil {
-		a.releasePlayer(older.take())
-	}
+func (a *appState) handOver(it *item, generation int, kept *handover) {
 	deadline := time.Now().Add(handoverWait)
 	for {
 		var current, ready bool
 		var playerErr error
-		mygoRunOnMain(func() {
-			current = it.generation == generation
-			if it.player != nil {
+		a.mainDo(func() {
+			current = it.generation == generation && it.handover == kept && !a.closed
+			if current && it.player != nil {
 				ready = it.player.Ready() && !it.player.Buffering()
 				playerErr = it.player.Err()
 			}
 		})
 		if !current {
-			a.releasePlayer(kept.take())
 			return
 		}
 		if playerErr != nil {
 			break
 		}
 		if ready {
-			mygoRunOnMain(func() {
-				if it.generation == generation && it.handover == kept {
+			var confirmed string
+			a.mainDo(func() {
+				if it.generation == generation && it.handover == kept && !a.closed {
+					player := it.player
+					if player == nil || !player.Ready() || player.Buffering() || player.Err() != nil {
+						return
+					}
+					old := kept.take()
+					if old == nil {
+						return
+					}
+					previous := it.previous
 					it.previous = nil
 					it.handover = nil
+					if kept.retainState {
+						if !isNetworkAddress(it.uri) && !isNetworkAddress(kept.uri) {
+							if position := previous.Position(); position > 0 {
+								it.player.Seek(position)
+							}
+						}
+						if previous.Playing() {
+							it.player.Play()
+						} else {
+							it.player.Pause()
+						}
+						it.openErr = nil
+						if it.uri != kept.uri {
+							it.uri = kept.uri
+							a.saveSession()
+						}
+					}
+					a.retireMediaOnMain([]pendingClose{{player: old}}, nil, nil)
+					a.apply()
+					confirmed = shortURI(it.uri)
 				}
 			})
-			a.releasePlayer(kept.take())
-			log.Printf("handover: replaced the player of %s after %s", shortURI(it.uri), "a picture")
-			return
+			if confirmed != "" {
+				log.Printf("handover: replaced the player of %s after %s", confirmed, "a picture")
+				return
+			}
 		}
 		if !time.Now().Before(deadline) {
 			break
 		}
-		time.Sleep(250 * time.Millisecond)
+		select {
+		case <-a.closeDone:
+			return
+		case <-time.After(250 * time.Millisecond):
+		}
 	}
 	// The replacement never started: keep what was drawn and drop the new one.
-	var replacement *ui.VideoPlayer
-	keptPrevious := false
-	mygoRunOnMain(func() {
-		if it.generation != generation {
-			return
-		}
-		replacement = rawPlayer(it.player)
-		it.player = kept.previous
-		kept.previous = nil
-		kept.released = true
-		it.previous = nil
-		it.handover = nil
-		it.generation++
-		it.shown = true
-		it.openErr = fmt.Errorf("reopen did not start within %s; kept the previous player", handoverWait)
-		keptPrevious = true
+	var restored string
+	a.mainDo(func() {
+		restored = a.rollbackHandoverOnMain(it, generation, kept)
 	})
-	if !keptPrevious {
-		a.releasePlayer(kept.take())
-		return
+	if restored != "" {
+		log.Printf("handover: %s did not start within %s; kept the previous player and closed the new one", restored, handoverWait)
 	}
-	log.Printf("handover: %s did not start within %s; kept the previous player and closed the new one", shortURI(it.uri), handoverWait)
-	a.releasePlayer(replacement)
+}
+
+func (a *appState) rollbackHandoverOnMain(it *item, generation int, kept *handover) string {
+	if it.generation != generation || it.handover != kept || a.closed {
+		return ""
+	}
+	previous := kept.take()
+	if previous == nil {
+		return ""
+	}
+	replacement := rawPlayer(it.player)
+	it.player = previous
+	it.previous = nil
+	it.handover = nil
+	it.generation++
+	if replacement != nil {
+		a.retireMediaOnMain([]pendingClose{{player: replacement}}, nil, nil)
+	}
+	a.apply()
+	if kept.retainState {
+		it.mediaReplaceErr = fmt.Errorf("replacement did not start; kept the previous player")
+	} else {
+		it.openErr = fmt.Errorf("reopen did not start within %s; kept the previous player", handoverWait)
+	}
+	a.invalidate()
+	return shortURI(it.uri)
 }
 
 // openPlayer opens a local file or a network address.
@@ -380,6 +435,9 @@ func clock(d time.Duration) string {
 // once the video was a direct child.
 func (a *appState) view(c *ui.Context) {
 	defer a.signalFrame()
+	if a.closed {
+		return
+	}
 	// P9: the canvas experiment draws the two probe players and nothing else.
 	// Keeping it above the workbench is the point — a picture that never
 	// arrives here cannot be excused by the layout around it.
@@ -418,15 +476,13 @@ func (a *appState) view(c *ui.Context) {
 	}
 	a.keysTyping = typing
 	a.keysSeen++
-	if !a.keysTyping {
+	if !a.keysTyping && !a.addOpen && !a.renameOpen && !a.errorOpen {
 		c.OnWindowShortcut(ui.Ctrl, ui.KeyS, func() { a.shortcutCommand(commandShow) })
 		c.OnWindowShortcut(ui.Ctrl, ui.KeyH, func() { a.shortcutCommand(commandHear) })
 		c.OnWindowShortcut(ui.Ctrl, ui.KeyR, func() { a.shortcutCommand(commandRetry) })
-		c.OnWindowShortcut(ui.Ctrl, ui.Key1, func() { a.workspace = workspaceStage })
-		c.OnWindowShortcut(ui.Ctrl, ui.Key2, func() { a.workspace = workspaceSources })
-		c.OnWindowShortcut(ui.Ctrl, ui.Key3, func() { a.workspace = workspaceDiagnostics })
-		c.OnWindowShortcut(ui.Ctrl, ui.Key4, func() { a.workspace = workspaceSettings })
-		c.OnWindowShortcut(ui.Ctrl, ui.Key5, func() { a.workspace = workspaceMixer })
+		c.OnWindowShortcut(ui.Ctrl, ui.Key1, func() { a.navigateWorkspace(workspaceStage) })
+		c.OnWindowShortcut(ui.Ctrl, ui.Key2, func() { a.navigateWorkspace(workspaceDiagnostics) })
+		c.OnWindowShortcut(ui.Ctrl, ui.Key3, func() { a.navigateToSettings("") })
 		// P10.3: F11 is the standard full-screen key and works from the
 		// workbench too, so a person does not have to find Cinema first.
 		c.OnWindowShortcut(0, ui.KeyF11, func() { a.enterViewing(viewFullscreen, a.windowRef()) })
@@ -488,7 +544,7 @@ func (a *appState) stagePictures() []*item {
 		}
 		shown = ordered
 	}
-	if max := a.layout.slots(); len(shown) > max {
+	if max := a.layout.slots(); max > 0 && len(shown) > max {
 		shown = shown[:max]
 	}
 	return shown
@@ -502,12 +558,23 @@ func (a *appState) setLayout(kind layoutKind) {
 	}
 	a.layout = kind
 	a.invalidate()
+	a.saveSession()
 }
 
 // setPrimary puts a source first in the arrangement, so the layout that has one
 // large slot — pip and hero — gives it to that source. The rest keep the order
 // the scene already has.
 func (a *appState) setPrimary(id core.SourceID) {
+	reference := a.syncReference()
+	defer a.invalidateChangedAlignmentReference(reference)
+	primary := a.itemOf(id)
+	if primary == nil {
+		return
+	}
+	if primary.persistentID == "" {
+		primary.persistentID = a.nextPersistentSourceID()
+	}
+	order := a.captureSceneLayout().LayoutOrder
 	taken := []core.SourceID{id}
 	for _, it := range a.items {
 		if it.source.ID != id && it.player != nil && it.shown {
@@ -515,7 +582,10 @@ func (a *appState) setPrimary(id core.SourceID) {
 		}
 	}
 	a.layoutTaken = taken
+	a.pendingLayoutOrder = append([]string{primary.persistentID}, removeString(order, primary.persistentID)...)
+	a.projectLayoutOrder()
 	a.invalidate()
+	a.saveSession()
 }
 
 // stage draws every player in one frame. The scene hides the players it does
@@ -657,14 +727,12 @@ func (a *appState) stage(c *ui.Context) {
 				ui.Text(c, a.tr("No picture yet", "还没有画面")).
 					FontSize(textTitle).TextColor(colorText)
 				if hasSources {
-					ui.Text(c, a.tr("This scene holds no picture. Add one in the console's sources.",
-						"这个场景还没有画面，在控制台的「来源」里把它放上来。")).
+					ui.Text(c, a.tr("Show a source or add an existing source from the console.",
+						"可在控制台显示来源，或添加已有来源。")).
 						FontSize(textSmall).TextColor(colorDim)
 					if ui.Button(c.Key("empty-console"), a.tr("Show the sources", "显示来源")).Height(26).
 						Padding(0, spaceMd).Background(colorAccent).TextColor(colorAccentText).Clicked() {
-						delete(a.dockHidden, dockSources)
-						a.dockUp = true
-						a.invalidate()
+						a.showSourcesPanel()
 					}
 					return
 				}
@@ -696,8 +764,8 @@ func (a *appState) stage(c *ui.Context) {
 
 // selectVideo shows a source's picture and makes the inspector follow it.
 func (a *appState) selectVideo(it *item) {
-	a.selected = it.source.ID
-	a.report(a.runCommand(command{Kind: commandShow, Source: it.source.ID}))
+	a.setSelectedSource(itemKey(it))
+	a.report(a.runCommand(command{Kind: commandShow, Source: a.selected}))
 }
 
 // toggleVideo is the eye's whole job: showVideo also removes the picture when
@@ -714,8 +782,8 @@ func (a *appState) toggleVideo(index int) {
 
 // selectAudio plays a source's sound and makes the inspector follow it.
 func (a *appState) selectAudio(it *item) {
-	a.selected = it.source.ID
-	a.report(a.runCommand(command{Kind: commandHear, Source: it.source.ID}))
+	a.setSelectedSource(itemKey(it))
+	a.report(a.runCommand(command{Kind: commandHear, Source: a.selected}))
 }
 
 // labelWidth estimates the width a one-line label needs. It is deliberately a
@@ -893,7 +961,7 @@ func main() {
 	// No media is a real state: first run shows the empty stage with one way
 	// in, instead of refusing to open a window.
 	for _, uri := range media {
-		if !isNetworkAddress(uri) {
+		if *scenario != "" && !isNetworkAddress(uri) {
 			if _, err := os.Stat(uri); err != nil {
 				log.Fatalf("muxshift-desktop: %v", err)
 			}
@@ -920,12 +988,71 @@ func main() {
 	// and a failed read never becomes a write.
 	path := settingsPath(*settingsFile)
 	loaded, note := loadSettings(path)
-	s, err := newAppStateWithSettings(media, loaded)
+	sessionPath := sessionStorePath(path)
+	if *scenario != "" {
+		isolated, err := os.MkdirTemp(*dir, "session-")
+		if err != nil {
+			log.Fatalf("muxshift-desktop: cannot isolate the scenario session: %v", err)
+		}
+		sessionPath = filepath.Join(isolated, "session.json")
+	}
+	var sessionLock *filelock.Lock
+	var lockNote string
+	if len(media) == 0 && sessionPath != "" {
+		lock, err := lockSessionStore(sessionPath)
+		switch {
+		case err == nil:
+			sessionLock = lock
+			defer sessionLock.Close()
+		case errors.Is(err, filelock.ErrLocked):
+			lockNote = "another MuxShift window owns this session; session saving is disabled"
+		default:
+			lockNote = "could not lock the session file; session saving is disabled"
+			log.Printf("session: lock failed: %v", err)
+		}
+	}
+	// The command line wins when it names sources: those are what the run is
+	// about. Without it the saved arrangement comes back, and one source that
+	// cannot reopen keeps its error instead of stopping the start.
+	var s *appState
+	var err error
+	var startupMedia []string
+	storeNote := ""
+	if len(media) > 0 {
+		if *scenario == "" {
+			s, err = newAppStateWithSettings(nil, loaded)
+			startupMedia = append([]string(nil), media...)
+		} else {
+			s, err = newAppStateWithSettings(media, loaded)
+		}
+	} else {
+		snap, note := loadSessionStore(sessionPath)
+		storeNote = note
+		if storeNote != "" {
+			log.Printf("session: %s", storeNote)
+		}
+		if *scenario == "" {
+			s, err = newAppStateFromStoreDeferred(loaded, snap)
+		} else {
+			s, err = newAppStateFromStore(loaded, snap)
+		}
+	}
 	if err != nil {
 		log.Fatalf("muxshift-desktop: %v", err)
 	}
 	s.settingsPath = path
 	s.settingsTrusted = note == ""
+	s.sessionPath = sessionPath
+	// A temporary -media run is isolated from the saved arrangement. A session
+	// file that failed to load is likewise protected until the user can recover
+	// it; startup must never replace either with an empty/default snapshot.
+	s.sessionWriteEnabled = sessionLock != nil && storeNote == ""
+	if storeNote != "" {
+		s.sessionErr = storeNote + "; saving is disabled to preserve the original session file"
+	} else if lockNote != "" {
+		s.sessionErr = lockNote
+		log.Printf("session: %s", lockNote)
+	}
 	// A check that takes pictures should not take sound with it: the same master
 	// mute the overlay offers is switched on before the first source is opened,
 	// so nothing has to be turned down on the machine that runs it.
@@ -939,15 +1066,11 @@ func main() {
 	setStartPage := func(page string) {
 		switch page {
 		case "sources":
-			// The console holds the source list, so "open on sources" means
-			// the stage with that panel in front.
-			s.dockUp = true
-			delete(s.dockHidden, dockSources)
-			s.workspace = workspaceStage
+			s.navigateWorkspace(workspaceSources)
 		case "diagnostics":
-			s.workspace = workspaceDiagnostics
+			s.navigateWorkspace(workspaceDiagnostics)
 		case "settings":
-			s.workspace = workspaceSettings
+			s.navigateToSettings("")
 		}
 	}
 	setStartPage(loaded.StartPage)
@@ -1005,15 +1128,17 @@ func main() {
 	if *trace {
 		go func() {
 			for range time.Tick(500 * time.Millisecond) {
-				for i, it := range s.items {
-					if it.player == nil {
-						log.Printf("trace %d: no player", i+1)
-						continue
+				mygoRunOnMain(func() {
+					for i, it := range s.items {
+						if it.player == nil {
+							log.Printf("trace %d: no player", i+1)
+							continue
+						}
+						p := it.player
+						log.Printf("trace %d: ready=%v playing=%v muted=%v buffering=%v duration=%s position=%s err=%v",
+							i+1, p.Ready(), p.Playing(), p.Muted(), p.Buffering(), p.Duration(), p.Position(), safeOpenError(p.Err()))
 					}
-					p := it.player
-					log.Printf("trace %d: ready=%v playing=%v muted=%v buffering=%v duration=%s position=%s err=%v",
-						i+1, p.Ready(), p.Playing(), p.Muted(), p.Buffering(), p.Duration(), p.Position(), p.Err())
-				}
+				})
 			}
 		}()
 	}
@@ -1052,6 +1177,9 @@ func main() {
 		})
 		win.InstallWindowIcon(window)
 		s.window = window
+		s.sessionSaveMu.Lock()
+		s.sessionSaveNotify = mygoRunOnMain
+		s.sessionSaveMu.Unlock()
 		// P5.3: the browser's only way in is a loopback socket this window
 		// owns. It starts with the window and stops with it; a port already in
 		// use is a visible reason, never a quiet move to another port.
@@ -1087,45 +1215,79 @@ func main() {
 			// the window has to build one that does.
 			window.Invalidate()
 		}
-		window.OnClose(func(*mygo.CloseEvent) {
-			// P18.1: one close, recorded. A window that closed twice would
-			// leave a reader wondering whether the second pass released
-			// anything twice; this line and the release below answer that
-			// from the log.
+		replayDraining := false
+		window.OnClose(func(event *mygo.CloseEvent) {
+			if replayDraining {
+				event.PreventDefault()
+				return
+			}
+			if !s.closed {
+				s.closed = true
+				s.advanceStageGeneration()
+				if s.importCancel != nil {
+					s.importCancel()
+					s.importCancel = nil
+				}
+				s.closeImportTicker()
+				s.handoff.stop()
+				if txn := s.seekInFlight(); txn != nil {
+					// Replay preparation can still need the UI thread to
+					// return a player it was opening. Keep that thread
+					// available until the transaction gives its files back.
+					event.PreventDefault()
+					replayDraining = true
+					go func() {
+						s.shutdownReplayTxn()
+						<-txn.done
+						window.Update(func() {
+							replayDraining = false
+							window.Close()
+						})
+					}()
+					return
+				}
+			}
+			if s.closes != 0 {
+				return
+			}
 			s.closes++
 			log.Printf("focus: the window closed (%d time(s) so far)", s.closes)
-			// A read that is still running must not land in a window that is
-			// gone: the landing writes the session and the players, and both
-			// belong to this window's drawing thread.
-			s.closed = true
-			s.closeImportTicker()
-			// The listener holds nothing on disk, but a closed window must not
-			// leave an accepting socket behind.
-			s.handoff.stop()
 			// The window is still the window here, so this is the last moment
 			// its bounds can be read; a scripted run leaves the file alone.
 			if *scenario == "" {
 				s.saveWorkspaceOnExit(window)
+				// Save the arrangement last, while the session and the players
+				// are still alive, so the next start comes back to it.
+				s.saveSession()
 			}
-			s.release()
+			if err := s.flushSessionSave(); err != nil {
+				log.Printf("session: final save failed (%v)", err)
+			}
 		})
+		window.OnClosed(s.release)
 		if *shot != "" {
 			time.AfterFunc(*shotDelay, func() {
 				// The window and the players belong to the main thread: capturing and
 				// closing from the timer's goroutine races a frame that is drawing.
 				mygoRunOnMain(func() {
 					capture(window, *shot)
-					s.release()
-					mygo.App.Quit()
+					window.Close()
 				})
 			})
 		}
 		if *scenario != "" {
 			scenarios[*scenario](window, s, *dir)
+		} else if len(startupMedia) > 0 {
+			s.startCommandLineSources(startupMedia)
+		} else {
+			s.startStoredSourceRestores()
 		}
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)
+	}
+	if *scenario != "" && scenarioFailed.Load() {
+		log.Fatalf("%s: scenario assertions failed", *scenario)
 	}
 }
 

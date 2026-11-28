@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -119,9 +120,18 @@ func (a *appState) stageLocked(id core.SourceID) bool {
 
 // toggleStageLock flips one picture's lock without changing the stack.
 func (a *appState) toggleStageLock(id core.SourceID) {
+	it := a.itemOf(id)
+	if id == "" || it == nil || it.player == nil || !it.shown {
+		return
+	}
 	edits := a.sceneEdits()
-	edits.locked[id] = !edits.locked[id]
+	if edits.locked[id] {
+		delete(edits.locked, id)
+	} else {
+		edits.locked[id] = true
+	}
 	a.invalidate()
+	a.saveSession()
 }
 
 // stageGeometry returns the editable pictures with their boxes and the order
@@ -156,6 +166,45 @@ func (a *appState) stageGeometry() []stagePlacement {
 		}
 	}
 	return out
+}
+
+// enterStageEdit selects a picture the active layout actually places before
+// enabling the handles. A stale selection may refer to a hidden or overflow
+// source, so it is retained only while it remains in the stage geometry.
+func (a *appState) enterStageEdit() {
+	geometry := a.stageGeometry()
+	if len(geometry) == 0 {
+		a.editMode = false
+		a.editNote = a.tr("Show a source on the stage to position it.", "先在舞台上显示一路画面，再调整位置。")
+		a.invalidate()
+		return
+	}
+	a.setSelectedSource(stageEditSelection(a.selected, geometry))
+	a.editMode = true
+	a.editNote = a.tr("Drag the picture to move it, or drag a handle to resize it.", "拖动画面调整位置，拖动把手调整大小。")
+	a.invalidate()
+}
+
+func (a *appState) toggleStageEdit() {
+	if a.editMode {
+		a.editMode = false
+		a.editNote = ""
+		a.invalidate()
+		return
+	}
+	a.enterStageEdit()
+}
+
+func stageEditSelection(selected core.SourceID, geometry []stagePlacement) core.SourceID {
+	for _, spot := range geometry {
+		if itemKey(spot.item) == selected {
+			return selected
+		}
+	}
+	if len(geometry) == 0 {
+		return ""
+	}
+	return itemKey(geometry[0].item)
 }
 
 // stagePlacement is one picture where the stage will draw it.
@@ -218,7 +267,7 @@ func (a *appState) stageEditing(c *ui.Context, geometry []stagePlacement, sizeW,
 		if locked {
 			ui.Box(c).Absolute().Left(px.X).Top(px.Y + 6).Width(px.W).Height(18).
 				ZIndex(300 + i).Children(func() {
-				ui.Text(c, "locked").FontSize(textMicro).TextColor(colorTextDim).Center()
+				ui.Text(c, a.tr("Locked", "已锁定")).FontSize(textMicro).TextColor(colorTextDim).Center()
 			})
 		}
 	}
@@ -239,8 +288,10 @@ func (a *appState) stageEditing(c *ui.Context, geometry []stagePlacement, sizeW,
 		// Pressed() stays true for as long as the pointer is down, so the
 		// gesture is started once, not once per frame.
 		if !a.drag.active {
-			if spot, ok := topmostAt(geometry, a.hoverX, a.hoverY); ok {
+			spot, ok := stagePressTarget(geometry, a.selected, editing && !a.stageLocked(a.selected), a.hoverX, a.hoverY)
+			if ok {
 				a.selectFromStage(spot.item)
+				editing = a.editMode
 				kind := handleNone
 				if editing {
 					kind = spot.box.handleAt(a.hoverX, a.hoverY)
@@ -279,6 +330,22 @@ func (a *appState) stageEditing(c *ui.Context, geometry []stagePlacement, sizeW,
 	}
 }
 
+// stagePressTarget keeps canvas selection intuitive in overlaps: the topmost
+// picture receives a normal click, while a visible handle on the selected
+// picture remains directly targetable even when another picture covers it.
+// The source list can therefore select a lower picture and its handles can
+// still start a resize without changing the stacking order.
+func stagePressTarget(geometry []stagePlacement, selected core.SourceID, editing bool, x, y float32) (stagePlacement, bool) {
+	if editing && selected != "" {
+		for _, spot := range geometry {
+			if itemKey(spot.item) == selected && spot.box.handleAt(x, y) != handleNone {
+				return spot, true
+			}
+		}
+	}
+	return topmostAt(geometry, x, y)
+}
+
 // topmostAt reports the last (topmost) picture whose box holds the point.
 func topmostAt(geometry []stagePlacement, x, y float32) (stagePlacement, bool) {
 	for i := len(geometry) - 1; i >= 0; i-- {
@@ -304,8 +371,31 @@ func boxPixels(b stageBox, w, h float32) stageBox {
 // selectFromStage makes a picture the inspector's subject. It deliberately
 // does not touch the scene's audio: selecting a picture is not routing sound.
 func (a *appState) selectFromStage(it *item) {
-	a.selected = it.source.ID
+	a.setSelectedSource(it.source.ID)
 	a.boxFields = boxFields{}
+	if !a.editMode {
+		a.editMode = true
+		a.editNote = a.tr("Drag the picture to move it, or drag a handle to resize it.", "拖动画面调整位置，拖动把手调整大小。")
+	}
+	a.invalidate()
+}
+
+// selectStageSource keeps list selection useful even for a source that has
+// no picture to edit in the current arrangement.
+func (a *appState) selectStageSource(it *item) {
+	for _, spot := range a.stageGeometry() {
+		if spot.item == it {
+			a.selectFromStage(it)
+			return
+		}
+	}
+	a.setSelectedSource(itemKey(it))
+	a.boxFields = boxFields{}
+	a.editNote = ""
+	if it.shown {
+		a.editMode = true
+		a.editNote = a.tr("Choose Free layout to place this picture.", "切换到「自由布局」即可摆放这路画面。")
+	}
 	a.invalidate()
 }
 
@@ -325,8 +415,11 @@ func (a *appState) stageFrameSize() (float32, float32) {
 
 // find returns the item of a source, or nil when it is gone.
 func (a *appState) find(id core.SourceID) *item {
+	if id == "" {
+		return nil
+	}
 	for _, it := range a.items {
-		if it.source.ID == id {
+		if itemKey(it) == id {
 			return it
 		}
 	}
@@ -397,6 +490,7 @@ func (a *appState) dragByIn(it *item, h handleKind, dx, dy float32, stageW, stag
 	a.editNote = fmt.Sprintf("%s  x %.0f%%  y %.0f%%  w %.0f%%  h %.0f%%",
 		a.name(it), next.X*100, next.Y*100, next.W*100, next.H*100)
 	a.invalidate()
+	a.saveSession()
 }
 
 // fitStage makes a picture cover the whole stage, keeping its own shape: the
@@ -405,19 +499,19 @@ func (a *appState) fitStage(id core.SourceID) {
 	edits := a.sceneEdits()
 	edits.setBox(id, stageBox{X: 0, Y: 0, W: 1, H: 1})
 	a.invalidate()
+	a.saveSession()
 }
 
 // resetStage forgets every rectangle and lock in this scene, which puts the
 // pictures back where the layout preset puts them.
 func (a *appState) resetStage() {
-	if a.edits == nil {
-		return
-	}
+	a.forgetPendingStageEdits(a.scene)
 	delete(a.edits, a.scene)
 	a.drag = dragState{}
 	a.boxFields = boxFields{}
 	a.editNote = "stage reset to the layout"
 	a.invalidate()
+	a.saveSession()
 }
 
 // pruneStageEdits drops rectangles and locks for sources that no longer
@@ -522,18 +616,18 @@ func (a *appState) editControls(c *ui.Context, it *item) {
 		})
 	}
 	ui.Row(c).Gap(spaceXs).WidthPercent(100).Children(func() {
-		apply := ui.Button(c.Key("box-apply"), a.tr("Apply", "搴旂敤")).Height(a.controlHeight() - 6)
+		apply := ui.Button(c.Key("box-apply"), a.tr("Apply", "应用")).Height(a.controlHeight() - 6)
 		if !dirty {
 			apply.Disabled(true)
 		}
 		if apply.Clicked() {
 			a.applyBoxFields(it)
 		}
-		if ui.Button(c.Key("box-fit"), a.tr("Fit", "閫傚簲")).Height(a.controlHeight() - 6).Clicked() {
+		if ui.Button(c.Key("box-fit"), a.tr("Fit", "适应")).Height(a.controlHeight() - 6).Clicked() {
 			a.fitStage(it.source.ID)
 			a.reloadBoxFields(it)
 		}
-		if ui.Button(c.Key("box-reset"), a.tr("Reset", "閲嶇疆")).Height(a.controlHeight() - 6).Clicked() {
+		if ui.Button(c.Key("box-reset"), a.tr("Reset", "重置")).Height(a.controlHeight() - 6).Clicked() {
 			a.forgetBox(it.source.ID)
 			a.reloadBoxFields(it)
 		}
@@ -541,7 +635,7 @@ func (a *appState) editControls(c *ui.Context, it *item) {
 	ui.Row(c).Wrap().Gap(spaceXs).Padding(spaceXs, 0).Children(func() {
 		ratio := a.tr("Keep ratio", "锁定比例")
 		if a.freeRatio {
-			ratio = a.tr("Any ratio", "鑷敱姣斾緥")
+			ratio = a.tr("Any ratio", "自由比例")
 		}
 		if ui.Button(c.Key("box-ratio"), ratio).Height(24).Padding(0, spaceXs).
 			Tooltip(a.tr("drag a corner to resize", "拖角可以改大小")).Clicked() {
@@ -549,7 +643,7 @@ func (a *appState) editControls(c *ui.Context, it *item) {
 		}
 		lock := a.tr("Lock", "锁定")
 		if a.stageLocked(it.source.ID) {
-			lock = a.tr("Unlock", "瑙ｉ攣")
+			lock = a.tr("Unlock", "解锁")
 		}
 		if ui.Button(c.Key("box-lock"), lock).Height(24).Padding(0, spaceXs).Clicked() {
 			a.toggleStageLock(it.source.ID)
@@ -605,7 +699,11 @@ func (a *appState) forgetBox(id core.SourceID) {
 	if edits := a.currentEdits(); edits != nil {
 		edits.forget(id)
 	}
+	if it := a.find(id); it != nil && it.persistentID != "" {
+		a.forgetPendingSourceEdits(a.scene, it.persistentID)
+	}
 	a.invalidate()
+	a.saveSession()
 }
 
 // applyBoxFields parses the four numbers and stores them, refusing anything
@@ -644,6 +742,7 @@ func (a *appState) applyBoxFields(it *item) {
 	a.boxFields.note = ""
 	a.reloadBoxFields(it)
 	a.invalidate()
+	a.saveSession()
 }
 
 func ratioLabel(locked bool) string {
@@ -664,12 +763,25 @@ func lockLabel(locked bool) string {
 // and the inspector both call it, so the stacking order a person sets there is
 // the order the stage draws.
 func (a *appState) raiseStage(id core.SourceID, toFront bool) {
-	a.sceneEdits().raise(id, a.shownIDs(), toFront)
-	a.invalidate()
+	a.moveStageLayer(id, true, toFront)
 }
 
 // lowerStage is the other direction of raiseStage.
 func (a *appState) lowerStage(id core.SourceID, toBack bool) {
-	a.sceneEdits().lower(id, a.shownIDs(), toBack)
+	a.moveStageLayer(id, false, toBack)
+}
+
+func (a *appState) moveStageLayer(id core.SourceID, forward, allTheWay bool) {
+	if id == "" {
+		return
+	}
+	order := a.currentEdits().ordered(a.shownIDs())
+	index := slices.Index(order, id)
+	if index < 0 || (forward && index == len(order)-1) || (!forward && index == 0) {
+		return
+	}
+	a.sceneEdits().move(id, order, forward, allTheWay)
+	a.mergePendingStageOrder(a.scene, a.currentEdits().order)
 	a.invalidate()
+	a.saveSession()
 }

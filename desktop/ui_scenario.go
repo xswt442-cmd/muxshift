@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -399,15 +400,16 @@ func emptyWord(value string) string {
 func waitUntilReady(a *appState, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		var ready int
+		var allReady bool
 		mygoRunOnMain(func() {
 			for _, it := range a.items {
-				if it.player != nil && it.player.Ready() {
-					ready++
+				if it.player == nil || !it.player.Ready() {
+					return
 				}
 			}
+			allReady = len(a.items) > 0
 		})
-		if ready == len(a.items) {
+		if allReady {
 			return true
 		}
 		time.Sleep(250 * time.Millisecond)
@@ -1043,7 +1045,7 @@ func runKeys(window *mygo.Window, a *appState, dir string) {
 				a.selected = a.items[0].source.ID
 			}
 			a.workspace = workspaceSources
-			log.Printf("keys: selected %q on the Sources page; press Ctrl+S, Ctrl+H, Ctrl+R, Ctrl+1..5", a.selected)
+			log.Printf("keys: selected %q on the Stage console; press Ctrl+S, Ctrl+H, Ctrl+R, Ctrl+1..3", a.selected)
 		})
 		var lastAt time.Time
 		deadline := time.Now().Add(14 * time.Second)
@@ -1075,6 +1077,9 @@ func layoutsBody(window *mygo.Window, a *appState, dir string) {
 
 	players := map[core.SourceID]*ui.VideoPlayer{}
 	heard := map[core.TrackID]bool{}
+	var initialScene core.Scene
+	var gone core.SourceID
+	var goneVideo, goneAudio core.TrackID
 	scene := ""
 	bad := ""
 	mygoRunOnMain(func() {
@@ -1095,6 +1100,11 @@ func layoutsBody(window *mygo.Window, a *appState, dir string) {
 		}
 		heard = heardTracks(a)
 		scene = a.sceneLabel()
+		if snapshot, err := a.session.Scene(a.scene); err == nil {
+			initialScene = snapshot
+		} else {
+			bad = fmt.Sprintf("could not snapshot scene video routes: %v", err)
+		}
 	})
 	logf(scenario, "started with %d source(s) as %s; heard %s", len(players), scene, tracksOf(heard))
 
@@ -1188,13 +1198,26 @@ func layoutsBody(window *mygo.Window, a *appState, dir string) {
 	// Removing the source a grid slot holds shrinks the grid; nothing is left
 	// drawing in the slot it used to occupy.
 	if len(a.items) > 0 {
-		var gone core.SourceID
-		mygoRunOnMain(func() { gone = a.items[len(a.items)-1].source.ID })
+		mygoRunOnMain(func() {
+			gone = a.items[len(a.items)-1].source.ID
+			goneVideo = a.items[len(a.items)-1].video
+			goneAudio = a.items[len(a.items)-1].audio
+		})
 		steps = append(steps, step{at: at, act: func() {
 			window.SetBounds(mygo.Rectangle{X: 60, Y: 60, Width: 1150, Height: 660})
 		}})
 		steps = append(steps, step{at: at + 900*time.Millisecond, act: func() {
-			a.report(a.runCommand(command{Kind: commandRemove, Source: gone}))
+			beforeRemoval, err := a.session.Scene(a.scene)
+			if err != nil || beforeRemoval.ID != initialScene.ID ||
+				!slices.Equal(beforeRemoval.Video, initialScene.Video) ||
+				!slices.Equal(beforeRemoval.Audio, initialScene.Audio) {
+				bad = "layout changed the scene or its routes before removal"
+			}
+			result := a.runCommand(command{Kind: commandRemove, Source: gone})
+			a.report(result)
+			if result.Err != nil {
+				bad = fmt.Sprintf("removal failed: %v", result.Err)
+			}
 		}})
 		steps = append(steps, step{at: at + 2100*time.Millisecond, shot: "grid-after-removal"})
 		at += 3000 * time.Millisecond
@@ -1223,10 +1246,11 @@ func layoutsBody(window *mygo.Window, a *appState, dir string) {
 	}
 
 	var after map[core.TrackID]bool
-	var afterScene string
 	mygoRunOnMain(func() {
 		after = heardTracks(a)
-		afterScene = a.sceneLabel()
+		if bad != "" {
+			return
+		}
 		for _, it := range a.items {
 			if it.player == nil {
 				continue
@@ -1246,18 +1270,31 @@ func layoutsBody(window *mygo.Window, a *appState, dir string) {
 				return
 			}
 		}
-		if afterScene != scene {
-			bad = fmt.Sprintf("the scene changed from %q to %q", scene, afterScene)
-			return
-		}
+		delete(heard, goneAudio)
 		if !sameTracks(heard, after) {
 			bad = fmt.Sprintf("what is heard changed from %s to %s", tracksOf(heard), tracksOf(after))
+			return
+		}
+		currentScene, err := a.session.Scene(a.scene)
+		if err != nil {
+			bad = fmt.Sprintf("could not read scene video routes after removal: %v", err)
+			return
+		}
+		wantVideo := slices.DeleteFunc(slices.Clone(initialScene.Video), func(track core.TrackID) bool {
+			return track == goneVideo
+		})
+		wantAudio := slices.DeleteFunc(slices.Clone(initialScene.Audio), func(level core.AudioLevel) bool {
+			return level.Track == goneAudio
+		})
+		if gone == "" || a.find(gone) != nil || currentScene.ID != initialScene.ID ||
+			!slices.Equal(currentScene.Video, wantVideo) || !slices.Equal(currentScene.Audio, wantAudio) {
+			bad = fmt.Sprintf("removing %s did not preserve the other ordered routes", gone)
 		}
 	})
 	if bad != "" {
 		logf(scenario, "CHECK FAILED: %s", bad)
 	} else {
-		logf(scenario, "CHECK PASSED: five layouts, same players, same scene, same sound, pictures advanced")
+		logf(scenario, "CHECK PASSED: five layouts preserve players, scene identity, audio routes and retained video routes; removal drops its target route; pictures advanced")
 	}
 	mygoRunOnMain(func() {
 		a.release()
@@ -1431,48 +1468,49 @@ func pagesBody(window *mygo.Window, a *appState, dir string) {
 		window.Invalidate()
 	})
 	check(folded, "the rail folds at the smallest window, which is what this walk needs")
-	logf(scenario, "the rail is folded; the bar's page button is the visible way between pages")
+	logf(scenario, "the rail is folded; the bar's page button exposes Stage, Diagnostics and Settings")
 
-	// Watch the page for as long as the client needs to press the button once
-	// per page: the walk itself is driven from outside, the way a person would.
+	// The runner uses the visible navigation. Sources opens a dock tab on the
+	// stage, so it does not count as a separate workspace visit here.
 	visited := []workspace{}
+	seen := map[workspace]bool{}
 	last := workspace(-1)
-	deadline := time.Now().Add(15 * time.Second)
+	returned := false
+	deadline := time.Now().Add(25 * time.Second)
 	for time.Now().Before(deadline) {
 		var current workspace
 		mygoRunOnMain(func() { current = a.workspace })
 		if current != last {
 			visited = append(visited, current)
+			seen[current] = true
 			last = current
 			logf(scenario, "page is now %s", current.title())
 		}
+		returned = current == workspaceStage && seen[workspaceSettings] && seen[workspaceDiagnostics]
+		if returned {
+			break
+		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	step(window, a, dir, scenario, "pages.png", "after pressing the page button", nil)
+	step(window, a, dir, scenario, "pages.png", "after navigating by mouse", nil)
 
-	check(len(visited) >= 5, "the page button visited %d pages in sequence (%v)", len(visited), visited)
 	if len(visited) > 0 {
 		check(visited[0] == workspaceStage, "the walk started on Stage (%s)", visited[0].title())
 	}
-	if len(visited) == int(workspaceCount) {
-		// A full cycle ends where it started; one extra press proves the button
-		// keeps working after the last page.
-		check(visited[len(visited)-1] == workspaceStage,
-			"the full cycle came back to Stage (%s)", visited[len(visited)-1].title())
+	for _, page := range []workspace{workspaceSettings, workspaceDiagnostics} {
+		check(seen[page], "the page menu reached %s", page.title())
 	}
-	for index := 1; index < len(visited); index++ {
-		want := (visited[index-1] + 1) % workspaceCount
-		check(visited[index] == want, "the button went from %s to %s, and the next page is %s",
-			visited[index-1].title(), visited[index].title(), want.title())
-	}
+	check(returned, "the walk returned to Stage after visiting all three workspaces")
 	logf(scenario, "the page button walked: %s", pagePath(visited))
 
 	step(window, a, dir, scenario, "", "back to a normal window", func(a *appState) {
 		window.SetSize(1426, 862)
 	})
 	logf(scenario, "checks failed: %d", failures)
-	a.release()
-	mygo.App.Quit()
+	mygoRunOnMain(func() {
+		a.release()
+		mygo.App.Quit()
+	})
 }
 
 func pagePath(pages []workspace) string {

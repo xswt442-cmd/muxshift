@@ -66,7 +66,10 @@ func (a *appState) playRecording(it *item, runner *dvrRunner, from time.Duration
 		player:     player,
 		generation: it.generation,
 	}
-	mygoRunOnMain(func() { it.swap = swap })
+	mygoRunOnMain(func() {
+		it.closeMediaMenu()
+		it.swap = swap
+	})
 	logf("replay", "waiting for %s to show a picture (generation %d, %s, buffer %s epoch %d)",
 		recording.FileName(), swap.generation, shortURI(it.uri), recording.BufferInstance, recording.SourceMediaEpoch)
 	go a.settleReplay(swap)
@@ -119,17 +122,12 @@ func (a *appState) settleReplay(swap *replaySwap) {
 // conversion.
 func (a *appState) commitReplay(swap *replaySwap, anchor dvr.Anchor, anchorErr error) {
 	it := swap.item
-	var (
-		old      desktopPlayer
-		oldLease *dvr.Lease
-		ok       bool
-	)
-	mygoRunOnMain(func() {
-		if it.swap != swap || it.generation != swap.generation {
+	var ok bool
+	a.mainDo(func() {
+		if it.swap != swap || it.generation != swap.generation || it.handover != nil {
 			return
 		}
-		old = it.player
-		oldLease = it.replayLease
+		old, oldLease := it.player, it.replayLease
 		it.swap = nil
 		it.player = swap.player
 		it.replayLease = swap.lease
@@ -143,6 +141,7 @@ func (a *appState) commitReplay(swap *replaySwap, anchor dvr.Anchor, anchorErr e
 			it.replayAnchorErr = anchorErr
 		}
 		it.generation++
+		a.closeReplayPlayerOnMain(old, oldLease)
 		ok = true
 		logf("replay", "committed %s on %s: shows %s..%s of buffer time",
 			recording.FileName(), shortURI(it.uri), shortDuration(recording.StartBufferTime), shortDuration(recording.EndBufferTime))
@@ -151,15 +150,6 @@ func (a *appState) commitReplay(swap *replaySwap, anchor dvr.Anchor, anchorErr e
 		a.abandonReplay(swap, "the item changed while the switch was committing")
 		return
 	}
-	if old != nil {
-		a.releasePlayer(rawPlayer(old))
-	}
-	if oldLease != nil {
-		if err := oldLease.Release(); err != nil {
-			logf("replay", "release the lease of the previous recording: %v", err)
-		}
-		a.leftLease()
-	}
 }
 
 // abandonReplay gives back everything a failed or superseded attempt took: the
@@ -167,27 +157,13 @@ func (a *appState) commitReplay(swap *replaySwap, anchor dvr.Anchor, anchorErr e
 // replacement player and its lease are released here.
 func (a *appState) abandonReplay(swap *replaySwap, why string) {
 	it := swap.item
-	mygoRunOnMain(func() {
+	a.mainDo(func() {
 		if it.swap == swap {
 			it.swap = nil
 		}
+		swap.finished.Do(func() { a.closeReplayPlayerOnMain(swap.player, swap.lease) })
 	})
-	a.finishSwap(swap)
 	logf("replay", "rolled back the switch to %s: %s", swap.recording.FileName(), why)
-}
-
-// finishSwap closes the replacement player and gives its lease back once. A
-// close of the item and a rollback can both end the same attempt; the lease
-// counters must still move exactly once.
-func (a *appState) finishSwap(swap *replaySwap) {
-	swap.finished.Do(func() {
-		a.releasePlayer(swap.player)
-		if err := swap.lease.Release(); err != nil {
-			logf("replay", "release the lease of %s: %v", swap.recording.FileName(), err)
-		}
-		a.leftLease()
-		logf("replay", "finished %s: the replacement player and its lease went back once", swap.recording.FileName())
-	})
 }
 
 // openReplayFile opens the file a recording published. The scenario seam exists

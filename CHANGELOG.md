@@ -4,6 +4,92 @@
 
 This changelog records completed changes that matter to someone using MuxShift. GitHub Release notes come from the matching tagged section, not a separately maintained summary.
 
+## [0.0.5] - 2026-11-28
+
+### 简体中文
+
+**新增**
+
+- 桌面端分别保存各舞台的布局、主画面和音频分配。来源面板可逐路显示、暂停和恢复播放。
+- 新来源默认归导入舞台，移出该舞台即删除。显式共享后，其他舞台可从目录添加，解除舞台引用时仍保留在目录中。
+- 会话重启后恢复各舞台的分配。带凭据、查询参数或片段的 HTTP(S) 地址会省略，保留来源供重新选址。
+- 用 `-media` 打开媒体时保留已保存的会话。
+- 来源和场景可自定义名称。
+- 自由布局可摆放所有已显示的画面。选中来源后可直接拖移、缩放或锁定摆位。
+- 来源可单独刷新。支持多个可播档位的直播主播放列表可逐路选择清晰度。
+- 浏览器扩展的候选地址可以逐条展开，复制完整链接后可在桌面端手动添加。
+
+**改进**
+
+- 应用导航收为「舞台」「诊断」「设置」，来源、混音和同步在舞台控制台内操作。
+- 场景栏可以收起再展开，回放缓存限额可以直接输入。同步面板在顶部显示估算结果和来源编号，目标偏移变化后会隐藏旧建议。
+- 窄窗中的播放栏使用紧凑图标，为单行播放时间留出空间。
+- 配色、字号、字体、紧凑间距和画布下方的时间线开关即时应用并保存。
+
+**修复**
+
+- 点击编辑位置时会选中一个可见画面，短窗口也能操作下沿的缩放把手。
+- 来源按保存顺序恢复，临时打不开时可取消恢复并保留原有分配。拖动音量等连续保存不会再因两个计时器同时写入而卡住。
+- 同一个会话文件只允许一个窗口保存，避免旧窗口覆盖较新的舞台布置。
+- 离线来源保留待恢复的舞台摆位和音视频分配。
+- 启动优先打开当前舞台使用的来源。切走后停用新舞台不再使用的播放器。
+- 检测媒体地址、探测 HLS 轨道和下载回放分片时，会校验公网请求的实际连接地址。桌面端拒绝超过 1 MiB 的 HLS 播放列表，HLS 诊断日志省略 URL 中的凭据和签名。
+- 选择清晰度或刷新来源后，清晰度菜单会收起。取消读取后，旧结果不会覆盖新菜单。
+- 原设置文件损坏时，外观更改只在本次运行中生效。保存失败后，可以重新点击「应用」。
+- 对齐估算会计入参考来源的偏移。回放微调若早于录像首帧，既有偏移保持原值。
+- 舞台播放控制以当前舞台为范围，只有舞台包含活动同步组成员时才会控制该组。观看模式的播放按钮和空格键使用同一规则。
+- 浏览器扩展检测到换页或重载时会清空旧候选，并提示重新扫描。
+- 扩展只在 B 站直播间解析直播地址，保留分线路地址的签名。YouTube 解析会核对当前视频或直播频道。
+- 页面探测未能连接直播候选时，扩展会保留一个未验证的地址，供用户手动发送。发送超时时，扩展会提示先查看桌面端的来源面板。
+- 关闭窗口会取消尚未完成的回放准备。播放器重开期间，回放不会覆盖仍在输出的画面。
+
+**兼容性**
+
+- 公网 HTTP 播放列表需直连或使用 SOCKS5。HTTPS 播放列表仍支持 CONNECT。
+- 未对齐静音保护默认关闭，可在「设置 → 播放」开启。
+
+### English
+
+**Added**
+
+- The desktop saves each stage's layout, primary picture, and audio routing. The Sources panel can show, pause, and resume individual sources.
+- New sources belong to the importing stage and are deleted when removed from that stage. Explicitly shared sources can be added from the catalog in other stages and remain in the catalog when unlinked.
+- A restart restores each stage's assignments. Session files omit HTTP(S) addresses with credentials, a query, or a fragment, while retaining their sources for address selection.
+- Launching with `-media` preserves the saved session.
+- Sources and scenes can have custom names.
+- Free layout places every shown picture. Select a source to move, resize, or lock its position directly.
+- Refresh sources individually. A live master playlist with multiple playable variants offers a per-source quality choice.
+- Expand any candidate in the browser extension to copy its full link for manual import in the desktop app.
+
+**Improved**
+
+- Application navigation uses Stage, Diagnostics, and Settings. Sources, Mixer, and Sync live in the stage console.
+- Collapse or reopen the scene rail and type replay cache limits directly. The Sync panel shows estimates and source numbers at the top, and hides an old suggestion when the target offset changes.
+- The playback bar uses compact icons in narrow windows to keep the playback time on one line.
+- Theme, text size, font, compact spacing, and the timeline toggle under the stage apply and save immediately.
+
+**Fixed**
+
+- Position editing selects a visible picture and keeps the bottom resize handles reachable in short windows.
+- Sources reopen in the saved order, and cancelling recovery keeps the original assignments. Overlapping autosaves no longer deadlock during continuous changes such as volume drags.
+- Only one window can save a given session file, so an older window cannot overwrite a newer stage arrangement.
+- Unavailable sources retain pending stage placement and audio and video assignments.
+- Startup opens sources used by the current stage first. Stage changes stop players the new stage no longer uses.
+- Media detection, HLS track probes, and replay segment downloads validate the connection address for public requests. The desktop rejects HLS playlists larger than 1 MiB, and HLS diagnostic logs omit URL credentials and signatures.
+- Choosing a quality level or refreshing the source closes the quality menu. Canceled requests cannot overwrite the reopened menu.
+- Appearance changes apply for the current run when the original settings file is damaged. Use Apply to retry a failed save.
+- Alignment estimates include the reference source's offset. Replay nudges before the recording's first frame leave the existing offset intact.
+- Stage transport controls the current stage and includes the active sync group only when the stage has a member in that group. The viewing controls and Space shortcut use the same rule.
+- The extension clears old candidates and asks for a fresh scan when it detects a page change or reload.
+- The extension resolves Bilibili streams only in live rooms and keeps mirror signatures. YouTube resolution checks the current video or live channel.
+- If the page cannot reach a live candidate, the extension offers an unverified address for manual handoff. If handoff times out, it asks you to check Sources in the desktop app before retrying.
+- Closing the window cancels replay preparation. During a player reload, replay cannot replace the picture that is still playing.
+
+**Compatibility**
+
+- Public HTTP playlists require a direct connection or SOCKS5. HTTPS playlists also support CONNECT.
+- Unaligned mute protection is off by default. Enable it in Settings → Playback.
+
 ## [0.0.4] - 2026-11-22
 
 ### 简体中文

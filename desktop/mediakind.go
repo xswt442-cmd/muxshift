@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/xswt442-cmd/muxshift/internal/netguard"
 )
 
 // addressKind is what an http(s) address answers with. The two kinds are read
@@ -32,9 +34,10 @@ const sniffBytes = 2048
 // an .m3u8 that serves a web page is refused, and a .mp4 that serves a playlist
 // is read as one.
 func sniffAddress(ctx context.Context, rawURL string) (addressKind, error) {
+	rawURL = strings.TrimSpace(rawURL)
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
-		return 0, fmt.Errorf("%s is not an address this build can read: %w", shortURI(rawURL), err)
+		return 0, fmt.Errorf("%s is not an address this build can read: invalid URL syntax", shortURI(rawURL))
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return 0, fmt.Errorf("%s is not an http or https address", shortURI(rawURL))
@@ -48,42 +51,32 @@ func sniffAddress(ctx context.Context, rawURL string) (addressKind, error) {
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return 0, fmt.Errorf("reading %s: %w", shortURI(rawURL), err)
+		return 0, playlistFailure("reading "+shortURI(rawURL), err)
 	}
 	request.Header.Set("Range", fmt.Sprintf("bytes=0-%d", sniffBytes-1))
 	request.Header.Set("Accept", "*/*")
 
-	client := &http.Client{Timeout: 20 * time.Second}
+	client := netguard.Client(20*time.Second, netguard.LocalHost(parsed.Hostname()))
 	response, err := client.Do(request)
 	if err != nil {
 		if ctx.Err() != nil {
 			return 0, fmt.Errorf("reading %s stopped: %w", shortURI(rawURL), ctx.Err())
 		}
-		return 0, fmt.Errorf("reading %s: %w", shortURI(rawURL), err)
+		return 0, playlistFailure("reading "+shortURI(rawURL), err)
 	}
 	defer response.Body.Close()
 
 	if response.StatusCode < 200 || response.StatusCode > 299 {
-		return 0, fmt.Errorf("%s answered %s", shortURI(rawURL), response.Status)
-	}
-	// A redirect may end somewhere this build must not read either.
-	final := response.Request.URL
-	if final != nil {
-		if final.Scheme != "http" && final.Scheme != "https" {
-			return 0, fmt.Errorf("%s redirects to %s, which is not http or https", shortURI(rawURL), final.Scheme)
-		}
-		if final.User != nil {
-			return 0, fmt.Errorf("%s redirects to an address with a user name", shortURI(rawURL))
-		}
+		return 0, fmt.Errorf("%s answered %d %s", shortURI(rawURL), response.StatusCode, http.StatusText(response.StatusCode))
 	}
 
 	head, err := io.ReadAll(io.LimitReader(response.Body, sniffBytes))
 	if err != nil {
-		return 0, fmt.Errorf("reading the first bytes of %s: %w", shortURI(rawURL), err)
+		return 0, playlistFailure("reading the first bytes of "+shortURI(rawURL), err)
 	}
 	kind, err := classifyAddress(response.Header.Get("Content-Type"), head)
 	if err != nil {
-		return 0, fmt.Errorf("%s: %w", shortURI(rawURL), err)
+		return 0, playlistFailure(shortURI(rawURL), err)
 	}
 	return kind, nil
 }

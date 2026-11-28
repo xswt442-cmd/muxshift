@@ -50,6 +50,8 @@ func (a *appState) toggleDockPanel(id string) {
 	a.dockHidden[id] = !a.dockHidden[id]
 	if !a.dockHidden[id] {
 		a.dockUp = true
+	} else if id == dockSources {
+		a.closeMediaMenus()
 	}
 	a.invalidate()
 }
@@ -58,22 +60,33 @@ func (a *appState) toggleDockPanel(id string) {
 // thing folds into a bar when the picture needs the room.
 // eyeIcon and eyeTip are the one eye the window draws: dock rows, the compact
 // source rows and the row layout all ask for the same pair.
+func (a *appState) pictureRequested(it *item) bool {
+	if it.shown || a.pendingBindings[a.scene][it.persistentID].video {
+		return true
+	}
+	if it.player == nil && it.video != "" && a.session != nil {
+		scene, err := a.session.Scene(a.scene)
+		return err == nil && containsTrack(scene.Video, it.video)
+	}
+	return false
+}
+
 func (a *appState) eyeIcon(it *item) *ui.SVG {
-	if it.shown {
+	if a.pictureRequested(it) {
 		return lucide.Eye()
 	}
 	return lucide.EyeOff()
 }
 
 func (a *appState) eyeTip(it *item) string {
-	if it.shown {
-		return a.tr("take it off the stage", "从舞台上取下")
+	if a.pictureRequested(it) {
+		return a.tr("Hide picture", "取下舞台")
 	}
-	return a.tr("put it on the stage", "放到舞台上")
+	return a.tr("Show picture", "放上舞台")
 }
 
 func (a *appState) eyeTint(it *item) ui.Color {
-	if it.shown {
+	if a.pictureRequested(it) {
 		return colorTextDim
 	}
 	return colorDim
@@ -83,7 +96,13 @@ func (a *appState) eyeTint(it *item) ui.Color {
 // far it has got. The numbers the engine does not know are left out instead of
 // being guessed.
 func (a *appState) rowFacts(it *item) string {
-	parts := make([]string, 0, 2)
+	parts := make([]string, 0, 4)
+	parts = append(parts, a.audioRouteLabel(it))
+	if a.sourceMuted(it) {
+		parts = append(parts, a.tr("source muted", "本路静音"))
+	} else {
+		parts = append(parts, a.tr("source unmuted", "本路未静音"))
+	}
 	if facts := a.sourceFacts(it); facts != "" {
 		parts = append(parts, facts)
 	}
@@ -108,6 +127,11 @@ func (a *appState) dockArea(c *ui.Context) {
 }
 
 func (a *appState) dockBody(c *ui.Context) {
+	fold := func() {
+		a.closeMediaMenus()
+		a.dockUp = false
+		a.invalidate()
+	}
 	ui.Column(c).Fill().WidthPercent(100).Background(colorBg).Children(func() {
 		if normalizeConsoleLayout(a.settings.ConsoleLayout) == consoleRows {
 			// The row layout is the setting's alternative to the panels: the
@@ -117,11 +141,7 @@ func (a *appState) dockBody(c *ui.Context) {
 				AlignItems(ui.Center).Children(func() {
 				ui.Text(c, a.tr("Console", "控制台")).FontSize(textMicro).TextColor(colorDim)
 				ui.Box(c).Grow(1)
-				if ui.Button(c.Key("dock-fold"), "▾").Width(24).Height(22).
-					Tooltip(a.tr("fold the console", "收起控制台")).Clicked() {
-					a.dockUp = false
-					a.invalidate()
-				}
+				a.iconButtonSized(c, "dock-fold", lucide.ChevronDown(), a.tr("fold the console", "收起控制台"), 24, colorTextDim, false, fold)
 			})
 			ui.Box(c).WidthPercent(100).Height(1).Background(colorLine)
 			ui.Scroll(c).WidthPercent(100).Grow(1).Children(func() { a.dockRowsBody(c) })
@@ -149,41 +169,21 @@ func (a *appState) dockBody(c *ui.Context) {
 					if a.dockTab < 0 || a.dockTab >= len(ids) {
 						a.dockTab = 0
 					}
-					ui.Row(c).Padding(2).Gap(2).Radius(14).Background(colorBgSoft).
-						Border(1, colorLineSoft).AlignItems(ui.Center).Children(func() {
+					track := a.segmentTrack(c)
+					track.Children(func() {
 						for i, label := range labels {
-							selected := a.dockTab == i
-							tab := ui.ButtonBase(c.Key("dock-tab-"+ids[i])).Height(28).
-								Padding(0, spaceMd).Radius(12).AlignItems(ui.Center)
-							fill, ink := ui.Transparent, colorDim
-							if selected {
-								fill, ink = colorSelected, colorSelectedText
-							}
-							if tab.Pressed() {
-								fill, ink = colorPressed, colorText
-							} else if tab.Hovered() {
-								ink = colorText
-								if !selected {
-									fill = colorHover
+							idx := i
+							a.segmentedOption(c, "dock-tab-"+ids[idx], label, a.dockTab == idx, false, func() {
+								if a.dockTab != idx {
+									a.closeMediaMenus()
 								}
-							}
-							tab = tab.Background(fill).TextColor(ink)
-							tab.Children(func() {
-								ui.Text(c, label).FontSize(textSmall).FontWeight(500).
-									TextColor(ink).SingleLine()
+								a.dockTab = idx
 							})
-							if tab.Clicked() {
-								a.dockTab = i
-							}
 						}
 					})
 					ui.Box(c).Grow(1)
 				}
-				if ui.Button(c.Key("dock-fold"), "▾").Width(24).Height(22).
-					Tooltip(a.tr("fold the console", "收起控制台")).Clicked() {
-					a.dockUp = false
-					a.invalidate()
-				}
+				a.iconButtonSized(c, "dock-fold", lucide.ChevronDown(), a.tr("fold the console", "收起控制台"), 24, colorTextDim, false, fold)
 			})
 			if len(ids) == 0 {
 				return
@@ -197,74 +197,18 @@ func (a *appState) dockBody(c *ui.Context) {
 			AlignItems(ui.Center).Children(func() {
 			ui.Text(c, a.tr("Console", "控制台")).FontSize(textMicro).TextColor(colorDim)
 			ui.Box(c).Grow(1)
-			// In a narrow window the tabs take this row's place below, so only
-			// the fold button stays here.
-			// Panel switches are chip-shaped and quiet: they sit on the same
-			// surface as the row, and only a shown panel carries the accent.
-			if !a.narrowDock() {
-				ui.Row(c).Height(28).Padding(2).Gap(2).Radius(14).
-					Background(colorBgSoft).Border(1, colorLineSoft).
-					AlignItems(ui.Center).Children(func() {
-					for _, id := range dockOrder {
-						label := a.dockTitle(id)
-						shown := a.dockShown(id)
-						chip := ui.ButtonBase(c.Key("dock-toggle-"+id)).Height(24).
-							Padding(0, 10).Radius(12).AlignItems(ui.Center)
-						fill, ink := ui.Transparent, colorDim
-						if shown {
-							fill, ink = colorEnabled, colorSelectedText
-						}
-						if chip.Pressed() {
-							fill, ink = colorPressed, colorText
-						} else if chip.Hovered() {
-							ink = colorText
-							if !shown {
-								fill = colorHover
-							}
-						}
-						chip = chip.Background(fill).TextColor(ink)
-						chip.Children(func() {
-							ui.Text(c, label).FontSize(textSmall).FontWeight(500).TextColor(ink).SingleLine()
-						})
-						if chip.Tooltip(a.tr("show or hide this panel", "显示或隐藏这块面板")).Clicked() {
-							a.toggleDockPanel(id)
-						}
-					}
-				})
-			}
+			track := a.segmentTrack(c)
+			track.Children(func() {
+				for _, id := range dockOrder {
+					a.segmentedOption(c, "dock-toggle-"+id, a.dockTitle(id), a.dockShown(id), false, func() {
+						a.toggleDockPanel(id)
+					})
+				}
+			})
 			a.iconButtonSized(c, "dock-fold", lucide.ChevronDown(),
-				a.tr("fold the console", "收起控制台"), 24, colorTextDim, false, func() {
-					a.dockUp = false
-					a.invalidate()
-				})
+				a.tr("fold the console", "收起控制台"), 24, colorTextDim, false, fold)
 		})
 		ui.Box(c).WidthPercent(100).Height(1).Background(colorLine)
-		if a.narrowDock() {
-			// In a narrow window three columns become unreadable, so the same
-			// panels turn into tabs: one at a time, same body functions.
-			ids := make([]string, 0, len(dockOrder))
-			labels := make([]string, 0, len(dockOrder))
-			for _, id := range dockOrder {
-				if !a.dockShown(id) {
-					continue
-				}
-				ids = append(ids, id)
-				labels = append(labels, a.dockTitle(id))
-			}
-			if len(ids) == 0 {
-				ui.Text(c, a.tr("Every panel is hidden.", "所有面板都被隐藏了。")).FontSize(textCaption).
-					TextColor(colorDim).Padding(spaceSm, spaceSm)
-				return
-			}
-			if a.dockTab < 0 || a.dockTab >= len(ids) {
-				a.dockTab = 0
-			}
-			ui.Tabs(c, &a.dockTab, labels...)
-			ui.Row(c).WidthPercent(100).Grow(1).AlignItems(ui.Stretch).Children(func() {
-				a.dockPanel(c, ids[a.dockTab])
-			})
-			return
-		}
 		row := ui.Row(c).WidthPercent(100).Grow(1).AlignItems(ui.Stretch)
 		rowWidth := row.Bounds().W
 		if rowWidth > 0 {
@@ -276,6 +220,11 @@ func (a *appState) dockBody(c *ui.Context) {
 				if a.dockShown(id) {
 					shown = append(shown, id)
 				}
+			}
+			if len(shown) == 0 {
+				ui.Text(c, a.tr("Every panel is hidden.", "所有面板都被隐藏了。")).
+					FontSize(textCaption).TextColor(colorDim).Padding(spaceSm, spaceSm)
+				return
 			}
 			a.normalizeDockWidths(shown)
 			first := true
@@ -304,6 +253,10 @@ func (a *appState) dockPanel(c *ui.Context, id string) {
 	if a.narrowDock() {
 		widthPercent = 100
 	}
+	var result alignRowResult
+	if id == dockSync {
+		result = a.alignmentRowResult()
+	}
 	ui.Box(c).WidthPercent(widthPercent).MinWidth(120).HeightPercent(100).Padding(spaceSm, spaceSm).
 		Children(func() {
 			ui.Column(c).WidthPercent(100).Grow(1).Padding(spaceMd, spaceMd, spaceSm, spaceMd).Gap(spaceXs).
@@ -311,11 +264,22 @@ func (a *appState) dockPanel(c *ui.Context, id string) {
 				Shadow(0, 2, 8, 0, shadowCard).Children(func() {
 				ui.Row(c).WidthPercent(100).Height(22).Gap(spaceXs).
 					AlignItems(ui.Center).Children(func() {
-					ui.Text(c, a.dockTitle(id)).FontSize(textBody).FontWeight(600).TextColor(colorText)
+					a.sectionTitle(c, a.dockTitle(id))
 					ui.Box(c).Grow(1)
+					if result.Text != "" {
+						target := a.find(result.Target)
+						name := syncSourceLabel(a.indexOf(target), target)
+						ui.Text(c.Key("sync-result-target"), name).FontSize(textMicro).TextColor(colorTextDim).
+							MinWidth(0).SingleLine().Tooltip(name)
+					}
 				})
 				ui.Box(c).WidthPercent(100).Height(1).Background(colorLineSoft)
-				ui.Scroll(c).WidthPercent(100).Grow(1).Children(func() {
+				// Keep feedback outside the scroll area and give it the full width.
+				if result.Text != "" {
+					ui.Text(c.Key("sync-result"), result.Text).WidthPercent(100).Shrink(0).
+						FontSize(textSmall).TextColor(colorText).Wrap()
+				}
+				ui.Scroll(c.Key("dock-panel-scroll-" + id)).WidthPercent(100).Grow(1).MinHeight(0).Children(func() {
 					ui.Column(c).WidthPercent(100).Gap(spaceXs).Children(func() {
 						switch id {
 						case dockSources:
@@ -334,18 +298,18 @@ func (a *appState) dockPanel(c *ui.Context, id string) {
 // normalizeDockWidths gives every shown panel a share and rescales the shares
 // so they fill the console after a panel was hidden or shown.
 func (a *appState) normalizeDockWidths(ids []string) {
+	if len(ids) == 0 {
+		return
+	}
 	if a.dockWidths == nil {
 		a.dockWidths = make(map[string]float32)
 	}
 	var total float32
 	for _, id := range ids {
-		total += a.dockWidths[id]
-	}
-	if total <= 0 {
-		for _, id := range ids {
+		if a.dockWidths[id] <= 0 {
 			a.dockWidths[id] = 1 / float32(len(ids))
 		}
-		return
+		total += a.dockWidths[id]
 	}
 	for _, id := range ids {
 		a.dockWidths[id] /= total
@@ -357,7 +321,7 @@ func (a *appState) normalizeDockWidths(ids []string) {
 func (a *appState) dockSplitter(c *ui.Context, left, right string) {
 	ui.Box(c).Width(8).HeightPercent(100).Children(func() {
 		seam := ui.Box(c).WidthPercent(100).HeightPercent(100).Background(colorBg).
-			Tooltip(a.tr("drag to give one side more room", "拖动以调整两侧宽度"))
+			Tooltip(a.tr("Drag to resize", "拖动调整宽度"))
 		key := left + "|" + right
 		if dx, _, dragging := seam.Dragged(); dragging && a.dockW > 0 {
 			// Dragged reports the whole travel since the press, so only the part
@@ -381,36 +345,108 @@ func (a *appState) dockSplitter(c *ui.Context, left, right string) {
 }
 
 func (a *appState) dockSourcesBody(c *ui.Context) {
+	placed := make(map[*item]bool)
+	for _, it := range a.stagePictures() {
+		placed[it] = true
+	}
 	ui.Row(c).WidthPercent(100).Height(28).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
 		a.iconButton(c, "dock-src-add", lucide.Plus(), a.tr("add a source", "添加来源"), false,
 			a.openAddSource)
-		a.iconButton(c, "dock-src-remove", lucide.Minus(), a.tr("remove the selected source", "移除选中的来源"), false, func() {
-			if it := a.find(a.selected); it != nil {
-				a.runCommand(command{Kind: commandRemove, Source: it.source.ID})
+		a.iconButton(c, "dock-src-remove", lucide.Minus(), a.tr("remove from this stage", "从当前舞台移除"), false, func() {
+			if it, _, ok := a.selectedSource(); ok {
+				a.unlinkStageMember(it)
 			}
 		})
 		a.iconButton(c, "dock-src-up", lucide.ChevronUp(), a.tr("toward the front", "往前一层"), false, func() {
-			if it := a.find(a.selected); it != nil {
+			if it := a.find(a.selected); it != nil && it.source.ID != "" && it.shown {
 				a.raiseStage(it.source.ID, false)
 			}
 		})
 		a.iconButton(c, "dock-src-down", lucide.ChevronDown(), a.tr("toward the back", "往后一层"), false, func() {
-			if it := a.find(a.selected); it != nil {
+			if it := a.find(a.selected); it != nil && it.source.ID != "" && it.shown {
 				a.lowerStage(it.source.ID, false)
 			}
 		})
 		ui.Box(c).Grow(1)
-		if it := a.find(a.selected); it != nil {
+		if it := a.find(a.selected); it != nil && it.source.ID != "" && it.shown {
 			ui.Text(c, a.layerNote(it)).FontSize(textMicro).TextColor(colorDim).SingleLine()
 		}
 	})
-	if len(a.items) == 0 {
-		ui.Text(c, a.tr("No sources yet.", "还没有来源。")).FontSize(textCaption).
-			TextColor(colorDim).Wrap()
+	a.importFailureNotice(c)
+	a.stageCatalog(c)
+	memberCount := 0
+	for i, it := range a.items {
+		if !a.isStageMember(it) {
+			continue
+		}
+		memberCount++
+		row := it
+		ui.Row(c).WidthPercent(100).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
+			ui.Column(c).Grow(1).MinWidth(0).Children(func() { a.sourceEntry(c, row, i, true, placed) })
+			a.iconButton(c, "dock-unlink-"+string(itemKey(row)), lucide.X(),
+				a.tr("remove from this stage", "从当前舞台移除"), false, func() {
+					a.unlinkStageMember(row)
+				})
+		})
+		a.stageShareControl(c, row)
+		a.sourceMediaControls(c, row)
+	}
+	if memberCount == 0 {
+		ui.Text(c, a.stageSourcesEmptyText()).FontSize(textCaption).TextColor(colorDim).Wrap()
+	}
+}
+
+func (a *appState) stageSourcesEmptyText() string {
+	if len(a.items) > 0 {
+		return a.tr("No sources on this stage.", "当前舞台没有来源。")
+	}
+	return a.tr("No sources yet.", "还没有来源。")
+}
+
+// stageCatalog exposes session sources that are not linked to the active
+// stage. Adding one links the shared source and opens it if the stage needs it.
+func (a *appState) stageCatalog(c *ui.Context) {
+	ui.Column(c).WidthPercent(100).Gap(spaceXs).Children(func() {
+		label := a.tr("Shared source catalog", "共享来源目录")
+		if a.stageCatalogOpen {
+			label = a.tr("Hide source catalog", "收起来源目录")
+		}
+		if ui.Button(c.Key("stage-catalog-toggle"), label).Height(26).Clicked() {
+			a.stageCatalogOpen = !a.stageCatalogOpen
+		}
+		if !a.stageCatalogOpen {
+			return
+		}
+		ui.Text(c, a.tr("Sources stay here after you remove them from a stage.", "从舞台移除的来源仍保留在这里。")).
+			FontSize(textMicro).TextColor(colorDim).Wrap()
+		for _, it := range a.items {
+			if it.stageOnly || a.isStageMember(it) {
+				continue
+			}
+			row := it
+			ui.Row(c).WidthPercent(100).Height(28).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, sourceDisplayName(row)).FontSize(textSmall).TextColor(colorText).Grow(1).MinWidth(0).SingleLine()
+				if ui.Button(c.Key("stage-link-"+string(itemKey(row))), a.tr("Add to this stage", "添加到此舞台")).Height(24).Clicked() {
+					a.linkStageMember(row)
+					a.stageCatalogOpen = false
+				}
+				if !a.sourceHasStageMember(row.persistentID) && ui.Button(c.Key("catalog-delete-"+string(itemKey(row))), a.tr("Delete", "删除")).Height(24).Clicked() {
+					a.removeCatalogSource(row)
+				}
+			})
+		}
+	})
+}
+
+func (a *appState) stageShareControl(c *ui.Context, it *item) {
+	if !it.stageOnly || a.selected != itemKey(it) {
 		return
 	}
-	for i, it := range a.items {
-		a.sourceEntry(c, it, i, true)
+	if ui.Button(c.Key("share-source-"+string(itemKey(it))), a.tr("Share source", "共享来源")).Height(24).
+		Tooltip(a.tr("Make this source available in other stages' catalogs", "让其他舞台可以从共享目录添加这一路")).Clicked() {
+		it.stageOnly = false
+		a.saveSession()
+		a.invalidate()
 	}
 }
 
@@ -432,7 +468,10 @@ func (a *appState) syncBadge(it *item) string {
 // layerNote names where the selected source sits in the stack, so the arrows
 // have a visible effect even when two pictures do not overlap.
 func (a *appState) layerNote(it *item) string {
-	order := a.sceneEdits().ordered(a.shownIDs())
+	if it == nil || it.source.ID == "" || !it.shown {
+		return ""
+	}
+	order := a.currentEdits().ordered(a.shownIDs())
 	for i, id := range order {
 		if id == it.source.ID {
 			return fmt.Sprintf("%d/%d", i+1, len(order))
@@ -459,13 +498,23 @@ func normalizeConsoleLayout(v string) string {
 // name, the level, the mute, its place in the stack and its offset. It reads
 // exactly the state the panels read; only the arrangement differs.
 func (a *appState) dockRowsBody(c *ui.Context) {
+	a.importFailureNotice(c)
+	placed := make(map[*item]bool)
+	for _, picture := range a.stagePictures() {
+		placed[picture] = true
+	}
 	ui.Column(c).Fill().WidthPercent(100).Padding(spaceSm, spaceSm).Gap(spaceXs).Children(func() {
 		ui.Row(c).WidthPercent(100).Height(22).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, a.tr("Source", "来源")).FontSize(textMicro).TextColor(colorDim).Grow(1).MinWidth(0)
-			ui.Text(c, a.tr("Level", "音量")).FontSize(textMicro).TextColor(colorDim).Width(160)
+			ui.Text(c, a.tr("Level", "音量")).FontSize(textMicro).TextColor(colorDim).Width(220)
 			ui.Text(c, a.tr("Offset", "偏移")).FontSize(textMicro).TextColor(colorDim).Width(190)
 		})
+		memberCount := 0
 		for i, it := range a.items {
+			if !a.isStageMember(it) {
+				continue
+			}
+			memberCount++
 			row, index := it, i
 			ui.Box(c).WidthPercent(100).Height(48).Radius(radiusCard).Background(colorPanel).
 				Border(1, colorLineSoft).Padding(spaceXs, spaceSm).Children(func() {
@@ -473,66 +522,117 @@ func (a *appState) dockRowsBody(c *ui.Context) {
 					AlignItems(ui.Center).Children(func() {
 					ui.Box(c).Width(6).Height(6).Radius(3).Background(a.sourceDot(row))
 					ui.Column(c).Grow(1).MinWidth(0).Children(func() {
-						ui.Text(c, a.name(row)).FontSize(textBody).FontWeight(500).
+						ui.Text(c, sourceDisplayName(row)).FontSize(textBody).FontWeight(500).
 							TextColor(colorText).MinWidth(0).SingleLine()
-						ui.Text(c, a.rowFacts(row)).FontSize(textMicro).TextColor(colorDim).
-							MinWidth(0).SingleLine()
-					})
-					a.iconButton(c, "row-up-"+string(row.source.ID), lucide.ChevronUp(),
-						a.tr("toward the front", "往前一层"), false, func() {
-							a.raiseStage(row.source.ID, false)
-						})
-					a.iconButton(c, "row-down-"+string(row.source.ID), lucide.ChevronDown(),
-						a.tr("toward the back", "往后一层"), false, func() {
-							a.lowerStage(row.source.ID, false)
-						})
-					ui.Row(c).Width(160).Gap(2).AlignItems(ui.Center).Children(func() {
-						muted := a.sourceMuted(row)
-						icon := lucide.Volume2()
-						tint := colorTextDim
-						if muted {
-							icon = lucide.VolumeX()
-							tint = colorDim
+						state := a.tr("Picture hidden", "画面已隐藏")
+						if row.shown {
+							state = a.tr("Picture shown", "画面已显示")
+							if !placed[row] {
+								state = a.tr("Outside this layout", "当前布局未显示")
+							}
 						}
-						a.quietIconButton(c, "row-mute-"+string(row.source.ID), icon,
-							a.tr("mute this source", "静音这一路"), tint, func() {
-								a.runCommand(command{Kind: commandMute, Source: row.source.ID})
-							})
-						if a.volumeSlider(c, "row-vol-"+string(row.source.ID), &row.volume, 84) {
-							a.runCommand(command{Kind: commandVolume, Source: row.source.ID, Volume: row.volume})
+						player := row.outputPlayer()
+						if player == nil || !player.Ready() || row.openErr != nil || player.Buffering() {
+							state += " · " + a.sourceSub(row)
+						} else if player.Playing() {
+							state += a.tr(" · Playing", " · 播放中")
+						} else {
+							state += a.tr(" · Paused", " · 已暂停")
 						}
-						ui.Text(c, fmt.Sprintf("%.0f%%", row.volume*100)).Width(42).PaddingStart(6).
-							FontSize(textSmall).FontWeight(500).TextColor(colorTextDim).
-							TextAlign(ui.End).FontFeatures("tnum")
+						status := a.mixerChannelRouteLabel(row)
+						if status != "" {
+							status += " · "
+						}
+						status += state
+						ui.Text(c, status).FontSize(textMicro).TextColor(colorDim).
+							MinWidth(0).SingleLine().Tooltip(a.localizedMixerLine(row))
 					})
-					ui.Row(c).Width(190).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
-						a.offsetStepper(c, "row-step-"+string(row.source.ID), a.entryOf(row).Offset,
-							a.settingsNudge(1), func(delta time.Duration) {
-								a.runCommand(command{Kind: commandNudge, Source: row.source.ID, Delta: delta})
+					key := string(itemKey(row))
+					visibleLabel := a.tr("Hide", "隐藏")
+					if !a.pictureRequested(row) {
+						visibleLabel = a.tr("Show", "显示")
+					}
+					if ui.Button(c.Key("source-visible-"+key), visibleLabel).Height(26).Clicked() {
+						a.toggleVideo(index)
+					}
+					if row.shown && ui.Button(c.Key("source-primary-"+key), a.tr("Primary", "主画面")).Height(26).Clicked() {
+						a.runCommand(command{Kind: commandPrimary, Source: itemKey(row)})
+					}
+					if player := row.outputPlayer(); player != nil {
+						kind, label := commandSourcePause, a.tr("Pause", "暂停")
+						if !player.Playing() {
+							kind, label = commandSourcePlay, a.tr("Play", "播放")
+						}
+						playButton := ui.Button(c.Key("source-play-"+key), label).Height(26)
+						if a.sourceInExplicitGroup(row) {
+							playButton = playButton.Disabled(true).Tooltip(a.tr("Play or pause the whole sync group", "这一路随同步组播放或暂停"))
+						}
+						if playButton.Clicked() {
+							a.runCommand(command{Kind: kind, Source: itemKey(row)})
+						}
+					} else {
+						ui.Button(c.Key("source-play-"+key), a.tr("Opening", "打开中")).Height(26).Disabled(true)
+					}
+					if row.source.ID != "" {
+						a.iconButton(c, "row-up-"+key, lucide.ChevronUp(),
+							a.tr("toward the front", "往前一层"), false, func() {
+								a.raiseStage(row.source.ID, false)
 							})
-						if offset := a.entryOf(row).Offset; offset != 0 {
-							a.iconButton(c, "row-reset-"+string(row.source.ID), lucide.RotateCcw(),
-								a.tr("set this offset back to zero", "把这一路的偏移复位"), false, func() {
-									a.report(a.runCommand(command{Kind: commandNudge, Source: row.source.ID, Delta: -offset}))
+						a.iconButton(c, "row-down-"+key, lucide.ChevronDown(),
+							a.tr("toward the back", "往后一层"), false, func() {
+								a.lowerStage(row.source.ID, false)
+							})
+					}
+					if row.audio != "" {
+						ui.Row(c).Width(220).Gap(2).AlignItems(ui.Center).Children(func() {
+							a.mixerActions(c, row, "row-mix")
+							level := a.mixerLevel(row)
+							if a.volumeSlider(c, "row-vol-"+key, &level, 72) {
+								a.runCommand(command{Kind: commandVolume, Source: itemKey(row), Volume: level})
+							}
+							a.numericReadout(c, fmt.Sprintf("%.0f%%", level*100), 38)
+						})
+					}
+					if row.source.ID != "" {
+						ui.Row(c).Width(190).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
+							a.offsetStepper(c, "row-step-"+key, a.entryOf(row).Offset,
+								a.settingsNudge(1), func(delta time.Duration) {
+									a.runCommand(command{Kind: commandNudge, Source: itemKey(row), Delta: delta})
 								})
-						}
-					})
-					a.quietIconButton(c, "row-show-"+string(row.source.ID), a.eyeIcon(row),
+							if offset := a.entryOf(row).Offset; offset != 0 {
+								a.iconButton(c, "row-reset-"+key, lucide.RotateCcw(),
+									a.tr("Reset offset", "偏移归零"), false, func() {
+										a.report(a.runCommand(command{Kind: commandNudge, Source: itemKey(row), Delta: -offset}))
+									})
+							}
+						})
+						a.quietIconButton(c, "row-rename-"+key, lucide.Pencil(),
+							a.tr("Rename", "重命名"), colorDim, func() {
+								a.openRenameSource(row.source.ID)
+							})
+					}
+					a.quietIconButton(c, "row-show-"+key, a.eyeIcon(row),
 						a.eyeTip(row), a.eyeTint(row), func() {
 							a.toggleVideo(index)
 						})
-					a.iconButton(c, "row-remove-"+string(row.source.ID), lucide.X(),
-						a.tr("remove this source", "移除这个来源"), false, func() {
-							a.runCommand(command{Kind: commandRemove, Source: row.source.ID})
+					a.iconButton(c, "row-unlink-"+string(itemKey(row)), lucide.X(),
+						a.tr("remove from this stage", "从当前舞台移除"), false, func() {
+							a.unlinkStageMember(row)
 						})
 				})
 			})
 		}
-		if len(a.items) == 0 {
-			ui.Text(c, a.tr("Nothing here yet. Add a file or an address with +.",
-				"这里还是空的。用 ＋ 添加文件或地址。")).
-				FontSize(textCaption).TextColor(colorDim).Padding(spaceSm, spaceSm)
+		if memberCount == 0 {
+			ui.Text(c, a.stageSourcesEmptyText()).FontSize(textCaption).TextColor(colorDim).Padding(spaceSm, spaceSm)
 		}
+		for _, it := range a.items {
+			if a.isStageMember(it) && a.selected == itemKey(it) {
+				a.stageShareControl(c, it)
+				a.sourceMediaControls(c, it)
+				break
+			}
+		}
+		a.stageCatalog(c)
 	})
 }
 
@@ -540,7 +640,7 @@ func (a *appState) dockMixerBody(c *ui.Context) {
 	ui.Row(c).WidthPercent(100).Height(28).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
 		mute := a.tr("Mute all", "全部静音")
 		if a.masterMute {
-			mute = a.tr("Hear all", "全部有声")
+			mute = a.tr("Unmute all", "取消全部静音")
 		}
 		master := ui.ButtonBase(c.Key("dock-master")).Height(24).Padding(0, spaceSm).
 			Radius(radiusSm).AlignItems(ui.Center)
@@ -561,47 +661,72 @@ func (a *appState) dockMixerBody(c *ui.Context) {
 			a.runCommand(command{Kind: commandMasterMute})
 		}
 	})
-	if len(a.items) == 0 {
+	memberCount := 0
+	for _, it := range a.items {
+		if a.isStageMember(it) {
+			memberCount++
+		}
+	}
+	if memberCount == 0 {
 		ui.Text(c, a.tr("Nothing to mix yet.", "还没有可调的声音。")).FontSize(textCaption).
 			TextColor(colorDim).Wrap()
 		return
 	}
 	for _, it := range a.items {
-		a.mixerChannel(c, it)
+		if a.isStageMember(it) {
+			a.mixerChannel(c, it)
+		}
 	}
 }
 
 // syncReference is the source the others are measured against: the one picked
 // in this panel, or the first picture on the stage when nobody picked one.
 func (a *appState) syncReference() *item {
-	if it := a.find(a.syncRef); it != nil {
+	if it := a.find(a.syncRef); it != nil && a.isStageMember(it) {
 		return it
 	}
 	return a.firstShown()
 }
 
+func syncSourceLabel(index int, it *item) string {
+	return fmt.Sprintf("%d  %s", index+1, sourceDisplayName(it))
+}
+
 func (a *appState) dockSyncBody(c *ui.Context) {
-	if len(a.items) == 0 {
+	memberCount := 0
+	for _, it := range a.items {
+		if a.isStageMember(it) {
+			memberCount++
+		}
+	}
+	if memberCount == 0 {
 		ui.Text(c, a.tr("Nothing to line up yet.", "还没有可对齐的来源。")).FontSize(textCaption).
 			TextColor(colorDim).Wrap()
 		return
 	}
 	reference := a.syncReference()
-	a.rowSurface(c).Height(28).Padding(0, spaceSm).Gap(spaceXs).
+	a.rowSurface(c).Padding(spaceXs, spaceSm).Gap(spaceXs).
 		AlignItems(ui.Center).Children(func() {
-		label := a.tr("Reference: none", "参考：无")
-		if reference != nil {
-			label = a.tr("Reference: ", "参考：") + a.name(reference)
-		}
-		ui.Text(c, label).FontSize(textMicro).TextColor(colorTextDim).Grow(1).MinWidth(0).SingleLine()
+		ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+			ui.Text(c, a.tr("Current reference", "当前参考")).FontSize(textMicro).TextColor(colorTextDim)
+			name := a.tr("No reference selected", "未选参考来源")
+			if reference != nil {
+				name = sourceDisplayName(reference)
+			}
+			ui.Text(c, name).FontSize(textTitle).FontWeight(600).MinWidth(0).SingleLine().Tooltip(name)
+		})
 		if a.syncRef != "" {
 			a.iconButton(c, "sync-ref-clear", lucide.X(),
-				a.tr("go back to the first picture on the stage", "改回以舞台上第一幅画面为参考"), false, func() {
+				a.tr("Use the first picture as reference", "以第一幅画面为参考"), false, func() {
+					a.invalidateAlignmentRow()
 					a.syncRef = ""
 				})
 		}
 	})
 	for i, it := range a.items {
+		if !a.isStageMember(it) {
+			continue
+		}
 		isRef := reference != nil && it.source.ID == reference.source.ID
 		row := it
 		edge := colorLineSoft
@@ -612,16 +737,13 @@ func (a *appState) dockSyncBody(c *ui.Context) {
 			Background(colorRow).Border(1, edge).Radius(radiusMd).Children(func() {
 			// The reference is one line: it has no offset to step, and the
 			// second line would only repeat the same word.
-			lineHeight := float32(20)
-			if isRef {
-				lineHeight = 26
-			}
-			ui.Row(c).WidthPercent(100).Height(lineHeight).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, fmt.Sprintf("source %d", i+1)).FontSize(textBody).FontWeight(400).
-					TextColor(colorText).Grow(1).MinWidth(0).SingleLine().Tooltip(a.name(row))
-				if !isRef {
+			ui.Row(c).WidthPercent(100).Height(20).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, syncSourceLabel(i, row)).FontSize(textSmall).FontWeight(400).
+					TextColor(colorText).Grow(1).MinWidth(0).SingleLine().Tooltip(sourceDisplayName(row))
+				if !isRef && row.source.ID != "" {
 					a.iconButton(c, "sync-ref-"+string(row.source.ID), lucide.Crosshair(),
-						a.tr("make this source the reference", "把这一路设为参考"), false, func() {
+						a.tr("Set as reference", "设为参考"), false, func() {
+							a.invalidateAlignmentRow()
 							a.syncRef = row.source.ID
 						})
 				}
@@ -637,7 +759,7 @@ func (a *appState) dockSyncBody(c *ui.Context) {
 					badge = badge.TextColor(colorDim)
 				}
 			})
-			if isRef {
+			if isRef || row.source.ID == "" {
 				return
 			}
 			ui.Row(c).WidthPercent(100).Height(28).Gap(spaceXs).AlignItems(ui.Center).Children(func() {
@@ -647,13 +769,12 @@ func (a *appState) dockSyncBody(c *ui.Context) {
 					})
 				if offset := a.entryOf(row).Offset; offset != 0 {
 					a.iconButton(c, "sync-reset-"+string(row.source.ID), lucide.RotateCcw(),
-						a.tr("set this offset back to zero", "把这一路的偏移复位"), false, func() {
+						a.tr("Reset offset", "偏移归零"), false, func() {
 							a.report(a.runCommand(command{Kind: commandNudge, Source: row.source.ID, Delta: -offset}))
 						})
 				}
 				a.iconButton(c, "sync-align-"+string(row.source.ID), lucide.ScanSearch(),
-					a.tr("measure a suggestion against the reference (read only)",
-						"与参考比对，给一条只读建议"), false, func() {
+					a.tr("Estimate alignment offset", "估算对齐偏移"), false, func() {
 						if reference != nil {
 							if refIndex := a.indexOf(reference); refIndex >= 0 {
 								a.probeAsync(refIndex, i)
@@ -663,12 +784,6 @@ func (a *appState) dockSyncBody(c *ui.Context) {
 				ui.Box(c).Grow(1)
 			})
 		})
-	}
-	// A suggestion is a paragraph, not a label: it is written where there is
-	// room for it (Diagnostics) instead of being clipped by this panel.
-	if a.syncNote != "" {
-		ui.Text(c, a.tr("the last suggestion is in Diagnostics", "最近一次建议见诊断页")).
-			FontSize(textMicro).TextColor(colorTextDim).SingleLine()
 	}
 }
 

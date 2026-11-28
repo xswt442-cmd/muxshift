@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh">
   <head>
     <meta charset="utf-8" />
     <title>MuxShift</title>
@@ -10,7 +10,9 @@
       body {
         margin: 0;
         padding: 12px;
-        width: 340px;
+        width: 360px;
+        min-width: 320px;
+        max-width: 560px;
         font: 13px/1.45 system-ui, sans-serif;
         background: #16181c;
         color: #e6e8ec;
@@ -18,6 +20,10 @@
       h1 {
         font-size: 14px;
         margin: 0 0 2px;
+      }
+      h2 {
+        font-size: 12px;
+        margin: 8px 0 6px;
       }
       .page {
         color: #9aa0aa;
@@ -39,21 +45,57 @@
         border-color: #4c7dd8;
         background: #1b2130;
       }
-      .kind {
-        color: #8fb3ff;
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
+      .candidate {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 20px;
+        cursor: pointer;
+        flex: 1;
+        min-width: 0;
       }
-      .url {
-        word-break: break-all;
+      .candidate-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .candidate input {
+        flex: 0 0 auto;
+        accent-color: #6b94e8;
+      }
+      .candidate input:focus-visible {
+        outline: 2px solid #8fb3ff;
+        outline-offset: 2px;
+      }
+      .candidate span {
+        overflow-wrap: anywhere;
+      }
+      .candidate-url {
+        overflow-wrap: anywhere;
         font-family: ui-monospace, monospace;
         font-size: 11px;
-        margin-top: 2px;
+        margin-top: 6px;
+        padding: 6px;
+        border: 1px solid #3a4150;
+        border-radius: 4px;
+        background: #16181c;
+        user-select: text;
       }
-      .from {
-        color: #7d838d;
-        font-size: 11px;
+      .candidate-row .address-toggle {
+        flex: 0 0 26px;
+        width: 26px;
+        min-height: 24px;
+        padding: 0;
+      }
+      .address-toggle::before {
+        content: "▸";
+      }
+      .address-toggle[aria-expanded="true"]::before {
+        content: "▾";
+      }
+      .address-toggle:focus-visible {
+        outline: 2px solid #8fb3ff;
+        outline-offset: 2px;
       }
       .note {
         color: #c9a227;
@@ -116,26 +158,42 @@
         margin-bottom: 8px;
         word-break: break-all;
       }
+      .details {
+        margin-top: 12px;
+        border-top: 1px solid #2a2e36;
+        padding-top: 8px;
+      }
+      .details summary {
+        cursor: pointer;
+        color: #9aa0aa;
+        font-size: 12px;
+        user-select: none;
+      }
+      .details[open] summary {
+        margin-bottom: 8px;
+      }
     </style>
   </head>
   <body>
-    <h1>MuxShift bridge</h1>
+    <h1>MuxShift</h1>
     <div class="pair-row">
-      <input id="code" inputmode="numeric" maxlength="6" placeholder="pairing code" />
-      <button id="pair">Pair</button>
+      <input id="code" inputmode="numeric" maxlength="6" placeholder="配对码" />
+      <button id="pair">配对</button>
     </div>
-    <div class="pair-line" id="pair-line">checking the local window…</div>
-    <div class="page" id="page">reading the active tab…</div>
-    <ul id="sources"></ul>
-    <button id="resolve" hidden>Find the live stream on this page</button>
-    <button id="import" disabled>Import the selected address</button>
-    <div id="status"></div>
-    <div class="meta">
-      The scan lists addresses this page already loaded. The live button asks a
-      supported site for a playable address. The extension pairs once with the
-      desktop window over 127.0.0.1; cookies, headers, and protected media are
-      not exported.
-    </div>
+    <div class="pair-line" id="pair-line" aria-live="polite">正在检查本机窗口…</div>
+    <div class="page" id="page">正在读取当前标签页…</div>
+    <button id="resolve" hidden>解析并发送</button>
+    <h2 id="candidate-heading">可选地址（0）</h2>
+    <div class="meta" id="selection-hint"></div>
+    <ul id="sources" aria-label="可选媒体地址"></ul>
+    <button id="import" disabled>发送所选地址</button>
+    <div id="status" role="status" aria-live="polite"></div>
+    <details class="details" id="details">
+      <summary id="details-title">地址与扫描详情</summary>
+      <div class="meta" id="advanced-meta"></div>
+      <div class="note" id="resolve-note"></div>
+      <div id="scan-notes"></div>
+    </details>
     <script src="popup.js"></script>
   </body>
 </html>

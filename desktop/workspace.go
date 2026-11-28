@@ -1,6 +1,5 @@
-// The workspace rail is the thinnest navigation the window can have: three
-// pages that each show real state, and no button for anything that does not
-// work yet.
+// The workspace rail is the thinnest navigation the window can have: pages that
+// each show real state, and no button for anything that does not work yet.
 package main
 
 import (
@@ -26,8 +25,8 @@ const (
 	// workspaceDiagnostics shows the session, the synchronisation state and the
 	// session's own event list.
 	workspaceDiagnostics
-	// workspaceSettings edits the global settings; the page keeps its own draft
-	// until Apply, so Cancel is free.
+	// workspaceSettings edits the global settings. Draft values wait for Apply;
+	// appearance has its own immediate save path.
 	workspaceSettings
 	// workspaceMixer edits the listening overlay: each source's mute, its level
 	// and one solo, plus a master mute. It shapes listening, not sound.
@@ -87,7 +86,7 @@ func (a *appState) importRow(c *ui.Context) {
 	ui.Column(c).WidthPercent(100).Gap(spaceXs).Children(func() {
 		ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).WidthPercent(100).Children(func() {
 			c.Key("import-url")
-			field := ui.TextInput(c, &a.importText).Grow(1).Height(a.controlHeight()).
+			field := a.field(c, &a.importText).Grow(1).
 				Placeholder(`https://… .m3u8  or  C:\path\file.mp4`).
 				Description(a.tr("a media address or an absolute file path", "媒体地址或绝对文件路径"))
 			if field.Submitted() && a.importing == "" {
@@ -98,49 +97,93 @@ func (a *appState) importRow(c *ui.Context) {
 			if a.importing != "" {
 				label = fmt.Sprintf(a.tr("Reading… %.0fs", "读取中… %.0f 秒"), time.Since(a.importSince).Seconds())
 			}
-			add := ui.Button(c.Key("import-add"), label).Width(96).Height(a.controlHeight()).
-				Tooltip(a.tr("add a file, a media address or a website", "添加文件、媒体地址或网页"))
-			if a.importing != "" {
-				add.Disabled(true).Tooltip(a.tr("the read is in flight; Cancel stops it", "正在读取；按取消可以停下"))
-			}
-			if add.Clicked() {
+			add := a.primaryButton(c, "import-add", label, 96, a.importing == "", func() {
 				a.openAddSource()
+			})
+			if a.importing != "" {
+				add.Tooltip(a.tr("the read is in flight; Cancel stops it", "正在读取；按取消可以停下"))
+			} else {
+				add.Tooltip(a.tr("add a file, a media address or a website", "添加文件、媒体地址或网页"))
 			}
 			if a.importing != "" {
-				if ui.Button(c.Key("import-cancel"), a.tr("Cancel", "取消")).Width(76).
-					Height(a.controlHeight()).
-					Tooltip(a.tr("stop reading; nothing is added", "停止读取，不会添加") + " " + shortURI(a.importing)).
-					Clicked() {
+				cancel := a.secondaryButton(c, "import-cancel", a.tr("Cancel", "取消"), 76, true, func() {
 					a.report(a.runCommand(command{Kind: commandCancelImport}))
-				}
+				})
+				cancel.Tooltip(a.tr("stop reading; nothing is added", "停止读取，不会添加") + " " + shortURI(a.importing))
 			}
 		})
-		failed := a.lastCommand.Command.Kind == commandAdd && a.lastCommand.Err != nil
-		if failed {
-			ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).WidthPercent(100).Children(func() {
-				ui.Text(c, a.errorShort()).FontSize(textMicro).TextColor(colorBad).
-					Grow(1).SingleLine().Tooltip(a.lastCommand.Err.Error())
-				if ui.Button(c.Key("import-retry"), a.tr("Retry", "重试")).Width(76).
-					Height(26).Clicked() {
-					a.report(a.runCommand(command{Kind: commandAdd, URI: a.lastCommand.Command.URI}))
+		a.importFailureNotice(c)
+		if a.reselectSource != "" {
+			if target, _, err := a.itemBySource(a.reselectSource); err == nil {
+				ui.Row(c).Gap(spaceSm).AlignItems(ui.Center).WidthPercent(100).Children(func() {
+					c.Key("reselect-source-" + string(a.reselectSource))
+					field := a.field(c, &a.reselectText).Grow(1).
+						Placeholder(`https://… .m3u8  or  C:\path\file.mp4`).
+						Description(a.tr("Choose the address for ", "为此来源选择地址：") + sourceDisplayName(target))
+					submit := field.Submitted()
+					if ui.Button(c.Key("reselect-cancel"), a.tr("Cancel", "取消")).Height(28).Clicked() {
+						a.reselectSource = ""
+						a.reselectText = ""
+						a.reselectProblem = ""
+					}
+					if ui.Button(c.Key("reselect-apply"), a.tr("Use address", "使用地址")).Height(28).Clicked() {
+						submit = true
+					}
+					if submit && strings.TrimSpace(a.reselectText) != "" && a.importing == "" {
+						a.submitReselect(a.reselectSource)
+					}
+				})
+				if a.reselectSource != "" && a.reselectProblem != "" {
+					ui.Text(c, a.reselectProblem).FontSize(textMicro).TextColor(colorBad).Wrap()
 				}
-				if ui.Button(c.Key("import-error-open"), a.tr("Details", "详情")).Width(76).
-					Height(26).Clicked() {
-					a.errorOpen = true
-				}
-			})
+			}
 		}
+	})
+}
+
+func (a *appState) submitReselect(target core.SourceID) {
+	result := a.runCommand(command{Kind: commandRetry, Source: target, URI: a.reselectText})
+	if result.Err != nil {
+		a.reselectProblem = result.Err.Error()
+		return
+	}
+	a.reselectSource = ""
+	a.reselectText = ""
+	a.reselectProblem = ""
+}
+
+func (a *appState) importFailureNotice(c *ui.Context) {
+	if a.importRetryTarget() == "" {
+		return
+	}
+	title := a.tr("Could not add ", "无法添加 ") + shortURI(a.importFailureURI)
+	detail := a.importFailureErr.Error()
+	ui.Column(c).WidthPercent(100).Padding(spaceXs, spaceSm).Gap(spaceXs).
+		Border(1, colorBad).Radius(radiusMd).Children(func() {
+		ui.Text(c, title).FontSize(textSmall).TextColor(colorBad).SingleLine().Tooltip(title)
+		ui.Text(c, a.importFailureCause(a.importFailureErr)).FontSize(textMicro).
+			TextColor(colorTextDim).SingleLine().Tooltip(detail)
+		ui.Row(c).Gap(spaceXs).Wrap().Children(func() {
+			a.secondaryButton(c, "import-retry", a.tr("Retry", "重试"), 62, true, a.retryImport)
+			a.secondaryButton(c, "import-error-open", a.tr("Details", "详情"), 66, true, func() {
+				a.lastErr = a.importFailureErr
+				a.errorOpen = true
+			})
+			a.secondaryButton(c, "import-dismiss", a.tr("Dismiss", "关闭提示"), 76, true, func() {
+				if a.lastErr != nil && a.lastErr.Error() == detail {
+					a.lastErr = nil
+				}
+				a.importFailureURI = ""
+				a.importFailureErr = nil
+			})
+		})
 	})
 }
 
 // selectedSource is the source the inspector follows, or nil.
 func (a *appState) selectedSource() (*item, int, bool) {
-	for i, it := range a.items {
-		if it.source.ID == a.selected {
-			return it, i, true
-		}
-	}
-	return nil, 0, false
+	it, index, err := a.itemBySource(a.selected)
+	return it, index, err == nil
 }
 
 // diagnosticsPage shows what the session and the players actually report. It is
@@ -174,10 +217,10 @@ func (a *appState) diagnosticsPage(c *ui.Context) {
 	ui.Column(c).WidthPercent(100).Padding(spaceSm, spaceMd).Radius(radiusCard).
 		Background(colorPanel).Border(1, colorLineSoft).Gap(0).Children(func() {
 		a.diagSection(c, a.tr("Session", "会话"), func() {
-			ui.Text(c, fmt.Sprintf("session %s · scene %s · video %s · %s",
+			ui.Text(c, fmt.Sprintf(a.tr("Session %s · Scene %s · Video %s · %s", "会话 %s · 场景 %s · 视频轨 %s · %s"),
 				snapshot.Name, snapshot.Scene, pictureLine(snapshot.Picture), soundLine(snapshot.Sound))).
 				FontSize(textSmall).TextColor(colorText).FontFeatures("tnum").Wrap()
-			ui.Text(c, fmt.Sprintf("event %s · playing %v · last %s",
+			ui.Text(c, fmt.Sprintf(a.tr("Event time %s · Playing %t · Last command %s", "事件时间 %s · 正在播放 %t · 最近命令 %s"),
 				snapshot.Event.Round(100*1e6), snapshot.Playing, snapshot.LastCommand)).
 				FontSize(textSmall).TextColor(colorTextDim)
 		})
@@ -187,7 +230,8 @@ func (a *appState) diagnosticsPage(c *ui.Context) {
 		}
 		for i, source := range snapshot.Sources {
 			a.diagSection(c, fmt.Sprintf("%d · %s", i+1, shortURI(source.URI)), func() {
-				ui.Text(c, fmt.Sprintf("%s · gen %d · %s · ready %v · player %v · playing %v · %s / %s · offset %s",
+				ui.Text(c, fmt.Sprintf(a.tr("%s · Generation %d · Tracks %s · Ready %t · Player %t · Playing %t · %s / %s · Offset %s",
+					"%s · 播放器代数 %d · 轨道 %s · 已就绪 %t · 有播放器 %t · 正在播放 %t · %s / %s · 偏移 %s"),
 					source.ID, source.Generation,
 					tracksLine([]core.TrackID{source.Video, source.Audio}), source.Ready,
 					source.Player, source.Playing,
@@ -274,8 +318,7 @@ func (a *appState) diagnosticsPage(c *ui.Context) {
 // diagButton is the diagnostics page's one secondary action: raised, quiet,
 // and warning-tinted only while the pointer is on a destructive one.
 func (a *appState) diagButton(c *ui.Context, key, label string, width float32, warning bool, onClick func()) ui.Element {
-	button := ui.ButtonBase(c.Key(key)).Width(width).Height(28).
-		Padding(0, spaceSm).Radius(radiusMd).AlignItems(ui.Center)
+	button := a.controlFrame(c, key, width)
 	fill, ink := colorPanel2, colorText
 	if button.Pressed() {
 		fill, ink = colorPressed, colorText
@@ -287,7 +330,7 @@ func (a *appState) diagButton(c *ui.Context, key, label string, width float32, w
 	}
 	button = button.Background(fill).TextColor(ink)
 	button.Children(func() {
-		ui.Text(c, label).FontSize(textMicro).FontWeight(500).TextColor(ink).SingleLine()
+		ui.Text(c, label).FontSize(textSmall).FontWeight(500).TextColor(ink).SingleLine()
 	})
 	if button.Clicked() && onClick != nil {
 		onClick()
@@ -300,7 +343,7 @@ func (a *appState) diagButton(c *ui.Context, key, label string, width float32, w
 // single quiet rule.
 func (a *appState) diagSection(c *ui.Context, title string, body func()) {
 	ui.Column(c).WidthPercent(100).Gap(spaceXs).Padding(spaceSm, 0).Children(func() {
-		ui.Text(c, title).FontSize(textBody).FontWeight(600).TextColor(colorText).SingleLine()
+		a.sectionTitle(c, title)
 		body()
 	})
 	ui.Box(c).WidthPercent(100).Height(1).Background(colorLineSoft)

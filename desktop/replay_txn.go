@@ -212,37 +212,41 @@ func (a *appState) prepareSeekTxn(txn *seekTxn) {
 			return
 		}
 		a.tookLease()
-		a.seekMu.Lock()
-		step.recording = recording
-		step.lease = lease
-		a.seekMu.Unlock()
 
+		// The preparation owns the lease until it can hand off a complete
+		// player and lease together. Cancellation may race a native open.
 		anchor, anchorErr := measureRecordingAnchorIn(txn.ctx, recording)
 		if anchorErr != nil {
+			a.releaseLease(lease, "of an unprepared replay")
 			a.abortSeekTxn(txn, fmt.Sprintf("measure %s: %v", recording.FileName(), anchorErr))
 			return
 		}
-		a.seekMu.Lock()
-		step.anchor = anchor
-		a.seekMu.Unlock()
+		if txn.ctx.Err() != nil || !a.holdsSeek(txn) {
+			a.releaseLease(lease, "of a canceled replay")
+			a.abortSeekTxn(txn, "the session stopped preparing the replacement")
+			return
+		}
 
-		player, err := a.openSeekPlayer(recording)
+		player, err := a.openSeekPlayer(txn, recording)
 		if err != nil {
+			a.releaseLease(lease, "of a replay player that could not open")
 			a.abortSeekTxn(txn, fmt.Sprintf("open %s: %v", recording.FileName(), err))
 			return
 		}
-		// The session may have closed or another transaction may have taken
-		// over while this player was opening. The work stops here and gives the
-		// player straight back, so a closing session never has a player appear
-		// after it asked the transaction to stop.
-		if !a.holdsSeek(txn) {
-			a.closeSeekPlayer(player)
+		a.seekMu.Lock()
+		owned := a.seek == txn && !txn.stopped
+		if owned {
+			step.recording = recording
+			step.anchor = anchor
+			step.player = player
+			step.lease = lease
+		}
+		a.seekMu.Unlock()
+		if !owned {
+			a.closeReplayPlayer(player, lease)
 			a.abortSeekTxn(txn, "the session gave up while a replacement was opening")
 			return
 		}
-		a.seekMu.Lock()
-		step.player = player
-		a.seekMu.Unlock()
 	}
 
 	// The cuts took time. An entry still has to be the same entry: the stage it
@@ -326,6 +330,11 @@ func seekTxnSources(txn *seekTxn) []dvr.SeekSource {
 // thread step that installs the new resources, so nothing can move between the
 // confirmation and the installation.
 func (a *appState) recheckTxn(txn *seekTxn) error {
+	for _, step := range txn.steps {
+		if step.item.handover != nil {
+			return fmt.Errorf("%s: a player replacement is still in progress", a.name(step.item))
+		}
+	}
 	if txn.kind == replayKindEnter {
 		return a.recheckReplayEntry(txn.entry)
 	}
@@ -377,14 +386,14 @@ func (a *appState) commitSeekTxn(txn *seekTxn) {
 	// installing them would leave the first source committed when the second
 	// one turns out to have moved; checking everything first and installing
 	// afterwards is what makes the commit all-or-nothing.
-	ran := a.seekOnMain(func() {
+	ran := a.seekOnMain(nil, func() {
 		// The decision to commit and the installation it authorises happen under
 		// the same lock. Ownership cannot change between "this transaction still
 		// owns the session" and the step that acts on it, and the slot is given
 		// up as part of the same critical section, so a transaction that lost it
 		// cannot install anything or clear whoever took its place.
 		a.seekMu.Lock()
-		if a.seek != txn {
+		if a.seek != txn || txn.stopped {
 			a.seekMu.Unlock()
 			refusal = fmt.Errorf("this replay transaction no longer owns the session")
 			return
@@ -416,6 +425,12 @@ func (a *appState) commitSeekTxn(txn *seekTxn) {
 		// looked while the commit was finishing must not see the slot free and
 		// then read the previous transaction's "preparing" line.
 		a.seekMu.Unlock()
+		for i, old := range previous {
+			if video := rawPlayer(old.player); video != nil {
+				a.retireMediaOnMain([]pendingClose{{player: video, lease: old.lease}}, nil, nil)
+				previous[i] = released{}
+			}
+		}
 		if a.afterSeekCommit != nil {
 			a.afterSeekCommit()
 		}
@@ -429,13 +444,7 @@ func (a *appState) commitSeekTxn(txn *seekTxn) {
 		return
 	}
 	for _, old := range previous {
-		a.closeSeekPlayer(old.player)
-		if old.lease != nil {
-			if err := old.lease.Release(); err != nil {
-				logf("seek", "release the previous lease: %v", err)
-			}
-			a.leftLease()
-		}
+		a.closeReplayPlayer(old.player, old.lease)
 	}
 	logf("seek", "committed %d recording(s) for event %s; each player is on the file cut for it, and the target sits %s into that file",
 		len(txn.steps), shortDuration(txn.event), shortDuration(deepestPosition(txn.prepared)))
@@ -519,8 +528,12 @@ type stepOutcome struct {
 // call; the result comes back on its own channel, so a late callback cannot
 // write into state its caller has already returned from.
 func (a *appState) seekStep(txn *seekTxn, step *seekTxnStep, fn func(desktopPlayer) stepOutcome) (stepOutcome, bool) {
+	var cancelled <-chan struct{}
+	if txn.ctx != nil {
+		cancelled = txn.ctx.Done()
+	}
 	results := make(chan stepOutcome, 1)
-	dispatched := a.seekOnMain(func() {
+	dispatched := a.seekOnMain(cancelled, func() {
 		a.seekMu.Lock()
 		if txn.stopped || step.player == nil {
 			a.seekMu.Unlock()
@@ -533,6 +546,9 @@ func (a *appState) seekStep(txn *seekTxn, step *seekTxnStep, fn func(desktopPlay
 		results <- out
 	})
 	if !dispatched {
+		if txn.ctx != nil && txn.ctx.Err() != nil {
+			return stepOutcome{}, true
+		}
 		return stepOutcome{}, false
 	}
 	return <-results, true
@@ -556,7 +572,6 @@ func (a *appState) abortSeekTxn(txn *seekTxn, why string) {
 	type owned struct {
 		player desktopPlayer
 		lease  *dvr.Lease
-		name   string
 	}
 	var give []owned
 	a.seekMu.Lock()
@@ -564,19 +579,13 @@ func (a *appState) abortSeekTxn(txn *seekTxn, why string) {
 		if step.player == nil && step.lease == nil {
 			continue
 		}
-		give = append(give, owned{player: step.player, lease: step.lease, name: step.recording.FileName()})
+		give = append(give, owned{player: step.player, lease: step.lease})
 		step.player = nil
 		step.lease = nil
 	}
 	a.seekMu.Unlock()
 	for _, item := range give {
-		a.closeSeekPlayer(item.player)
-		if item.lease != nil {
-			if err := item.lease.Release(); err != nil {
-				logf("seek", "release %s: %v", item.name, err)
-			}
-			a.leftLease()
-		}
+		a.closeReplayPlayer(item.player, item.lease)
 	}
 	logf("seek", "rolled back the replay for event %s: %s", shortDuration(txn.event), why)
 	txn.noticeOnce.Do(func() { a.publishReport(txn.reportFor(replayRolledBack, why)) })
@@ -612,13 +621,35 @@ func (a *appState) clearSeek(txn *seekTxn) bool {
 
 // openSeekPlayer opens the file a recording published. The test seam stands in
 // for a window; production opens the file on the drawing thread.
-func (a *appState) openSeekPlayer(recording dvr.Recording) (desktopPlayer, error) {
+func (a *appState) openSeekPlayer(txn *seekTxn, recording dvr.Recording) (desktopPlayer, error) {
 	if a.openSeek != nil {
 		return a.openSeek(recording)
 	}
-	player, err := a.openReplayFile(recording.Path)
+	var player desktopPlayer
+	var err error
+	accepting := true
+	a.seekOnMain(txn.ctx.Done(), func() {
+		a.seekMu.Lock()
+		defer a.seekMu.Unlock()
+		if accepting && !txn.stopped {
+			opened, openErr := a.openReplayFile(recording.Path)
+			if opened != nil {
+				player = opened
+			}
+			err = openErr
+		}
+	})
+	a.seekMu.Lock()
+	defer a.seekMu.Unlock()
+	accepting = false
 	if err != nil {
 		return nil, err
+	}
+	if player == nil {
+		if err := txn.ctx.Err(); err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("the session did not open the replay player within %s", seekDispatchWait)
 	}
 	return player, nil
 }
@@ -700,7 +731,7 @@ func (a *appState) settleSeekTxn(txn *seekTxn) error {
 			case !dispatched:
 				frames[i].err = fmt.Errorf("the session did not report the player's state within %s", seekDispatchWait)
 			case !out.acted:
-				frames[i].err = fmt.Errorf("%s was not read: the transaction had been stopped", a.name(step.item))
+				return fmt.Errorf("%s was not read: the transaction had been stopped", a.name(step.item))
 			default:
 				frames[i] = out.frame
 			}
@@ -731,8 +762,7 @@ func (a *appState) settleSeekTxn(txn *seekTxn) error {
 						break
 					}
 					if !out.acted {
-						short = fmt.Sprintf("%s was not asked to seek again: the transaction had been stopped", a.name(step.item))
-						break
+						return fmt.Errorf("%s was not asked to seek again: the transaction had been stopped", a.name(step.item))
 					}
 					stable = 0
 				}
@@ -865,7 +895,10 @@ func (a *appState) waitSeekPlayers(txn *seekTxn) error {
 				// budget. Say so and let the transaction end.
 				return fmt.Errorf("%s: the session did not run the picture check within %s", a.name(step.item), seekDispatchWait)
 			}
-			if !out.acted || !out.started {
+			if !out.acted {
+				return fmt.Errorf("%s: the transaction had been stopped", a.name(step.item))
+			}
+			if !out.started {
 				pending = a.name(step.item)
 				break
 			}
@@ -893,7 +926,7 @@ const seekDispatchWait = 2 * time.Second
 
 // seekOnMain runs a step on the drawing thread and reports whether it ran.
 // Tests replace it with a direct call, because they run without a window.
-func (a *appState) seekOnMain(fn func()) bool {
+func (a *appState) seekOnMain(cancelled <-chan struct{}, fn func()) bool {
 	done := make(chan struct{})
 	var once sync.Once
 	run := func() {
@@ -916,22 +949,51 @@ func (a *appState) seekOnMain(fn func()) bool {
 	select {
 	case <-done:
 		return true
+	case <-cancelled:
+		return false
 	case <-time.After(seekDispatchWait):
 		return false
 	}
 }
 
-// closeSeekPlayer closes a replacement player, engine players through the
-// adapter's release path and everything else directly.
-func (a *appState) closeSeekPlayer(player desktopPlayer) {
-	if player == nil {
-		return
-	}
+// closeReplayPlayer retires a native player with its recording lease. Decoder
+// implementations without a native window can close immediately.
+func (a *appState) closeReplayPlayer(player desktopPlayer, lease *dvr.Lease) {
 	if video := rawPlayer(player); video != nil {
-		a.releasePlayer(video)
+		if a.window == nil {
+			a.mainDo(func() { a.closeReplayPlayerOnMain(player, lease) })
+			return
+		}
+		// The window may be waiting for the preparation goroutine to finish.
+		// Keep ownership in the queue until the callback or shutdown drains it.
+		a.replayCloseMu.Lock()
+		a.replayCloses = append(a.replayCloses, pendingClose{player: video, lease: lease})
+		a.replayCloseMu.Unlock()
+		a.window.Update(a.drainReplayCloses)
 		return
 	}
-	player.Close()
+	if player != nil {
+		player.Close()
+	}
+	a.releaseLease(lease, "of a closed replay player")
+}
+
+func (a *appState) closeReplayPlayerOnMain(player desktopPlayer, lease *dvr.Lease) {
+	if video := rawPlayer(player); video != nil {
+		a.retireMediaOnMain([]pendingClose{{player: video, lease: lease}}, nil, nil)
+		return
+	}
+	a.closeReplayPlayer(player, lease)
+}
+
+func (a *appState) drainReplayCloses() {
+	a.replayCloseMu.Lock()
+	handles := a.replayCloses
+	a.replayCloses = nil
+	a.replayCloseMu.Unlock()
+	if len(handles) != 0 {
+		a.retireMediaOnMain(handles, nil, nil)
+	}
 }
 
 // pendingSeekPlayer is the replacement a source is preparing, if any. The stage

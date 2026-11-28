@@ -5,12 +5,12 @@ What exists to check this repository, what each check covers, and what it cannot
 Two Go modules, two test commands:
 
 ```sh
-go test ./...            # root module: core, core/hls, core/dvr, web, tools
+go test ./...            # root: core, core/align, core/hls, core/dvr, internal/filelock, internal/netguard, web, tools
 cd desktop && go test ./...   # the MyGo client is its own module and is NOT reached by the root command
 go vet ./...             # in each module
 ```
 
-## 1. Package tests (no window, no media, no network)
+## 1. Package tests (including loopback fixtures)
 
 | Area | Command | What it proves | Status |
 | --- | --- | --- | --- |
@@ -24,7 +24,13 @@ go vet ./...             # in each module
 | Replay clock and replay file | `cd desktop && go test ./...` | container↔player conversion, `playerWindow`, `replayFile` refusals, ffprobe measurement against a test segment | passing |
 | Settings | `cd desktop && go test ./...` | defaults, validation ranges, save/load round trip, damaged files, live application of a draft, and the About version comparison | passing |
 | Browser extension location | `cd desktop && go test ./...` | the About page finds the shipped `extension\` folder beside the binary and one level up in a checkout, reports a folder without `manifest.json`, and the open-folder command asks the shell for that folder and refuses when there is none | passing |
-| Replay seek (P16.4a–e) | `cd desktop && go test ./...`, then the `seektxn`, `interleave`, `replayui`, `seekentry`, `seekclose`, `seekedge`, `seekrefuse`, `seekboundary` and `seekpaused` scenarios | authorisation refusals, a transaction committing and rolling back, two replays interleaved, the read-only account (including a seek while the stage is paused) of requested/reported/residual, the inspector entry's valid/out-of-window/concurrent requests, a real window close during preparation, what a fresh player does with a request at the start of a cut (`seekedge` records the measurements for P16.4e; it is evidence, not a passing target), a cut-boundary target followed through whichever account the transaction publishes on a mid-join live buffer (`seekrefuse`), and the same request followed by a valid one (`seekboundary`) | passing except audio across a switch (REPLAY-AUDIO-CONTINUITY, Pending); the entry now labels its range a candidate common replay window and says a target inside it still needs per-source anchor authorisation, because `PlanSeek` authorises each target per source (REPLAY-WINDOW-AUTHORITY-01, closed as a copy fix; the plan is unchanged, so targets can still be refused); a cut-boundary target can settle while the transaction draws, with intermittent failures remaining and no frequency measured yet (REPLAY-BOUNDARY-SETTLE-INTERMITTENT, Open / Non-blocking); entering replay from a live stage is planned and re-checked by `desktop/replay_enter.go` but has no user entry yet (P16.4f-a covers the plan, the per-source evidence and the `enter replay` account kind through unit tests only; no recording is cut and no player is opened); P16.4g closed the phase with an explicit scope: a stage already replaying can be seeked, entering replay from live is **not** a product capability (the internal transaction has no entry point and `replay_wiring_test.go` fails if any shipping file calls it), and automatic cross-source content correspondence stays **Experimental / Not Authorizing** (V1 rejected, V2-G15-L20 ObservedSupport only, experiment code only in the Git-ignored `testplace/`) |
+| Replay seek and internal entry | desktop module suite, replay tests in desktop/replay_group_test.go | Seek authorization, commit and rollback, queued steps after cancellation, and recording ownership while a replacement player opens. The internal live-to-replay transaction has no user-facing entry. | passing |
+| Player lifecycle | desktop module suite, desktop/player_lifecycle_test.go | Generation guards, source detach and reload interleaving, lease release and recording cleanup at shutdown, and original workbench bounds when leaving viewing mode. | passing |
+| Session recovery and membership | desktop module suite, desktop/session_store_test.go, desktop/stage_members_test.go, and desktop/startup_video_test.go | Single writer, preservation of invalid snapshots, address reselection, ordered pending routes, hidden members, and first startup picture. | passing |
+| Stage transport and workbench | desktop module suite, including `transport_stage_test.go`, `workbench_polish_test.go`, and `p27_regression_test.go` | Scope of the active sync group, wide and narrow navigation, draft save recovery, and refusal of negative replay positions before offset changes. | passing |
+| HLS destination and quality controls | `go test ./internal/netguard ./core/hls` and desktop tests in `live_variants_test.go` and `source_media_test.go` | Literal-IP dialing after one DNS lookup, mixed-address rejection, HTTP CONNECT and SOCKS5 pinning, HTTP forwarding refusal, redirect policy, playlist limits, signed URL redaction, and stale quality callbacks. | passing |
+| Alignment rows | desktop module suite, including `align_row_test.go` | Result ownership and expiry when the reference, target, or offsets change. | passing |
+| Core session snapshots and file locks | go test ./core ./internal/filelock | Session event ordering, snapshot and return-value isolation, exclusive lock contention and release. | passing |
 
 ## 2. Scenarios (real window, real media)
 
@@ -44,7 +50,7 @@ go vet ./...             # in each module
 
 | Check | Why it is not automated |
 | --- | --- |
-| Browser extension toolbar click (`activeTab`) | Playwright cannot deliver the real toolbar gesture; the flow is verified by hand and recorded as `Not run` until it is |
+| Browser extension | A controlled Chromium native popup covers scanning, pairing, candidate state and handoff. Controlled site responses cover tab invalidation and resolver behavior. Check a physical toolbar click for the browser's active-tab grant and use actual live sites to verify their current responses. |
 | Real 150%/200% display scaling and a second monitor | Changing the host's DPI is out of scope for a test script; `dpi` simulates the layout consequence with `SetZoom`, which is not the same thing |
 | Audio output on a real device | Scenario evidence uses a level meter, which shows signal, not what a listener hears |
 | Long-running sessions (hours) | Every scenario is minutes long; drift over hours is unmeasured |
@@ -98,7 +104,7 @@ What a release does **not** carry: no sample media, no vocal-separation weights,
 no ffmpeg. `RUNNING.txt` says what the machine has to provide.
 ## 4. Evidence
 
-Scenario captures, logs and notes live in the Git-ignored `testplace/` directory (`testplace/evidence/...`). They are the maintainer's machine-local record: this document and the architecture state the conclusions, and `testplace/` is where the raw runs that support them were kept. A fresh clone has the code and these documents; it does not have the captures.
+Scenario captures and logs are machine-local. The Git-ignored local directory holds raw evidence. The repository records the check entry points and supported conclusions.
 
 ## 5. Known gaps in coverage
 

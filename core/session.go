@@ -3,6 +3,7 @@ package core
 import (
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 )
 
@@ -49,7 +50,29 @@ const (
 type Source struct {
 	ID     SourceID
 	URI    string
+	Name   string `json:"name,omitempty"`
 	Tracks []TrackID
+}
+
+// maxNameLength caps a user-set name so a pasted wall of text cannot turn into
+// an unbounded label. It counts runes, not bytes, so wide scripts are not cut
+// mid-character.
+const maxNameLength = 80
+
+// maxEventHistory bounds the recorded changes a Session keeps. A long-running
+// session keeps the newest events only, so the timeline read by diagnostics and
+// scenarios cannot grow without limit or slow every read.
+const maxEventHistory = 1000
+
+// normalizeName trims a display name and caps its length. An empty result means
+// the caller wants the automatic name, so it is stored as empty and the UI falls
+// back to its generated label.
+func normalizeName(name string) string {
+	name = strings.TrimSpace(name)
+	if runes := []rune(name); len(runes) > maxNameLength {
+		name = string(runes[:maxNameLength])
+	}
+	return name
 }
 
 // Track is one audio, video or subtitle track of a Source.
@@ -98,16 +121,20 @@ type EventKind string
 const (
 	EventSourceAdded       EventKind = "source.added"
 	EventSourceRemoved     EventKind = "source.removed"
+	EventSourceRenamed     EventKind = "source.renamed"
 	EventTrackAdded        EventKind = "track.added"
 	EventTrackRemoved      EventKind = "track.removed"
 	EventSyncGroupAdded    EventKind = "syncgroup.added"
+	EventSyncGroupUpdated  EventKind = "syncgroup.updated"
 	EventSyncGroupRemoved  EventKind = "syncgroup.removed"
 	EventSceneAdded        EventKind = "scene.added"
 	EventSceneRemoved      EventKind = "scene.removed"
+	EventSceneRenamed      EventKind = "scene.renamed"
 	EventSceneVideoSet     EventKind = "scene.video-set"
 	EventSceneAudioSet     EventKind = "scene.audio-set"
 	EventSceneAudioRemoved EventKind = "scene.audio-removed"
 	EventOutputAdded       EventKind = "output.added"
+	EventOutputSceneSet    EventKind = "output.scene.set"
 	EventOutputRemoved     EventKind = "output.removed"
 )
 
@@ -137,6 +164,9 @@ type Session struct {
 	outputN int
 
 	eventSeq uint64
+	// eventHead is the ring slot of the oldest kept event once events is full;
+	// it stays zero until the list first reaches maxEventHistory.
+	eventHead int
 
 	sources []*Source
 	tracks  []*Track
@@ -199,6 +229,22 @@ func (s *Session) RemoveSource(id SourceID) error {
 	return nil
 }
 
+// RenameSource gives a source a user-set display name. The name is trimmed and
+// capped; an empty name clears it, so the UI falls back to the address's short
+// form. Only a successful rename records an event.
+func (s *Session) RenameSource(id SourceID, name string) error {
+	if err := s.requireOpen("rename source"); err != nil {
+		return err
+	}
+	src, ok := s.source(id)
+	if !ok {
+		return fmt.Errorf("rename source %s: %w", id, ErrNotFound)
+	}
+	src.Name = normalizeName(name)
+	s.record(EventSourceRenamed, string(id))
+	return nil
+}
+
 // AddTrack adds a track read from an existing source.
 func (s *Session) AddTrack(source SourceID, kind MediaKind, label string) (Track, error) {
 	if err := s.requireOpen("add track"); err != nil {
@@ -245,26 +291,9 @@ func (s *Session) AddSyncGroup(reference TrackID, tracks ...TrackID) (SyncGroup,
 	if err := s.requireOpen("add sync group"); err != nil {
 		return SyncGroup{}, err
 	}
-	if len(tracks) == 0 {
-		return SyncGroup{}, fmt.Errorf("add sync group: %w", ErrInvalid)
+	if err := s.validateSyncGroup("", reference, tracks); err != nil {
+		return SyncGroup{}, err
 	}
-	seen := make(map[TrackID]bool, len(tracks))
-	for _, id := range tracks {
-		if seen[id] {
-			return SyncGroup{}, fmt.Errorf("add sync group track %s: %w", id, ErrDuplicateTrack)
-		}
-		seen[id] = true
-		if _, ok := s.track(id); !ok {
-			return SyncGroup{}, fmt.Errorf("add sync group track %s: %w", id, ErrNotFound)
-		}
-		if _, ok := s.groupOf(id); ok {
-			return SyncGroup{}, fmt.Errorf("add sync group track %s: %w", id, ErrSyncConflict)
-		}
-	}
-	if !seen[reference] {
-		return SyncGroup{}, fmt.Errorf("add sync group reference %s: %w", reference, ErrNotMember)
-	}
-
 	s.groupN++
 	group := &SyncGroup{
 		ID:        SyncGroupID(fmt.Sprintf("syncgroup-%d", s.groupN)),
@@ -273,7 +302,54 @@ func (s *Session) AddSyncGroup(reference TrackID, tracks ...TrackID) (SyncGroup,
 	}
 	s.groups = append(s.groups, group)
 	s.record(EventSyncGroupAdded, string(group.ID))
-	return *group, nil
+	return copySyncGroup(group), nil
+}
+
+// UpdateSyncGroup replaces the reference and members while retaining the group ID.
+func (s *Session) UpdateSyncGroup(id SyncGroupID, reference TrackID, tracks ...TrackID) (SyncGroup, error) {
+	if err := s.requireOpen("update sync group"); err != nil {
+		return SyncGroup{}, err
+	}
+	group, ok := s.group(id)
+	if !ok {
+		return SyncGroup{}, fmt.Errorf("update sync group %s: %w", id, ErrNotFound)
+	}
+	if err := s.validateSyncGroup(id, reference, tracks); err != nil {
+		return SyncGroup{}, err
+	}
+	group.Reference = reference
+	group.Tracks = append([]TrackID(nil), tracks...)
+	s.record(EventSyncGroupUpdated, string(id))
+	return copySyncGroup(group), nil
+}
+
+func copySyncGroup(group *SyncGroup) SyncGroup {
+	result := *group
+	result.Tracks = slices.Clone(group.Tracks)
+	return result
+}
+
+func (s *Session) validateSyncGroup(current SyncGroupID, reference TrackID, tracks []TrackID) error {
+	if len(tracks) == 0 {
+		return fmt.Errorf("sync group: %w", ErrInvalid)
+	}
+	seen := make(map[TrackID]bool, len(tracks))
+	for _, id := range tracks {
+		if seen[id] {
+			return fmt.Errorf("sync group track %s: %w", id, ErrDuplicateTrack)
+		}
+		seen[id] = true
+		if _, ok := s.track(id); !ok {
+			return fmt.Errorf("sync group track %s: %w", id, ErrNotFound)
+		}
+		if group, ok := s.groupOf(id); ok && group.ID != current {
+			return fmt.Errorf("sync group track %s: %w", id, ErrSyncConflict)
+		}
+	}
+	if !seen[reference] {
+		return fmt.Errorf("sync group reference %s: %w", reference, ErrNotMember)
+	}
+	return nil
 }
 
 // RemoveSyncGroup removes a sync group without touching its tracks.
@@ -295,7 +371,7 @@ func (s *Session) AddScene(name string) (Scene, error) {
 		return Scene{}, err
 	}
 	s.sceneN++
-	scene := &Scene{ID: SceneID(fmt.Sprintf("scene-%d", s.sceneN)), Name: strings.TrimSpace(name)}
+	scene := &Scene{ID: SceneID(fmt.Sprintf("scene-%d", s.sceneN)), Name: normalizeName(name)}
 	s.scenes = append(s.scenes, scene)
 	s.record(EventSceneAdded, string(scene.ID))
 	return *scene, nil
@@ -317,6 +393,22 @@ func (s *Session) RemoveScene(id SceneID) error {
 	}
 	s.scenes = removeByID(s.scenes, func(v *Scene) bool { return v.ID == id })
 	s.record(EventSceneRemoved, string(id))
+	return nil
+}
+
+// RenameScene gives a scene a user-set display name. The name is trimmed and
+// capped; an empty name clears it, so the UI falls back to the generated
+// "Scene N" label. Only a successful rename records an event.
+func (s *Session) RenameScene(id SceneID, name string) error {
+	if err := s.requireOpen("rename scene"); err != nil {
+		return err
+	}
+	scene, ok := s.scene(id)
+	if !ok {
+		return fmt.Errorf("rename scene %s: %w", id, ErrNotFound)
+	}
+	scene.Name = normalizeName(name)
+	s.record(EventSceneRenamed, string(id))
 	return nil
 }
 
@@ -440,13 +532,36 @@ func (s *Session) RemoveOutput(id OutputID) error {
 	return nil
 }
 
+// SetOutputScene changes the scene handed to an existing output.
+func (s *Session) SetOutputScene(id OutputID, scene SceneID) (Output, error) {
+	if err := s.requireOpen("set output scene"); err != nil {
+		return Output{}, err
+	}
+	output, ok := s.output(id)
+	if !ok {
+		return Output{}, fmt.Errorf("set output scene %s: %w", id, ErrNotFound)
+	}
+	if _, ok := s.scene(scene); !ok {
+		return Output{}, fmt.Errorf("set output scene %s: %w", scene, ErrNotFound)
+	}
+	output.Scene = scene
+	s.record(EventOutputSceneSet, string(id))
+	return *output, nil
+}
+
 // Source returns one source.
 func (s *Session) Source(id SourceID) (Source, error) {
 	src, ok := s.source(id)
 	if !ok {
 		return Source{}, fmt.Errorf("source %s: %w", id, ErrNotFound)
 	}
-	return *src, nil
+	return copySource(src), nil
+}
+
+func copySource(source *Source) Source {
+	result := *source
+	result.Tracks = slices.Clone(source.Tracks)
+	return result
 }
 
 // Track returns one track.
@@ -471,8 +586,7 @@ func (s *Session) Scene(id SceneID) (Scene, error) {
 func (s *Session) Sources() []Source {
 	out := make([]Source, len(s.sources))
 	for i, src := range s.sources {
-		out[i] = *src
-		out[i].Tracks = append([]TrackID(nil), src.Tracks...)
+		out[i] = copySource(src)
 	}
 	return out
 }
@@ -490,8 +604,7 @@ func (s *Session) Tracks() []Track {
 func (s *Session) SyncGroups() []SyncGroup {
 	out := make([]SyncGroup, len(s.groups))
 	for i, group := range s.groups {
-		out[i] = *group
-		out[i].Tracks = append([]TrackID(nil), group.Tracks...)
+		out[i] = copySyncGroup(group)
 	}
 	return out
 }
@@ -514,9 +627,15 @@ func (s *Session) Outputs() []Output {
 	return out
 }
 
-// Events returns every applied change in order.
+// Events returns the most recent applied changes in order. The list is bounded:
+// a long-running session keeps at most maxEventHistory events, the newest ones,
+// so its size and read cost cannot grow without limit.
 func (s *Session) Events() []Event {
-	return append([]Event(nil), s.events...)
+	n := len(s.events)
+	out := make([]Event, n)
+	copied := copy(out, s.events[s.eventHead:])
+	copy(out[copied:], s.events[:s.eventHead])
+	return out
 }
 
 // requireOpen reports a mutation attempted on a closed Session.
@@ -622,7 +741,15 @@ func (s *Session) output(id OutputID) (*Output, bool) {
 
 func (s *Session) record(kind EventKind, object string) {
 	s.eventSeq++
-	s.events = append(s.events, Event{Seq: s.eventSeq, Kind: kind, Object: object})
+	ev := Event{Seq: s.eventSeq, Kind: kind, Object: object}
+	if len(s.events) < maxEventHistory {
+		s.events = append(s.events, ev)
+		return
+	}
+	// The ring is full: overwrite the oldest slot and move the head forward so
+	// the newest event is kept and the oldest is dropped.
+	s.events[s.eventHead] = ev
+	s.eventHead = (s.eventHead + 1) % maxEventHistory
 }
 
 func copyScene(scene *Scene) Scene {

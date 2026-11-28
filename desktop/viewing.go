@@ -89,7 +89,7 @@ func compactSize(saved mygo.Rectangle) mygo.Rectangle {
 // time. Entering the mode already in use does nothing, so a repeated keypress or
 // double click cannot save the viewing geometry as if it were the workbench.
 func (a *appState) enterViewing(mode viewingMode, w viewingWindow) {
-	if mode == viewWorkbench || a.viewing == mode {
+	if w == nil || mode == viewWorkbench || a.viewing == mode {
 		return
 	}
 	if a.viewing == viewWorkbench {
@@ -108,6 +108,7 @@ func (a *appState) enterViewing(mode viewingMode, w viewingWindow) {
 	if mode == viewFullscreen && a.viewing != viewFullscreen {
 		a.viewingReturn = a.viewing
 	}
+	previous := a.viewing
 	a.viewing = mode
 	// Entering a mode shows the overlay once, then it must fade on its own.
 	// Setting the flag without arming the timer leaves the bar on screen
@@ -116,6 +117,22 @@ func (a *appState) enterViewing(mode viewingMode, w viewingWindow) {
 	switch mode {
 	case viewFullscreen:
 		w.SetFullScreen(true)
+	case viewCinema:
+		if previous == viewWorkbench {
+			break
+		}
+		if w.IsFullScreen() {
+			w.SetFullScreen(false)
+		}
+		if a.onTop != a.savedForViewing.onTop {
+			a.onTop = a.savedForViewing.onTop
+			w.SetAlwaysOnTop(a.onTop)
+		}
+		if a.savedForViewing.maximized {
+			w.Maximize()
+		} else if a.savedForViewing.saved {
+			w.SetBounds(a.savedForViewing.bounds)
+		}
 	case viewCompact:
 		if w.IsFullScreen() {
 			w.SetFullScreen(false)
@@ -132,6 +149,9 @@ func (a *appState) enterViewing(mode viewingMode, w viewingWindow) {
 // did to the window. It is safe to call from the workbench: nothing is restored
 // that was never saved.
 func (a *appState) leaveViewing(w viewingWindow) {
+	if w == nil {
+		return
+	}
 	if !a.savedForViewing.saved {
 		a.viewing = viewWorkbench
 		return
@@ -177,6 +197,9 @@ func (a *appState) toggleFullscreen(w viewingWindow) {
 // leaveFullscreen returns to the mode that was showing before the full
 // screen. From the workbench that is the way out of watching altogether.
 func (a *appState) leaveFullscreen(w viewingWindow) {
+	if w == nil {
+		return
+	}
 	back := a.viewingReturn
 	a.viewingReturn = viewWorkbench
 	if back == viewWorkbench || back == viewFullscreen {
@@ -195,6 +218,9 @@ func (a *appState) leaveFullscreen(w viewingWindow) {
 // behind the browser the stream came from. Leaving compact restores whatever
 // the window had before, so the switch never outlives the mode that offered it.
 func (a *appState) toggleOnTop(w viewingWindow) {
+	if w == nil {
+		return
+	}
 	a.onTop = !a.onTop
 	w.SetAlwaysOnTop(a.onTop)
 	a.invalidate()
@@ -357,12 +383,17 @@ func (a *appState) viewingControls(c *ui.Context, width, height float32) ui.Elem
 		// that the timer promise keeps in place.
 		first := a.focusControls
 		a.focusControls = false
-		playing := a.sync.playhead.Playing()
-		label, buttonWidth := a.tr("Pause", "暂停"), float32(88)
-		if !playing {
-			label = a.tr("Play", "播放")
+		plan, planErr := a.stageTransportPlan()
+		if planErr != nil {
+			plan = transportPlan{}
 		}
-		play := ui.Button(c.Key("view-play"), label).Width(buttonWidth).Height(a.controlHeight() - 2)
+		playing := a.playingFor(plan)
+		label := a.transportActionLabel(plan, playing)
+		play := ui.Button(c.Key("view-play"), label).Width(180).Height(a.controlHeight() - 2).
+			Tooltip(a.transportActionTooltip(plan))
+		if len(plan.items) == 0 {
+			play = play.Disabled(true)
+		}
 		if first {
 			play = play.AutoFocus()
 		}
@@ -374,14 +405,14 @@ func (a *appState) viewingControls(c *ui.Context, width, height float32) ui.Elem
 			a.report(a.runCommand(command{Kind: kind}))
 			a.showControls()
 		}
-		if main := a.first(); main != nil && main.player != nil {
-			muted := main.player.Muted()
+		if main := a.firstShown(); main != nil {
+			muted := a.sourceMuted(main)
 			muteText := a.tr("Mute", "静音")
 			if muted {
 				muteText = a.tr("Unmute", "取消静音")
 			}
 			if ui.Button(c.Key("view-mute"), muteText).Width(88).
-				Height(a.controlHeight() - 2).Clicked() {
+				Height(a.controlHeight() - 2).Disabled(main.audio == "").Clicked() {
 				a.report(a.runCommand(command{Kind: commandMute, Source: main.source.ID}))
 				a.showControls()
 			}
@@ -458,8 +489,12 @@ func (a *appState) viewingShortcuts(c *ui.Context) {
 		a.leaveViewing(a.windowRef())
 	})
 	c.OnWindowShortcut(0, ui.KeySpace, func() {
+		plan, err := a.stageTransportPlan()
+		if err != nil || len(plan.items) == 0 {
+			return
+		}
 		kind := commandPlay
-		if a.sync.playhead.Playing() {
+		if a.playingFor(plan) {
 			kind = commandPause
 		}
 		a.report(a.runCommand(command{Kind: kind}))
@@ -476,7 +511,7 @@ func (a *appState) viewingShortcuts(c *ui.Context) {
 	})
 	c.OnWindowShortcut(0, ui.KeyM, func() {
 		it := a.firstShown()
-		if it == nil || it.player == nil {
+		if it == nil || it.player == nil || it.audio == "" {
 			return
 		}
 		a.report(a.runCommand(command{Kind: commandMute, Source: it.source.ID}))
@@ -491,10 +526,10 @@ func (a *appState) viewingShortcuts(c *ui.Context) {
 // are the equivalent.
 func (a *appState) stepVolume(delta float32) {
 	it := a.firstShown()
-	if it == nil || it.player == nil {
+	if it == nil || it.player == nil || it.audio == "" || !a.routed(it) {
 		return
 	}
-	level := it.volume + float64(delta)
+	level := a.shownLevel(it) + float64(delta)
 	if level < 0 {
 		level = 0
 	}
@@ -508,6 +543,11 @@ func (a *appState) stepVolume(delta float32) {
 // firstShown is the source the watching keys act on: the first one the scene
 // shows, because a watching mode draws whoever the scene shows.
 func (a *appState) firstShown() *item {
+	for _, id := range a.layoutTaken {
+		if it := a.find(id); it != nil && it.shown && it.player != nil {
+			return it
+		}
+	}
 	for _, it := range a.items {
 		if it.shown && it.player != nil {
 			return it

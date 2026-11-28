@@ -29,22 +29,26 @@ import (
 type commandKind string
 
 const (
-	commandShow    commandKind = "show"
-	commandHear    commandKind = "hear"
-	commandAllow   commandKind = "allow-audio"
-	commandVolume  commandKind = "volume"
-	commandNudge   commandKind = "nudge"
-	commandPause   commandKind = "pause-all"
-	commandPlay    commandKind = "play-all"
-	commandReload  commandKind = "reload"
-	commandDVRInfo commandKind = "dvr-info"
-	commandAdd     commandKind = "add-source"
-	commandRemove  commandKind = "remove-source"
-	commandRetry   commandKind = "retry"
+	commandShow        commandKind = "show"
+	commandHear        commandKind = "hear"
+	commandAllow       commandKind = "allow-audio"
+	commandVolume      commandKind = "volume"
+	commandNudge       commandKind = "nudge"
+	commandPause       commandKind = "pause-all"
+	commandPlay        commandKind = "play-all"
+	commandSourcePause commandKind = "pause-source"
+	commandSourcePlay  commandKind = "play-source"
+	commandPrimary     commandKind = "primary-source"
+	commandReload      commandKind = "reload"
+	commandDVRInfo     commandKind = "dvr-info"
+	commandAdd         commandKind = "add-source"
+	commandRemove      commandKind = "remove-source"
+	commandRetry       commandKind = "retry"
 	// commandCancelImport stops a read that has not landed yet. It is a real
 	// command, not a disabled placeholder: the context it cancels is the one
 	// the probe is waiting on.
-	commandCancelImport commandKind = "cancel-import"
+	commandCancelImport  commandKind = "cancel-import"
+	commandCancelRestore commandKind = "cancel-restore"
 	// commandMute is a source's own mute, commandSolo the listening overlay that
 	// keeps one source audible, and commandMasterMute the overlay that silences
 	// everything. None of them edits the scene's routing.
@@ -102,12 +106,27 @@ func (r commandResult) String() string {
 // itemBySource finds the row a command names. Rows are looked up by identifier
 // because a removal renumbers the list under the window's feet.
 func (a *appState) itemBySource(id core.SourceID) (*item, int, error) {
+	if id == "" {
+		return nil, -1, fmt.Errorf("%w: no source was selected", UnknownSourceError)
+	}
 	for index, it := range a.items {
-		if it.source.ID == id {
+		if itemKey(it) == id ||
+			(it.persistentID != "" && core.SourceID("saved:"+it.persistentID) == id) {
 			return it, index, nil
 		}
 	}
 	return nil, -1, fmt.Errorf("%w: %s", UnknownSourceError, id)
+}
+
+// commandChangesSession reports whether a successful command changed something
+// the session snapshot keeps, so the change is written once instead of on every
+// command (a pause or a nudge does not change the saved arrangement).
+func commandChangesSession(kind commandKind) bool {
+	switch kind {
+	case commandShow, commandHear, commandVolume, commandMute, commandRemove:
+		return true
+	}
+	return false
 }
 
 // runCommand is the one door a button uses. It must be called on the drawing
@@ -120,27 +139,43 @@ func (a *appState) runCommand(cmd command) commandResult {
 		a.lastCommand = result
 		if err != nil {
 			a.lastErr = safeOpenError(err)
+		} else if commandChangesSession(cmd.Kind) {
+			// A command that changed what the session holds is worth saving:
+			// the next start should come back to this arrangement.
+			a.saveSession()
 		}
 		return result
 	}
 
 	switch cmd.Kind {
 	case commandPause, commandPlay:
-		var problems []string
-		if cmd.Kind == commandPause {
-			problems = a.pauseAll()
-		} else {
-			problems = a.playAll()
+		plan, err := a.stageTransportPlan()
+		if err != nil {
+			return finish(err, "")
 		}
+		if len(plan.items) == 0 {
+			return finish(errors.New("the current stage has no players to control"), "no players on the current stage")
+		}
+		play := cmd.Kind == commandPlay
+		problems := a.applyTransportPlan(plan, play)
 		if len(problems) > 0 {
-			return finish(errors.New(problems[0]), fmt.Sprintf("%d member(s) did not accept it", len(problems)))
+			return finish(errors.New(problems[0]), fmt.Sprintf("%d stage or sync-group player(s) did not accept it", len(problems)))
 		}
-		return finish(nil, "every member accepted it")
+		if plan.syncGroup {
+			return finish(nil, "stage players and the intersecting sync group accepted it")
+		}
+		return finish(nil, "stage players accepted it")
 
 	case commandReload:
 		it, _, err := a.itemBySource(cmd.Source)
 		if err != nil {
 			return finish(err, "")
+		}
+		if it.lifecyclePending {
+			return finish(errPlayerClosing, "")
+		}
+		if it.replay != nil || it.swap != nil {
+			return finish(errPlayerReplaying, "")
 		}
 		if it.player == nil {
 			return finish(fmt.Errorf("%s has no player to reopen", a.name(it)), "")
@@ -149,15 +184,40 @@ func (a *appState) runCommand(cmd command) commandResult {
 		a.reopenPlayer(it)
 		return finish(nil, "asked for a new player; the old one stays until the new one has a picture")
 
-	case commandShow, commandHear, commandAllow, commandVolume, commandNudge, commandMute, commandSolo:
+	case commandShow, commandHear, commandAllow, commandVolume, commandNudge, commandMute, commandSolo, commandSourcePause, commandSourcePlay, commandPrimary:
 		it, index, err := a.itemBySource(cmd.Source)
 		if err != nil {
 			return finish(err, "")
+		}
+		if !a.isStageMember(it) {
+			return finish(errors.New("link this source to the current stage from the shared catalog first"), "")
 		}
 		result.Generation = it.generation
 		switch cmd.Kind {
 		case commandShow:
 			err = a.showVideo(index)
+		case commandSourcePause, commandSourcePlay:
+			if a.sourceInExplicitGroup(it) {
+				return finish(errors.New("this source belongs to a sync group; use the group transport"), "")
+			}
+			player := it.outputPlayer()
+			if player == nil {
+				return finish(errors.New("this source has no player"), "")
+			}
+			if cmd.Kind == commandSourcePause {
+				player.Pause()
+				if _, grouped := a.existingGroup(); !grouped && a.sync != nil && a.sync.playhead != nil && !a.playing() {
+					a.sync.playhead.Pause()
+				}
+			} else {
+				player.Play()
+			}
+			err = player.Err()
+		case commandPrimary:
+			if it.source.ID == "" || it.player == nil || !it.shown {
+				return finish(errors.New("show this source before making it primary"), "")
+			}
+			a.setPrimary(it.source.ID)
 		case commandHear:
 			err = a.hearAudio(index, it.volume)
 		case commandAllow:
@@ -201,6 +261,7 @@ func (a *appState) runCommand(cmd command) commandResult {
 		a.importToken++
 		token := a.importToken
 		a.importing = uri
+		a.importScene = a.scene
 		a.importText = ""
 		a.importSince = time.Now()
 		a.importCancel = cancel
@@ -215,18 +276,33 @@ func (a *appState) runCommand(cmd command) commandResult {
 		}
 		uri := a.importing
 		a.importToken++
-		if a.importCancel != nil {
-			a.importCancel()
-			a.importCancel = nil
-		}
-		a.closeImportTicker()
-		a.importing = ""
+		a.startupMediaQueue = nil
+		a.startupMediaScene = ""
+		a.pendingImportOrigin = originAdded
+		a.importScene = ""
+		a.clearUnavailableRetry()
 		a.importText = ""
 		result.Message = fmt.Sprintf("cancelled reading %s; nothing was added", shortURI(uri))
 		a.lastCommand = result
 		a.report(result)
 		a.lastErr = nil
 		return result
+
+	case commandCancelRestore:
+		if a.startupRestoreCancel == nil {
+			return finish(errors.New("no saved-source restore is running"), "")
+		}
+		a.startupRestoreCancel()
+		a.startupRestoreCancel = nil
+		for _, it := range a.items {
+			if it.source.ID == "" && (it.restoring || it.openErr == nil && a.sceneConsumesItem(a.scene, it)) {
+				it.openErr = errors.New(a.tr("Recovery was cancelled. Retry or choose an address.", "已取消恢复。可以重试或重新选择地址。"))
+			}
+			it.restoring = false
+		}
+		result.Message = "cancelled saved-source recovery; saved bindings are unchanged"
+		a.invalidate()
+		return finish(nil, result.Message)
 
 	case commandRemove:
 		it, index, err := a.itemBySource(cmd.Source)
@@ -238,8 +314,8 @@ func (a *appState) runCommand(cmd command) commandResult {
 		if err := a.remove(index); err != nil {
 			return finish(err, "")
 		}
-		if a.selected == cmd.Source {
-			a.selected = ""
+		if a.selected == cmd.Source || a.selected == itemKey(it) {
+			a.setSelectedSource("")
 		}
 		return finish(nil, fmt.Sprintf("removed %s; %d source(s) left", name, len(a.items)))
 
@@ -248,14 +324,41 @@ func (a *appState) runCommand(cmd command) commandResult {
 		if err != nil {
 			return finish(err, "")
 		}
+		if it.lifecyclePending {
+			return finish(errPlayerClosing, "")
+		}
+		if it.replay != nil || it.swap != nil {
+			return finish(errPlayerReplaying, "")
+		}
 		result.Generation = it.generation
 		if it.openErr == nil && it.player != nil {
 			return finish(fmt.Errorf("%s has not failed, there is nothing to retry", a.name(it)), "")
+		}
+		uri := strings.TrimSpace(cmd.URI)
+		if uri != "" {
+			if err := a.mediaAddressProblem(cmd.URI); err != nil {
+				return finish(err, "")
+			}
+		}
+		if uri == "" && it.source.ID == "" {
+			uri = it.uri
+		}
+		if uri != "" {
+			if err := a.retryUnavailableSource(it, uri); err != nil {
+				return finish(err, "the source could not be reopened")
+			}
+			return finish(nil, "retrying "+shortURI(uri)+" in the background")
+		}
+		if it.source.ID == "" {
+			return finish(fmt.Errorf("%s needs a new address before it can be reopened", a.name(it)), "")
 		}
 		it.openErr = nil
 		a.reopenPlayer(it)
 		if it.openErr != nil {
 			return finish(it.openErr, "the retry opened no player")
+		}
+		if it.handover == nil && it.player != nil && (a.window != nil || a.onMain != nil) {
+			go a.watchFirstOpen(it, it.generation, true)
 		}
 		return finish(nil, "opened a new player for "+a.name(it))
 
@@ -287,7 +390,7 @@ func (a *appState) shortcutCommand(kind commandKind) {
 		a.report(result)
 		return
 	}
-	result := a.runCommand(command{Kind: kind, Source: it.source.ID})
+	result := a.runCommand(command{Kind: kind, Source: itemKey(it)})
 	a.report(result)
 }
 
@@ -360,35 +463,11 @@ func (a *appState) snapshot() sessionSnapshot {
 			})
 		}
 	}
+	if n := len(a.items); n > 0 {
+		out.Sources = make([]sourceSnapshot, 0, n)
+	}
 	for _, it := range a.items {
-		entry := sourceSnapshot{
-			ID:         it.source.ID,
-			URI:        it.uri,
-			Video:      it.video,
-			Audio:      it.audio,
-			Generation: it.generation,
-			Shown:      it.shown,
-			Volume:     it.volume,
-			OpenErr:    errorString(it.openErr),
-		}
-		if track := it.audio; track != "" {
-			entry.Aligned = a.sync.timeline.Aligned(track)
-			if shift, ok := a.sync.timeline.Shift(track); ok {
-				entry.Offset = shift.Offset
-			}
-		}
-		if it.player != nil {
-			state := readPlayer(rawPlayer(it.player))
-			entry.Player = true
-			entry.Ready = state.Ready
-			entry.Playing = state.Playing
-			entry.Buffering = state.Buf
-			entry.Muted = state.Muted
-			entry.Volume = state.Volume
-			entry.Position = state.Pos
-			entry.Duration = state.Dur
-		}
-		out.Sources = append(out.Sources, entry)
+		out.Sources = append(out.Sources, a.snapshotEntry(it))
 	}
 	out.Event = a.sync.playhead.Event()
 	out.Playing = a.sync.playhead.Playing()
@@ -409,6 +488,40 @@ func (a *appState) snapshot() sessionSnapshot {
 		out.LastCommand = "none yet"
 	}
 	return out
+}
+
+// snapshotEntry is the snapshot row for one source. snapshot builds a whole
+// frame's worth by calling it per item, and entryOf asks for a single row, so
+// a draw path that needs one row no longer has to rebuild every row first.
+func (a *appState) snapshotEntry(it *item) sourceSnapshot {
+	entry := sourceSnapshot{
+		ID:         it.source.ID,
+		URI:        it.uri,
+		Video:      it.video,
+		Audio:      it.audio,
+		Generation: it.generation,
+		Shown:      it.shown,
+		Volume:     it.volume,
+		OpenErr:    errorString(it.openErr),
+	}
+	if track := a.trackOfAudio(it); track != "" && a.sync != nil {
+		entry.Aligned = a.sync.timeline.Aligned(track)
+		if shift, ok := a.sync.timeline.Shift(track); ok {
+			entry.Offset = shift.Offset
+		}
+	}
+	if it.player != nil {
+		state := readPlayer(rawPlayer(it.player))
+		entry.Player = true
+		entry.Ready = state.Ready
+		entry.Playing = state.Playing
+		entry.Buffering = state.Buf
+		entry.Muted = state.Muted
+		entry.Volume = state.Volume
+		entry.Position = state.Pos
+		entry.Duration = state.Dur
+	}
+	return entry
 }
 
 // report writes a command's outcome where a scenario and a reader of the log

@@ -58,11 +58,11 @@ func (a *appState) addChoiceLabel(c addChoice) string {
 func (a *appState) addChoiceExplanation(c addChoice) string {
 	switch c {
 	case addChoiceFile:
-		return a.tr("a video on this machine; the system picker chooses it", "本机上的视频，由系统文件选择器挑选")
+		return a.tr("Choose a video file from this device", "从本机选择视频文件")
 	case addChoiceMedia:
-		return a.tr("an http(s) playlist or file, read in the background", "一个 http(s) 播放列表或文件，在后台读取")
+		return a.tr("Enter an HTTP or HTTPS playlist or media file URL", "填写播放列表或媒体文件的 HTTP/HTTPS 地址")
 	case addChoiceSite:
-		return a.tr("opens the page in your browser; the extension hands the media back", "在浏览器里打开页面，由扩展把媒体交回来")
+		return a.tr("Open the page in your browser, then send its media with the extension", "在浏览器打开网页后，用扩展发送媒体地址")
 	}
 	return ""
 }
@@ -105,9 +105,8 @@ func (a *appState) submitAddSource() (commandResult, bool) {
 			a.addNote, a.addNoteBad = err.Error(), true
 			return commandResult{}, false
 		}
-		// P4 opens the page and says plainly that the media is still in the
-		// browser: an opened page is not a source, and handing the stream back
-		// is the extension step, which this build does not have.
+		// The page opens in the browser. The extension can send its media
+		// address back after the user selects it.
 		result, ok := a.openSiteAddress(a.addSiteText)
 		if !ok {
 			a.addNote, a.addNoteBad = result.Err.Error(), true
@@ -122,7 +121,7 @@ func (a *appState) submitAddSource() (commandResult, bool) {
 		// P2: the picker blocks until it is dismissed, so it runs off the
 		// drawing thread and comes back through acceptPickedFile.
 		if a.pickingFile {
-			a.addNote = "a file dialog is already open; finish it first"
+			a.addNote = a.tr("a file dialog is already open; finish it first", "请先关闭已打开的文件选择窗口。")
 			a.addNoteBad = false
 			return commandResult{}, false
 		}
@@ -130,7 +129,7 @@ func (a *appState) submitAddSource() (commandResult, bool) {
 		a.startFilePick()
 		return commandResult{}, true
 	}
-	a.addNote = "choose one of the three first"
+	a.addNote = a.tr("Choose a source type first.", "请先选择来源类型。")
 	a.addNoteBad = false
 	return commandResult{}, false
 }
@@ -204,11 +203,8 @@ func (a *appState) acceptPickedFile(path string, err error) {
 func (a *appState) openSiteAddress(text string) (commandResult, bool) {
 	address := strings.TrimSpace(text)
 	command := command{Kind: commandAdd, URI: address}
-	refuse := func(format string, args ...any) (commandResult, bool) {
-		return commandResult{Command: command, At: time.Now(), Err: fmt.Errorf(format, args...)}, false
-	}
-	if _, err := url.Parse(address); err != nil {
-		return refuse("%q is not an address a browser can open: %v", address, err)
+	if err := a.siteAddressProblem(address); err != nil {
+		return commandResult{Command: command, At: time.Now(), Err: err}, false
 	}
 	display := stripSecrets(address)
 	opener := a.openURL
@@ -216,7 +212,8 @@ func (a *appState) openSiteAddress(text string) (commandResult, bool) {
 		opener = a.contextOpenURL
 	}
 	if opener == nil {
-		return refuse("this build has no system browser to open %s", display)
+		err := fmt.Errorf(a.tr("this build has no system browser to open %s", "没有可用的系统浏览器来打开 %s。"), display)
+		return commandResult{Command: command, At: time.Now(), Err: err}, false
 	}
 	opener(address, func(err error) {
 		if err != nil {
@@ -230,7 +227,8 @@ func (a *appState) openSiteAddress(text string) (commandResult, bool) {
 	result := commandResult{
 		Command: command,
 		At:      time.Now(),
-		Message: fmt.Sprintf("opened %s in your browser; the MuxShift extension there can hand one media address back to this window", display),
+		Message: fmt.Sprintf(a.tr("opened %s in your browser; the MuxShift extension there can hand one media address back to this window",
+			"已在浏览器打开 %s。可用 MuxShift 扩展把媒体地址发送到此窗口。"), display),
 	}
 	a.report(result)
 	return result, true
@@ -270,32 +268,14 @@ func (a *appState) addSourcePanel(c *ui.Context) {
 	ui.Column(c).Gap(spaceSm).MinWidth(412).MaxWidth(440).Children(func() {
 		ui.Text(c, a.tr("Add a source", "添加来源")).FontSize(textTitle).FontWeight(600).
 			TextColor(colorText)
-		ui.Row(c).Gap(spaceSm).WidthPercent(100).Children(func() {
+		track := a.segmentTrack(c)
+		track.WidthPercent(100).Children(func() {
 			for _, choice := range []addChoice{addChoiceFile, addChoiceMedia, addChoiceSite} {
-				selected := a.addChoice == choice
-				button := ui.ButtonBase(c.Key("add-"+choice.key())).Grow(1).Height(32).
-					Padding(0, spaceSm).Radius(radiusMd).AlignItems(ui.Center)
-				fill, ink := colorBg, colorTextDim
-				if selected {
-					fill, ink = colorSelected, colorSelectedText
-				}
-				if button.Pressed() {
-					fill, ink = colorPressed, colorText
-				} else if button.Hovered() {
-					ink = colorText
-					if !selected {
-						fill = colorHover
-					}
-				}
-				button = button.Background(fill).TextColor(ink)
-				button.Children(func() {
-					ui.Text(c, a.addChoiceLabel(choice)).FontSize(textSmall).
-						FontWeight(500).TextColor(ink).SingleLine()
-				})
-				if button.Clicked() {
-					a.addChoice = choice
+				ch := choice
+				a.segmentedOption(c, "add-"+ch.key(), a.addChoiceLabel(ch), a.addChoice == ch, true, func() {
+					a.addChoice = ch
 					a.addNote, a.addNoteBad = "", false
-				}
+				})
 			}
 		})
 		if a.addChoice != addChoiceNone {
@@ -304,19 +284,21 @@ func (a *appState) addSourcePanel(c *ui.Context) {
 		}
 		switch a.addChoice {
 		case addChoiceMedia:
-			ui.TextInput(c, &a.importText).WidthPercent(100).Height(32).
-				Padding(0, 10).Radius(radiusMd).Background(colorInput).
-				Border(1, colorLine).PlaceholderColor(colorDim).
+			field := a.field(c, &a.importText).WidthPercent(100).
 				Placeholder(`https://… .m3u8  or  C:\path\file.mp4`).
 				Invalid(a.addNoteBad)
+			if field.Submitted() {
+				a.submitAddSource()
+			}
 			ui.Text(c, a.tr("the media address or file path to read", "要读取的媒体地址或文件路径")).
 				FontSize(textMicro).FontWeight(400).TextColor(colorDim)
 		case addChoiceSite:
-			ui.TextInput(c, &a.addSiteText).WidthPercent(100).Height(32).
-				Padding(0, 10).Radius(radiusMd).Background(colorInput).
-				Border(1, colorLine).PlaceholderColor(colorDim).
+			field := a.field(c, &a.addSiteText).WidthPercent(100).
 				Placeholder("https://example.com/watch?v=…").
 				Invalid(a.addNoteBad)
+			if field.Submitted() {
+				a.submitAddSource()
+			}
 			ui.Text(c, a.tr("the page to open in your browser", "要在浏览器里打开的页面")).
 				FontSize(textMicro).FontWeight(400).TextColor(colorDim)
 		}
@@ -329,53 +311,22 @@ func (a *appState) addSourcePanel(c *ui.Context) {
 		}
 		ui.Row(c).Gap(spaceSm).WidthPercent(100).AlignItems(ui.Center).Children(func() {
 			ui.Box(c).Grow(1)
-			cancel := ui.ButtonBase(c.Key("add-cancel")).Width(88).Height(32).
-				Padding(0, spaceMd).Radius(radiusMd).AlignItems(ui.Center)
-			cancelFill, cancelInk := colorBg, colorTextDim
-			if cancel.Pressed() {
-				cancelFill, cancelInk = colorPressed, colorText
-			} else if cancel.Hovered() {
-				cancelFill, cancelInk = colorHover, colorText
-			}
-			cancel = cancel.Background(cancelFill).TextColor(cancelInk)
-			cancel.Children(func() {
-				ui.Text(c, a.tr("Cancel", "取消")).FontSize(textSmall).FontWeight(500).
-					TextColor(cancelInk).SingleLine()
-			})
-			if cancel.Clicked() {
+			a.secondaryButton(c, "add-cancel", a.tr("Cancel", "取消"), 88, true, func() {
 				a.closeAddSource()
-			}
+			})
 			enabled := a.addChoice != addChoiceNone
-			submit := ui.ButtonBase(c.Key("add-submit")).Width(116).Height(32).
-				Padding(0, spaceMd).Radius(radiusMd).AlignItems(ui.Center)
-			submitFill, submitInk := ui.Transparent, colorDim
-			if enabled {
-				submitFill, submitInk = colorAccent, colorAccentText
-				if submit.Pressed() {
-					submitFill = colorAccentDown
-				} else if submit.Hovered() {
-					submitFill = colorAccentHi
-				}
-			} else {
-				submit = submit.Disabled(true)
-			}
-			submit = submit.Background(submitFill).TextColor(submitInk)
-			submit.Children(func() {
-				ui.Text(c, a.addSubmitLabel()).FontSize(textSmall).FontWeight(500).
-					TextColor(submitInk).SingleLine()
+			submit := a.primaryButton(c, "add-submit", a.addSubmitLabel(), 116, enabled, func() {
+				a.submitAddSource()
 			})
 			switch a.addChoice {
 			case addChoiceMedia:
-				submit = submit.Tooltip(a.tr("read this address and add it to the session", "读取这个地址并加入本次会话"))
+				submit.Tooltip(a.tr("Add media", "添加媒体"))
 			case addChoiceSite:
-				submit = submit.Tooltip(a.tr("open the page; the extension hands the media back", "打开页面，由扩展把媒体交回来"))
+				submit.Tooltip(a.tr("Open in browser", "在浏览器打开"))
 			case addChoiceFile:
-				submit = submit.Tooltip(a.tr("open the desktop file picker", "打开系统文件选择器"))
+				submit.Tooltip(a.tr("open the desktop file picker", "打开系统文件选择器"))
 			default:
-				submit = submit.Tooltip(a.tr("choose one of the three first", "先选这三者之一"))
-			}
-			if submit.Clicked() {
-				a.submitAddSource()
+				submit.Tooltip(a.tr("Choose a source type first", "请先选择来源类型"))
 			}
 		})
 	})
@@ -394,7 +345,7 @@ func (a *appState) siteAddressProblem(raw string) error {
 	}
 	u, err := url.Parse(text)
 	if err != nil {
-		return errors.New(a.tr("the address is not one a browser can open: ", "浏览器打不开这个地址：") + shortURI(text))
+		return errors.New(a.tr("the address is not one a browser can open", "浏览器打不开这个地址"))
 	}
 	switch u.Scheme {
 	case "http", "https":

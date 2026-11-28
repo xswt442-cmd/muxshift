@@ -68,10 +68,8 @@ var workspaceNames = []struct {
 	index workspace
 }{
 	{"stage", workspaceStage},
-	{"sources", workspaceSources},
 	{"diagnostics", workspaceDiagnostics},
 	{"settings", workspaceSettings},
-	{"mixer", workspaceMixer},
 }
 
 // workspaceID is the stored spelling of a page.
@@ -86,6 +84,11 @@ func workspaceID(w workspace) (string, bool) {
 
 // parseWorkspaceID reads a stored page name.
 func parseWorkspaceID(id string) (workspace, bool) {
+	// P10 keeps old workspace snapshots readable while directing the retired
+	// standalone pages to the stage console that owns those controls now.
+	if id == "sources" || id == "mixer" {
+		return workspaceStage, true
+	}
 	for _, name := range workspaceNames {
 		if name.id == id {
 			return name.index, true
@@ -201,10 +204,25 @@ func (a *appState) workspaceFromWindow(window *mygo.Window, on bool) workspaceMe
 	if window == nil {
 		return a.settings.Workspace
 	}
-	b := window.Bounds()
+	b := a.savedForViewing.bounds
+	if a.viewing == viewWorkbench || !a.savedForViewing.saved {
+		b = window.Bounds()
+	}
 	page, ok := workspaceID(a.workspace)
 	if !ok {
 		page = ""
+	}
+	rail := a.rail
+	if !a.navUp {
+		rail = paneClosed
+	} else if rail == paneClosed {
+		rail = paneOpen
+	}
+	dock := a.dock
+	if !a.dockUp {
+		dock = paneClosed
+	} else if dock == paneClosed {
+		dock = paneOpen
 	}
 	return workspaceMemory{
 		On:        on,
@@ -213,9 +231,9 @@ func (a *appState) workspaceFromWindow(window *mygo.Window, on bool) workspaceMe
 		Y:         b.Y,
 		Width:     b.Width,
 		Height:    b.Height,
-		Rail:      paneModeName(a.rail),
+		Rail:      paneModeName(rail),
 		Inspector: paneModeName(a.inspector),
-		Dock:      paneModeName(a.dock),
+		Dock:      paneModeName(dock),
 	}
 }
 
@@ -262,12 +280,14 @@ func (a *appState) restoreWorkspace(window *mygo.Window, displays []mygo.Display
 	}
 	if mode, ok := parsePaneMode(remembered.Rail); ok {
 		a.rail = mode
+		a.navUp = mode != paneClosed
 	}
 	if mode, ok := parsePaneMode(remembered.Inspector); ok {
 		a.inspector = mode
 	}
 	if mode, ok := parsePaneMode(remembered.Dock); ok {
 		a.dock = mode
+		a.dockUp = mode != paneClosed
 	}
 	frame := clampWorkspace(mygo.Rectangle{
 		X: remembered.X, Y: remembered.Y, Width: remembered.Width, Height: remembered.Height,

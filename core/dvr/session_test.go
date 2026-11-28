@@ -89,7 +89,7 @@ func TestSweepRemovesOnlyASessionWhoseLockIsFree(t *testing.T) {
 	}
 	// A process that ends without closing leaves its directory and marker but
 	// the system drops its lock; that is exactly what this models.
-	if err := dead.lock.release(); err != nil {
+	if err := dead.lock.Close(); err != nil {
 		t.Fatalf("drop the dead session's lock: %v", err)
 	}
 	dead.close = true
@@ -225,7 +225,7 @@ func TestSweepKeepsADirectoryWithoutALockFile(t *testing.T) {
 	}
 	// A lock file that went missing: the directory still claims to be a session
 	// but nothing proves whether that session is over.
-	if err := session.lock.release(); err != nil {
+	if err := session.lock.Close(); err != nil {
 		t.Fatalf("release the lock: %v", err)
 	}
 	session.lock = nil

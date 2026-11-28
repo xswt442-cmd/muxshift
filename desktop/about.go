@@ -47,7 +47,7 @@ func (a *appState) checkForUpdates() {
 		a.updateBusy = false
 		a.updateChecked = true
 		if err != nil {
-			a.updateErr = err.Error()
+			a.updateErr = safeOpenError(err).Error()
 			a.updateLatest = ""
 			a.updateURL = ""
 		} else {
@@ -146,6 +146,10 @@ func compareVersions(current, latest string) (int, error) {
 
 func (a *appState) aboutPage(c *ui.Context) {
 	osName, memory := win.SystemInfo()
+	memoryLine := a.tr("Unavailable", "不可用")
+	if memory > 0 {
+		memoryLine = bytesLine(int64(memory))
+	}
 	rows := []struct {
 		label string
 		value string
@@ -154,7 +158,7 @@ func (a *appState) aboutPage(c *ui.Context) {
 		{a.tr("Built with", "构建环境"), version.BuildLine()},
 		{a.tr("Operating system", "操作系统"), osName + " · " + runtime.GOARCH},
 		{a.tr("Logical processors", "逻辑处理器"), strconv.Itoa(runtime.NumCPU())},
-		{a.tr("Physical memory", "物理内存"), bytesLine(int64(memory))},
+		{a.tr("Physical memory", "物理内存"), memoryLine},
 		{a.tr("Settings file", "设置文件"), a.settingsPath},
 	}
 	for _, row := range rows {
@@ -172,16 +176,12 @@ func (a *appState) aboutPage(c *ui.Context) {
 		if view.busy {
 			label = a.tr("Checking…", "检查中…")
 		}
-		button := ui.Button(c.Key("about-update"), label).Height(30)
-		if view.busy {
-			button = button.Disabled(true)
-		}
-		if button.Clicked() {
+		a.secondaryButton(c, "about-update", label, 0, !view.busy, func() {
 			a.checkForUpdates()
-		}
+		})
 		switch {
 		case view.err != "":
-			ui.Text(c, view.err).FontSize(textSmall).TextColor(colorBad).Wrap()
+			ui.Text(c, a.tr("Update check failed: ", "检查更新失败：")+view.err).FontSize(textSmall).TextColor(colorBad).Wrap()
 		case !view.checked:
 			ui.Text(c, a.tr("Not checked yet.", "还没有检查。")).FontSize(textSmall).TextColor(colorTextDim)
 		case versionsEqual(view.latest, version.BuildVersion):
@@ -191,22 +191,29 @@ func (a *appState) aboutPage(c *ui.Context) {
 		}
 	})
 	if view.url != "" && !versionsEqual(view.latest, version.BuildVersion) {
-		ui.Button(c.Key("about-open-release"), a.tr("Open release page", "打开发布页")).Height(30).Width(180).
-			OnClick(func() {
-				opener := a.openURL
-				if opener == nil {
-					opener = a.contextOpenURL
-				}
-				if opener != nil {
-					opener(view.url, func(err error) {
-						if err != nil {
-							a.lastErr = err
-							a.invalidate()
-						}
-					})
-				}
-			})
+		a.secondaryButton(c, "about-open-release", a.tr("Open release page", "打开发布页"), 180, true, func() {
+			a.openReleasePage(view.url, c.OpenURLThen)
+		})
 	}
+}
+
+func (a *appState) openReleasePage(address string, fallback func(string, func(error))) {
+	opener := a.openURL
+	if opener == nil {
+		opener = a.contextOpenURL
+	}
+	if opener == nil {
+		opener = fallback
+	}
+	if opener == nil {
+		return
+	}
+	opener(address, func(err error) {
+		if err != nil {
+			a.lastErr = safeOpenError(err)
+			a.invalidate()
+		}
+	})
 }
 
 func versionsEqual(a, b string) bool {
@@ -223,8 +230,8 @@ func (a *appState) extensionBlock(c *ui.Context) {
 	dir, err := a.extensionFolder()
 	if err != nil {
 		ui.Text(c, err.Error()).FontSize(textSmall).TextColor(colorBad).Wrap()
-		ui.Text(c, a.tr("a release puts the extension in an extension folder beside muxshift.exe; this build has none",
-			"正式发布包会把扩展放在 muxshift.exe 旁边的 extension 目录；这个构建没有该目录")).
+		ui.Text(c, a.tr("a release ships the extension beside muxshift.exe; this build has none",
+			"正式发布包会把扩展放在 muxshift.exe 旁边；这个构建没有")).
 			FontSize(textMicro).TextColor(colorTextDim).Wrap()
 		return
 	}
@@ -236,11 +243,11 @@ func (a *appState) extensionBlock(c *ui.Context) {
 		if ui.Button(c.Key("about-open-extension"), a.tr("Open the folder", "打开目录")).Height(30).Clicked() {
 			a.report(a.runCommand(command{Kind: commandOpenExtension}))
 		}
-		ui.Text(c, a.tr("then load it unpacked: edge://extensions or chrome://extensions, turn on developer mode, Load unpacked, choose this folder",
-			"再在浏览器里加载：edge://extensions 或 chrome://extensions → 开发人员模式 → 加载解压缩的扩展 → 选这个目录")).
+		ui.Text(c, a.tr("load it unpacked: edge://extensions or chrome://extensions → developer mode → Load unpacked",
+			"加载：edge://extensions 或 chrome://extensions → 开发人员模式 → 加载解压缩的扩展")).
 			FontSize(textMicro).TextColor(colorTextDim).Wrap()
 	})
-	ui.Text(c, a.tr("pair once with the code on Diagnostics; the pairing ends when this window closes",
-		"在诊断页取一次配对码完成配对；窗口关闭后需要重新配对")).
+	ui.Text(c, a.tr("pair once on Diagnostics; the pairing ends when this window closes",
+		"在诊断页配对一次；窗口关闭后失效")).
 		FontSize(textMicro).TextColor(colorTextDim).Wrap()
 }

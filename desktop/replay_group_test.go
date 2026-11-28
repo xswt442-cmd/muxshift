@@ -23,6 +23,35 @@ import (
 
 // These tests were grouped from alignreport_test.go, anchor_epoch_test.go, dvr_read_test.go, dvrusage_test.go, replay_clock_test.go, replay_enter_test.go, replay_enter_txn_test.go, replay_entry_test.go, replay_report_test.go, replay_seek_test.go, replay_txn_test.go, replay_wiring_test.go, timebase_test.go.
 
+func TestWaitSeekPlayersReturnsAfterAbortWithQueuedUICallback(t *testing.T) {
+	app, _, _ := newStoreFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	step := &seekTxnStep{item: app.items[0], player: &fakeSeekPlayer{}}
+	txn := &seekTxn{ctx: ctx, cancel: cancel, steps: []*seekTxnStep{step}}
+	app.seek = txn
+	callbacks := make(chan func(), 1)
+	app.seekMain = func(fn func()) { callbacks <- fn }
+	finished := make(chan error, 1)
+	go func() { finished <- app.waitSeekPlayers(txn) }()
+	var queued func()
+	select {
+	case queued = <-callbacks:
+	case <-time.After(time.Second):
+		t.Fatal("the wait did not post its picture check")
+	}
+	app.abortSeekTxn(txn, "test stopped the replay")
+	select {
+	case err := <-finished:
+		if err == nil || !strings.Contains(err.Error(), "transaction had been stopped") {
+			t.Fatalf("wait returned %v after abort", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the wait stayed blocked on the UI after abort")
+	}
+	queued()
+}
+
 func suggestionFor(reference, target string) alignSuggestion {
 	return alignSuggestion{
 		Reference: alignWindow{Source: "source-1", Index: 0, URI: reference, Track: "track-1", Start: 0, Length: 30 * time.Second},
@@ -553,6 +582,9 @@ func TestMeasuredRangeStopsAuthorisingWhenEvicted(t *testing.T) {
 	}
 	if anchor, err := runner.bufferAnchor(dvr.Range{Start: 2 * time.Second, End: 4 * time.Second}); err == nil {
 		t.Fatalf("the new range used the anchor of the evicted one: %+v", anchor)
+	}
+	if _, err := runner.waitAnchor(ctx); err != nil {
+		t.Fatalf("wait for the new range measurement: %v", err)
 	}
 }
 
@@ -2989,6 +3021,7 @@ func TestSeekTxnGivesWayWhenAnotherTakesOver(t *testing.T) {
 		t.Fatalf("the first transaction did not start: %v", err)
 	}
 	<-openedOnce
+	old := session.app.seekInFlight()
 
 	newer := &seekTxn{event: 9 * time.Second}
 	session.app.seekMu.Lock()
@@ -2996,21 +3029,8 @@ func TestSeekTxnGivesWayWhenAnotherTakesOver(t *testing.T) {
 	session.app.seekMu.Unlock()
 	close(release)
 
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		allClosed := true
-		for _, player := range *opened {
-			if !player.closed {
-				allClosed = false
-			}
-		}
-		if allClosed && len(*opened) > 0 {
-			break
-		}
-		if !time.Now().Before(deadline) {
-			t.Fatal("the replaced transaction kept its players")
-		}
-		time.Sleep(20 * time.Millisecond)
+	if !session.app.awaitSeekTxn(old, 10*time.Second) || !allClosed(*opened) {
+		t.Fatal("the replaced transaction kept its players")
 	}
 	for i, it := range session.items {
 		if it.replay != before[i] {
@@ -3030,8 +3050,10 @@ func TestSeekTxnGivesWayWhenAnotherTakesOver(t *testing.T) {
 func TestSeekTxnCommitsNothingOnceOwnershipIsGone(t *testing.T) {
 	session, opened := seekTxnFixture(t)
 	newer := &seekTxn{event: 9 * time.Second}
+	replaced := make(chan *seekTxn, 1)
 	session.app.beforeSeekCommit = func() {
 		session.app.seekMu.Lock()
+		replaced <- session.app.seek
 		session.app.seek = newer
 		session.app.seekMu.Unlock()
 	}
@@ -3043,12 +3065,13 @@ func TestSeekTxnCommitsNothingOnceOwnershipIsGone(t *testing.T) {
 	if err := session.app.startSeekTxn(session.items, 6*time.Second); err != nil {
 		t.Fatalf("the transaction did not start: %v", err)
 	}
-	deadline := time.Now().Add(10 * time.Second)
-	for len(*opened) == 0 || !allClosed(*opened) {
-		if !time.Now().Before(deadline) {
+	select {
+	case old := <-replaced:
+		if !session.app.awaitSeekTxn(old, 10*time.Second) || !allClosed(*opened) {
 			t.Fatal("the transaction that lost the session kept its players")
 		}
-		time.Sleep(20 * time.Millisecond)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the transaction did not reach the commit step")
 	}
 	for i, it := range session.items {
 		if it.replay != before[i] || it.generation != 2 {
@@ -3060,6 +3083,39 @@ func TestSeekTxnCommitsNothingOnceOwnershipIsGone(t *testing.T) {
 	session.app.seekMu.Unlock()
 	if holder != newer {
 		t.Fatal("the transaction cleared the one that took over")
+	}
+}
+
+// A stopped transaction may still own the slot while rollback closes players.
+func TestSeekTxnCommitsNothingWhileRollbackStillOwnsSlot(t *testing.T) {
+	session, opened := seekTxnFixture(t)
+	stopped := make(chan *seekTxn, 1)
+	session.app.beforeSeekCommit = func() {
+		session.app.seekMu.Lock()
+		txn := session.app.seek
+		txn.stopped = true
+		session.app.seekMu.Unlock()
+		stopped <- txn
+	}
+	before := make([]*dvr.Recording, len(session.items))
+	for i, it := range session.items {
+		before[i] = it.replay
+	}
+	if err := session.app.startSeekTxn(session.items, 6*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case txn := <-stopped:
+		if !session.app.awaitSeekTxn(txn, 10*time.Second) || !allClosed(*opened) {
+			t.Fatal("the stopped transaction kept its replacement players")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the transaction did not reach the commit step")
+	}
+	for i, it := range session.items {
+		if it.replay != before[i] || it.generation != 2 {
+			t.Fatalf("source %d was changed by the stopped transaction", i+1)
+		}
 	}
 }
 
@@ -3177,6 +3233,7 @@ func TestShutdownWaitsForAnOpeningPlayer(t *testing.T) {
 		t.Fatalf("the transaction did not start: %v", err)
 	}
 	<-entered
+	txn := session.app.seekInFlight()
 
 	closed := make(chan struct{})
 	go func() {
@@ -3186,9 +3243,17 @@ func TestShutdownWaitsForAnOpeningPlayer(t *testing.T) {
 		close(closed)
 	}()
 	select {
+	case <-txn.ctx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown did not cancel replay preparation")
+	}
+	select {
 	case <-closed:
 		t.Fatal("the session closed while a player was still being opened")
 	case <-time.After(300 * time.Millisecond):
+	}
+	if open, _ := session.app.leaseStats(); open != 1 {
+		t.Errorf("the opening player held %d leases after cancellation, want 1", open)
 	}
 	close(release)
 	select {
@@ -3260,22 +3325,23 @@ func TestShutdownWaitsPastTheBudgetForAnOpeningPlayer(t *testing.T) {
 func TestAClosedSessionDoesNotWaitForADrawingThreadItIsBlocking(t *testing.T) {
 	session, opened := seekTxnFixture(t)
 	blocked := make(chan struct{})
+	dispatching := make(chan struct{})
+	var firstDispatch sync.Once
 	defer close(blocked)
 	session.app.seekMain = func(func()) {
 		// This is what mygoRunOnMain does: it waits for the drawing thread to
 		// run the callback. Here the drawing thread is inside the close that
 		// waits for this transaction, so the post itself never returns.
+		firstDispatch.Do(func() { close(dispatching) })
 		<-blocked
 	}
 	if err := session.app.startSeekTxn(session.items, 7*time.Second); err != nil {
 		t.Fatalf("the transaction did not start: %v", err)
 	}
-	deadline := time.Now().Add(10 * time.Second)
-	for len(*opened) == 0 {
-		if !time.Now().Before(deadline) {
-			t.Fatal("no replacement player was opened")
-		}
-		time.Sleep(20 * time.Millisecond)
+	select {
+	case <-dispatching:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the transaction did not reach the drawing thread")
 	}
 
 	start := time.Now()
@@ -3305,8 +3371,8 @@ func TestAStoppedTransactionDoesNotTouchAQueuedStep(t *testing.T) {
 	txn := settleTxnFor(session, player, time.Second)
 	session.app.seek = txn
 
-	var queued []func()
-	session.app.seekMain = func(fn func()) { queued = append(queued, fn) }
+	queued := make(chan func(), 1)
+	session.app.seekMain = func(fn func()) { queued <- fn }
 	previousWait := handoverWait
 	handoverWait = 200 * time.Millisecond
 	defer func() { handoverWait = previousWait }()
@@ -3316,8 +3382,11 @@ func TestAStoppedTransactionDoesNotTouchAQueuedStep(t *testing.T) {
 	}
 
 	session.app.abortSeekTxn(txn, "the session is closing")
-	for _, fn := range queued {
+	select {
+	case fn := <-queued:
 		fn()
+	case <-time.After(10 * time.Second):
+		t.Fatal("the drawing step was not queued")
 	}
 	if player.pauses != 0 || player.seeks != 0 || player.plays != 0 {
 		t.Fatalf("a queued step touched a stopped transaction's player: paused %d, seeks %d, plays %d",
@@ -3368,6 +3437,11 @@ func TestAStopWaitsForAStepThatIsUsingItsPlayer(t *testing.T) {
 	case <-stopped:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the stop did not return after the step finished")
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the canceled settle did not finish")
 	}
 	if !player.closed {
 		t.Fatal("the stopped transaction's player was left open")

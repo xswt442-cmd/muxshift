@@ -30,39 +30,85 @@ func (a *appState) layoutLine(width, height float32) string {
 		a.dock.shown(a.settings.DockOpen && height >= dockAutoHeight))
 }
 
-// entryOf is the snapshot row for one source, or the zero row when the source
-// has no player yet. Callers that need "is there a player" check Player.
+// entryOf is the snapshot row for one source. It is built for that one source
+// rather than searched out of a fresh whole-session snapshot, so asking for a
+// row costs one row instead of every row on the stage.
 func (a *appState) entryOf(it *item) sourceSnapshot {
-	for _, source := range a.snapshot().Sources {
-		if source.ID == it.source.ID {
-			return source
-		}
+	if it == nil {
+		return sourceSnapshot{}
 	}
-	return sourceSnapshot{}
+	return a.snapshotEntry(it)
 }
 
 func (a *appState) playing() bool {
-	return a.snapshot().Playing
-}
-
-// sourceMuted reports whether the audio overlay is keeping this source quiet.
-// It is the state the mixer's M button shows, not the scene's routing.
-func (a *appState) sourceMuted(it *item) bool {
-	if it.audio == "" {
+	plan, err := a.stageTransportPlan()
+	if err != nil {
 		return false
 	}
-	return !a.audible[it.audio]
+	return a.playingFor(plan)
+}
+
+func (a *appState) playingFor(plan transportPlan) bool {
+	for _, it := range plan.items {
+		if it.outputPlayer().Playing() {
+			return true
+		}
+	}
+	if plan.syncGroup && a.sync != nil && a.sync.playhead != nil && a.sync.playhead.Playing() {
+		return true
+	}
+	return false
+}
+
+func (a *appState) transportActionLabel(plan transportPlan, playing bool) string {
+	if len(plan.items) == 0 {
+		return a.tr("No players", "没有播放器")
+	}
+	if plan.syncGroup {
+		if playing {
+			return a.tr("Pause stage + group", "暂停舞台和同步组")
+		}
+		return a.tr("Play stage + group", "播放舞台和同步组")
+	}
+	if playing {
+		return a.tr("Pause stage", "暂停舞台")
+	}
+	return a.tr("Play stage", "播放舞台")
+}
+
+func (a *appState) transportActionTooltip(plan transportPlan) string {
+	if len(plan.items) == 0 {
+		return a.tr("Nothing to play on this stage", "舞台上没有可播放的来源")
+	}
+	if plan.syncGroup {
+		return a.tr("Controls this stage and the whole sync group, including sources on other stages",
+			"控制当前舞台，也会一起控制同步组里的其他来源")
+	}
+	return a.tr("Controls all sources on this stage", "控制当前舞台的全部来源")
+}
+
+// eventTime is the shared timeline's position, the value the event clock shows.
+// Reading it straight from the playhead keeps a bar that only needs the clock
+// from building a whole session snapshot.
+func (a *appState) eventTime() time.Duration {
+	if a.sync == nil || a.sync.playhead == nil {
+		return 0
+	}
+	return a.sync.playhead.Event()
+}
+
+// sourceMuted reports the source's own mute switch. Routing, master mute, solo
+// and alignment protection are separate reasons a source may not be heard.
+func (a *appState) sourceMuted(it *item) bool {
+	return it != nil && it.muted
 }
 
 // muteLabel names the button that flips the player's own mute.
 func (a *appState) muteLabel(it *item) string {
-	if it.player == nil {
-		return a.tr("Mute", "静音")
+	if it != nil && it.muted {
+		return a.tr("Unmute source", "取消本路静音")
 	}
-	if it.player.Muted() {
-		return a.tr("Unmute", "取消静音")
-	}
-	return a.tr("Mute", "静音")
+	return a.tr("Mute source", "静音本路")
 }
 
 // shortAllowLabel names the audio-hold action in a narrow row.
@@ -71,9 +117,19 @@ func (a *appState) shortAllowLabel(it *item) string {
 		return a.tr("No audio", "无音频")
 	}
 	if a.audible[it.audio] {
-		return a.tr("Mute", "静音")
+		return a.tr("Restore alignment protection", "恢复对齐保护")
 	}
-	return a.tr("Allow", "允许")
+	return a.tr("Allow unaligned audio", "允许未对齐声音")
+}
+
+func (a *appState) audioRouteLabel(it *item) string {
+	if it == nil || it.audio == "" {
+		return a.tr("No audio track", "没有音轨")
+	}
+	if a.routed(it) {
+		return a.tr("In scene", "已接入场景")
+	}
+	return a.tr("Not routed", "未接入场景")
 }
 
 // positionLine is the source's media time, and durationLine its length. Both
@@ -105,10 +161,10 @@ func (a *appState) hasCommonClock(it *item) bool {
 // importRetryTarget is the address a failed import still owns. The editor's
 // current text is a draft and may already name something else.
 func (a *appState) importRetryTarget() string {
-	if a.importing != "" || a.lastCommand.Err == nil || a.lastCommand.Command.Kind != commandAdd {
+	if a.importing != "" || a.importFailureErr == nil {
 		return ""
 	}
-	return strings.TrimSpace(a.lastCommand.Command.URI)
+	return strings.TrimSpace(a.importFailureURI)
 }
 
 // retryImport sends the address that failed again. A source selected after a

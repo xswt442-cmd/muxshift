@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -29,7 +30,7 @@ import (
 // two windows are added back here, because two streams rarely begin at the same
 // moment of the event:
 //
-//	CoreOffset = (MediaStart_B - MediaStart_A) + LocalMatchOffset
+//	CoreOffset = ReferenceOffset + (MediaStart_B - MediaStart_A) + LocalMatchOffset
 
 // alignWindow describes the media window that was actually compared.
 type alignWindow struct {
@@ -42,6 +43,19 @@ type alignWindow struct {
 	Track  core.TrackID
 	Start  time.Duration
 	Length time.Duration
+}
+
+// alignRowResult is the one concise alignment state shown beside a source.
+// Detailed probe diagnostics remain in the existing report fields.
+type alignRowResult struct {
+	RequestID           uint64
+	Stage               core.SceneID
+	Reference           core.SourceID
+	Target              core.SourceID
+	ReferenceGeneration int
+	TargetGeneration    int
+	Status              string
+	Text                string
 }
 
 func (w alignWindow) String() string {
@@ -70,19 +84,26 @@ type alignSuggestion struct {
 // it looks when the decode finishes, so a change made while the probe ran shows
 // up as an expired result instead of being folded into the suggestion.
 type probeSnapshot struct {
-	Reference alignWindow
-	Target    alignWindow
-	Track     core.TrackID
-	Offset    time.Duration
-	Aligned   bool
-	Group     core.SyncGroupID
-	HasGroup  bool
+	Reference  alignWindow
+	Target     alignWindow
+	Track      core.TrackID
+	Offset     time.Duration
+	Aligned    bool
+	RefOffset  time.Duration
+	RefAligned bool
+	Group      core.SyncGroupID
+	HasGroup   bool
 }
 
 // probeLength bounds how much audio is decoded for one comparison: a minute at
 // 16 kHz mono is small enough to hold in memory and long enough for the envelope
 // correlation to separate the peak from its surroundings.
 const probeLength = 60 * time.Second
+
+var (
+	errAlignDuration = errors.New("no readable duration")
+	errAlignAudio    = errors.New("no audio track to compare")
+)
 
 // suggestAlign compares two sources and returns a proposal. It reports an error
 // only when the comparison could not run at all; a comparison that ran but found
@@ -92,11 +113,15 @@ const probeLength = 60 * time.Second
 // decoders, and the result of a cancelled comparison is dropped before it can
 // touch the session it no longer describes.
 func (a *appState) suggestAlign(ctx context.Context, reference, target int) (alignSuggestion, error) {
-	started := time.Now()
 	snapshot, err := a.snapshotOnMain(reference, target)
 	if err != nil {
 		return alignSuggestion{}, err
 	}
+	return a.suggestAlignFrom(ctx, snapshot)
+}
+
+func (a *appState) suggestAlignFrom(ctx context.Context, snapshot probeSnapshot) (alignSuggestion, error) {
+	started := time.Now()
 	ref, tgt := snapshot.Reference, snapshot.Target
 
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
@@ -125,7 +150,10 @@ func (a *appState) suggestAlign(ctx context.Context, reference, target int) (ali
 		Elapsed:   time.Since(started),
 	}
 	if result.Accepted {
-		suggestion.CoreOffset = tgt.Start - ref.Start + result.Offset
+		suggestion.CoreOffset, err = proposedCoreOffset(snapshot, result.Offset)
+		if err != nil {
+			return alignSuggestion{}, err
+		}
 		suggestion.Delta = suggestion.CoreOffset - snapshot.Offset
 	}
 	// Reading the session to decide whether the result is still current needs the
@@ -133,6 +161,14 @@ func (a *appState) suggestAlign(ctx context.Context, reference, target int) (ali
 	finish := func() { a.finishSuggestion(&suggestion) }
 	mygoRunOnMain(finish)
 	return suggestion, nil
+}
+
+func proposedCoreOffset(snapshot probeSnapshot, shift time.Duration) (time.Duration, error) {
+	local, err := addDuration(snapshot.Target.Start-snapshot.Reference.Start, shift)
+	if err != nil {
+		return 0, err
+	}
+	return addDuration(snapshot.RefOffset, local)
 }
 
 // snapshotOnMain captures the windows and the offset the probe starts from, on
@@ -147,18 +183,21 @@ func (a *appState) snapshotOnMain(reference, target int) (probeSnapshot, error) 
 		if snapshot.Target, err = a.alignWindowAt(target); err != nil {
 			return
 		}
-		track := a.trackOfAudio(a.itemOf(snapshot.Target.Source))
-		snapshot.Track = track
-		if shift, ok := a.sync.timeline.Shift(track); ok {
-			snapshot.Offset = shift.Offset
-			snapshot.Aligned = true
-		}
-		if group, ok := a.existingGroup(); ok {
-			snapshot.Group = group.ID
-			snapshot.HasGroup = true
-		}
+		snapshot = a.probeOffsets(snapshot.Reference, snapshot.Target)
 	})
 	return snapshot, err
+}
+
+func (a *appState) probeOffsets(ref, tgt alignWindow) probeSnapshot {
+	snapshot := probeSnapshot{Reference: ref, Target: tgt, Track: tgt.Track}
+	refShift, refAligned := a.sync.timeline.Shift(ref.Track)
+	targetShift, targetAligned := a.sync.timeline.Shift(tgt.Track)
+	snapshot.RefAligned, snapshot.Aligned = refAligned, targetAligned
+	snapshot.RefOffset, snapshot.Offset = refShift.Offset, targetShift.Offset
+	if group, ok := a.existingGroup(); ok {
+		snapshot.Group, snapshot.HasGroup = group.ID, true
+	}
+	return snapshot
 }
 
 // windowOnMain reads one player's state on the UI thread: the player and the
@@ -201,6 +240,10 @@ func (a *appState) expiredAgainst(s alignSuggestion) string {
 	if ok != s.Snapshot.Aligned || (ok && current.Offset != s.Snapshot.Offset) {
 		return "the offset of the target changed since the probe started"
 	}
+	refShift, refAligned := a.sync.timeline.Shift(s.Reference.Track)
+	if refAligned != s.Snapshot.RefAligned || (refAligned && refShift.Offset != s.Snapshot.RefOffset) {
+		return "the offset of the reference changed since the probe started"
+	}
 	group, has := a.existingGroup()
 	if s.Snapshot.HasGroup && (!has || group.ID != s.Snapshot.Group) {
 		return "the sync group changed since the probe started"
@@ -242,13 +285,13 @@ func (a *appState) alignWindowAt(index int) (alignWindow, error) {
 		return alignWindow{}, fmt.Errorf("%s has no player", a.name(it))
 	}
 	if err := it.player.Err(); err != nil {
-		return alignWindow{}, fmt.Errorf("%s is not playable: %w", a.name(it), err)
+		return alignWindow{}, fmt.Errorf("%s is not playable: %w", a.name(it), safeOpenError(err))
 	}
 	// The length comes from the player that already decoded the stream, so the
 	// probe does not need a second tool just to ask how long the media is.
 	length := it.player.Duration()
 	if length <= 0 {
-		return alignWindow{}, fmt.Errorf("%s has no readable duration (a live stream cannot be compared yet)", shortURI(it.uri))
+		return alignWindow{}, fmt.Errorf("%s: %w", shortURI(it.uri), errAlignDuration)
 	}
 	if length > probeLength {
 		length = probeLength
@@ -257,7 +300,7 @@ func (a *appState) alignWindowAt(index int) (alignWindow, error) {
 	if it.audio == "" {
 		// The comparison decodes `0:a:0`. Without an audio track nothing is
 		// compared, and the window must say so rather than name a picture.
-		return alignWindow{}, fmt.Errorf("%s has no audio track to compare", a.name(it))
+		return alignWindow{}, fmt.Errorf("%s: %w", a.name(it), errAlignAudio)
 	}
 	return alignWindow{
 		Source:     it.source.ID,
@@ -312,13 +355,13 @@ func decodeEnvelope(ctx context.Context, uri string, start, length time.Duration
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return align.Envelope{}, fmt.Errorf("the decoder stopped (%v): %w", ctxErr, waitErr)
 		}
-		return align.Envelope{}, fmt.Errorf("cannot decode audio: %w (%s)", waitErr, strings.TrimSpace(stderr.String()))
+		return align.Envelope{}, fmt.Errorf("cannot decode audio: %w (%s)", safeOpenError(waitErr), redactSecrets(strings.TrimSpace(stderr.String())))
 	}
 	if readErr != nil {
 		return align.Envelope{}, fmt.Errorf("cannot read the decoder's output: %w", readErr)
 	}
 	if len(raw) < 2 {
-		return align.Envelope{}, fmt.Errorf("the source has no audio track")
+		return align.Envelope{}, errAlignAudio
 	}
 	samples := make([]int16, len(raw)/2)
 	for i := range samples {
@@ -422,18 +465,44 @@ func (a *appState) startProbe(reference, target int) uint64 {
 	}
 	refWindow, refErr := a.alignWindowAt(reference)
 	tgtWindow, tgtErr := a.alignWindowAt(target)
+	refItem, _ := a.at(reference)
+	tgtItem, _ := a.at(target)
 	a.probeAttempt++
 	attempt := a.probeAttempt
+	stage := a.scene
+	row := alignRowResult{RequestID: attempt, Stage: a.scene, Status: "busy",
+		Text: a.tr("Estimating alignment…", "正在估算对齐偏移…")}
+	if refItem != nil {
+		row.Reference = refItem.source.ID
+		row.ReferenceGeneration = refItem.generation
+	}
+	if tgtItem != nil {
+		row.Target = tgtItem.source.ID
+		row.TargetGeneration = tgtItem.generation
+	}
+	if refErr != nil || tgtErr != nil || refItem == nil || tgtItem == nil || row.Reference == "" || row.Target == "" {
+		row.Status = "unavailable"
+		row.Text = unavailableAlignText(a, refErr, tgtErr)
+		a.alignRow = row
+		a.lastProbeErr = row.Text
+		a.lastProbeFail = nil
+		a.syncNote = row.Text
+		a.probeDone = attempt
+		a.invalidate()
+		return attempt
+	}
+	a.alignRow = row
 	a.probeRunning = true
 	a.probeChild.Store(0)
 	ctx, cancel := context.WithCancel(context.Background())
 	a.probeCtx, a.probeCancel = ctx, cancel
 	a.syncNote = fmt.Sprintf("comparing source %d with source %d…", reference+1, target+1)
+	snapshot := a.probeOffsets(refWindow, tgtWindow)
 	go func() {
-		suggestion, err := a.suggestAlign(ctx, reference, target)
+		suggestion, err := a.suggestAlignFrom(ctx, snapshot)
 		cancel()
 		mygoRunOnMain(func() {
-			a.applyProbeResult(attempt, suggestion, err, refWindow, refErr, tgtWindow, tgtErr)
+			a.applyProbeResultForStage(attempt, stage, refWindow, tgtWindow, suggestion, err, refErr, tgtErr)
 		})
 	}()
 	return attempt
@@ -492,6 +561,22 @@ func (a *appState) stopProbe(why string) bool {
 // has been superseded is dropped: the session's account belongs to the newest
 // attempt, not to whichever goroutine finished last.
 func (a *appState) applyProbeResult(attempt uint64, suggestion alignSuggestion, err error, ref alignWindow, refErr error, tgt alignWindow, tgtErr error) {
+	a.applyProbeResultCore(attempt, suggestion, err, ref, refErr, tgt, tgtErr, false)
+}
+
+func (a *appState) applyProbeResultForStage(attempt uint64, stage core.SceneID, ref, tgt alignWindow, suggestion alignSuggestion, err error, refErr, tgtErr error) {
+	if stage != a.scene || attempt != a.probeAttempt {
+		return
+	}
+	current := a.alignmentRowMatches(attempt, stage, ref, tgt)
+	if !current {
+		a.alignRow = alignRowResult{}
+	}
+	a.applyProbeResultCore(attempt, suggestion, err, ref, refErr, tgt, tgtErr, current)
+	a.invalidate()
+}
+
+func (a *appState) applyProbeResultCore(attempt uint64, suggestion alignSuggestion, err error, ref alignWindow, refErr error, tgt alignWindow, tgtErr error, updateRow bool) {
 	if attempt != a.probeAttempt {
 		logf("align", "an earlier comparison finished after a newer one started; it is not the session's account")
 		return
@@ -512,6 +597,10 @@ func (a *appState) applyProbeResult(attempt uint64, suggestion alignSuggestion, 
 			a.lastProbeFail = nil
 		}
 		a.syncNote = fmt.Sprintf("alignment probe failed: %s", reason)
+		if updateRow {
+			a.alignRow.Status = "problem"
+			a.alignRow.Text = conciseAlignFailure(a, err)
+		}
 		logf("align", "probe failed: %s", reason)
 		return
 	}
@@ -519,7 +608,70 @@ func (a *appState) applyProbeResult(attempt uint64, suggestion alignSuggestion, 
 	a.lastProbeFail = nil
 	a.lastProbe = suggestion
 	a.syncNote = a.suggestionLine(suggestion)
+	if updateRow && suggestion.Result.Accepted && suggestion.Expired == "" && a.fresh(suggestion) == "" {
+		a.alignRow.Status = "suggested"
+		a.alignRow.Text = fmt.Sprintf(a.tr("Suggested %+.3f s", "建议偏移 %+.3f 秒"), suggestion.CoreOffset.Seconds())
+	} else if updateRow {
+		a.alignRow.Status = "problem"
+		if suggestion.Expired != "" || a.fresh(suggestion) != "" {
+			a.alignRow.Text = a.tr("Sources changed; estimate again", "来源状态已变化，请重新估算")
+		} else {
+			a.alignRow.Text = a.tr("No reliable match was found", "没有找到可靠匹配")
+		}
+	}
 	logf("align", "%s", a.syncNote)
+}
+
+// alignmentRowMatches drops results whose stage, source identity, or player
+// generation changed while decoding was in progress.
+func (a *appState) alignmentRowMatches(attempt uint64, stage core.SceneID, ref, tgt alignWindow) bool {
+	row := a.alignRow
+	if row.RequestID != attempt || row.Stage != stage || a.scene != stage ||
+		row.Reference != ref.Source || row.Target != tgt.Source ||
+		row.ReferenceGeneration != ref.Generation || row.TargetGeneration != tgt.Generation {
+		return false
+	}
+	currentRef := a.syncReference()
+	refItem, targetItem := a.find(row.Reference), a.find(row.Target)
+	return currentRef != nil && currentRef.source.ID == row.Reference &&
+		refItem != nil && targetItem != nil && a.isStageMember(refItem) && a.isStageMember(targetItem) &&
+		refItem.generation == row.ReferenceGeneration && targetItem.generation == row.TargetGeneration
+}
+
+// invalidateAlignmentRow makes any queued callback stale. UI selection and
+// stage transitions call this on the drawing thread.
+func (a *appState) invalidateAlignmentRow() {
+	if !a.stopProbe("alignment selection changed") {
+		a.probeAttempt++
+	}
+	a.alignRow = alignRowResult{}
+}
+
+func (a *appState) invalidateChangedAlignmentReference(previous *item) {
+	if a.syncRef == "" && a.alignRow.RequestID != 0 && previous != a.syncReference() {
+		a.invalidateAlignmentRow()
+	}
+}
+
+func unavailableAlignText(a *appState, refErr, tgtErr error) string {
+	if errors.Is(refErr, errAlignAudio) || errors.Is(tgtErr, errAlignAudio) {
+		return a.tr("A source has no readable audio", "来源没有可读取的音频")
+	}
+	if errors.Is(refErr, errAlignDuration) || errors.Is(tgtErr, errAlignDuration) {
+		return a.tr("A source has no readable duration yet", "来源暂时没有可读取的时长")
+	}
+	return a.tr("These sources cannot be compared right now", "当前无法比较这些来源")
+}
+
+func conciseAlignFailure(a *appState, err error) string {
+	switch {
+	case errors.Is(err, errAlignDuration):
+		return a.tr("A source has no readable duration yet", "来源暂时没有可读取的时长")
+	case errors.Is(err, errAlignAudio):
+		return a.tr("A source has no readable audio", "来源没有可读取的音频")
+	default:
+		return a.tr("The alignment estimate could not be completed", "无法完成对齐估算")
+	}
 }
 
 // logStale re-reads the current session and reports whether an older suggestion
@@ -548,10 +700,10 @@ func trimFailure(reason, uri string) string {
 			reason = strings.TrimSpace(strings.TrimPrefix(reason, base+":"))
 		}
 	}
-	reason = strings.Join(strings.Fields(reason), " ")
+	reason = strings.Join(strings.Fields(redactSecrets(reason)), " ")
 	const limit = 150
-	if len(reason) > limit {
-		reason = reason[:limit] + "…"
+	if runes := []rune(reason); len(runes) > limit {
+		reason = string(runes[:limit]) + "…"
 	}
 	return reason
 }
